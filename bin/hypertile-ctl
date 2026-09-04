@@ -55,10 +55,11 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
                              point a workspace at a layout, persisted; the
                              shell flashes the name unless --quiet;
                              --no-persist switches the compositor only
-  cycle [--reverse] [--workspace N] [--quiet]
+  cycle [--reverse] [--workspace N] [--quiet] [--now]
                              apply the next layout: every saved layout in name
                              order (those with in_cycle = false skipped), then
-                             dwindle
+                             dwindle; presses within 200 ms become one switch
+                             to the layout landed on (--now switches at once)
   current [--json]           active workspace id, name, and layout; --json adds
                              monitor size, reserved edges, gaps, and layout area
   workspaces [--json]        every workspace with its monitor and layout
@@ -272,8 +273,20 @@ function commands.apply(pos, flags)
   switch_to(name, flags)
 end
 
-function commands.cycle(pos, flags)
-  local current
+-- Run `argv` (this CLI's own arguments) detached, after `ms` milliseconds.
+local function run_later(ms, argv)
+  local words = { "lua", arg[0] }
+  for _, a in ipairs(argv) do
+    words[#words + 1] = a
+  end
+  for i, w in ipairs(words) do
+    words[i] = "'" .. tostring(w):gsub("'", "'\\''") .. "'"
+  end
+  os.execute(string.format("setsid -f sh -c 'sleep %.3f; exec %s' >/dev/null 2>&1", ms / 1000, table.concat(words, " ")))
+end
+
+-- The workspace a cycle acts on and the layout the compositor shows there.
+local function cycle_origin(flags)
   if flags.workspace then
     local list, err = bridge.workspaces()
     if not list then
@@ -281,17 +294,58 @@ function commands.cycle(pos, flags)
     end
     for _, ws in ipairs(list) do
       if tostring(ws.id) == tostring(flags.workspace) then
-        current = ws.layout
+        return tostring(ws.id), ws.layout or ""
       end
     end
-  else
-    local active, err = bridge.active_workspace()
-    if not active then
-      die(err)
-    end
-    current = active.layout
+    die("no workspace " .. tostring(flags.workspace))
   end
-  switch_to(bridge.cycle_target(current or "", bridge.cycle_names(), flags.reverse), flags)
+  local active, err = bridge.active_workspace()
+  if not active then
+    die(err)
+  end
+  return tostring(active.id), active.layout or ""
+end
+
+-- Presses within the debounce window collapse into one switch (see the
+-- bridge); --now switches at once.
+function commands.cycle(pos, flags)
+  local id, current = cycle_origin(flags)
+  if flags.now or bridge.cycle_debounce_ms <= 0 then
+    flags.workspace = flags.workspace or id
+    switch_to(bridge.cycle_target(current, bridge.cycle_names(), flags.reverse), flags)
+    return
+  end
+  local target, seq = bridge.cycle_request(id, current, flags.reverse)
+  if not target then
+    die(seq)
+  end
+  print("workspace " .. id .. " -> " .. target .. " (pending)")
+  -- The OSD follows the key; the switch and the bar follow the last key.
+  local osd = not flags.quiet
+  if osd and flags.workspace then
+    local active = bridge.active_workspace()
+    osd = active ~= nil and tostring(active.id) == id
+  end
+  if osd then
+    bridge.notify_shell(target, true)
+  end
+  run_later(bridge.cycle_debounce_ms, { "cycle-commit", id, tostring(seq) })
+end
+
+-- Internal: the deferred half of `cycle`.
+commands["cycle-commit"] = function(pos)
+  local id, seq = pos[1], tonumber(pos[2])
+  if not id or not seq then
+    die("cycle-commit needs a workspace id and a sequence number")
+  end
+  local layout, err = bridge.cycle_commit(id, seq)
+  if layout == false then
+    return
+  end
+  if not layout then
+    die(err)
+  end
+  bridge.notify_shell(layout, false)
 end
 
 function commands.current(pos, flags)

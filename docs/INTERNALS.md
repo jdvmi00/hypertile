@@ -97,10 +97,18 @@ has finished loading; Omarchy's file for a workspace is removed the
 first time hypertile takes it over.
 
 The fix is to not generate either storm: a switch is one workspace rule
-write and nothing else, and a Wayland trace of a four-press burst now
-shows exactly one configure per window per press. `heal` stays as a
-manual tool for the compositor-side condition should it ever appear
-again.
+write and nothing else, and a Wayland trace of a four-press burst shows
+exactly one configure per window per press.
+
+That is still one real re-placement per press, and a fast burst of those
+on a workspace with slow clients reproduced the symptom on its own (three
+switches 0.8 s apart with a terminal, a browser, and an Electron app on
+the workspace). So `hypertile-ctl cycle` debounces: each press records
+its target in `$XDG_RUNTIME_DIR/hypertile/cycle-<ws>.json` and flashes
+the OSD, and a detached `cycle-commit` applies the request 200 ms later
+unless a newer press superseded it. A burst is one switch, to the layout
+landed on. `HYPERTILE_CYCLE_DEBOUNCE_MS` tunes it, `--now` bypasses it.
+`heal` stays as the manual recovery for the compositor-side condition.
 
 ## What shapes the overlay
 

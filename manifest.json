@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "jmartin.hypertile",
   "name": "Hypertile",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "author": "Jim Martin",
   "description": "Zone-based tiling layouts for Hyprland's Lua layout API: browse and edit layouts at true scale in a fullscreen overlay, with a bar widget showing the current layout. Run install.sh after adding the plugin.",
   "kinds": [

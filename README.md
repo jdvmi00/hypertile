@@ -77,7 +77,8 @@ told otherwise.
 Layouts live one per file in `~/.config/hypr/layouts/<name>.lua`. A layout
 saved from the overlay joins the `SUPER+L` cycle (every layout on disk in
 name order, then dwindle); one saved with `in_cycle = false` is skipped by
-the cycle and still shown by the overlay. Each workspace remembers its
+the cycle and still shown by the overlay. Pressing `SUPER+L` several times
+quickly flashes each name and switches once, to the layout you stop on. Each workspace remembers its
 layout in `~/.local/state/hypertile/workspace-rules/`; the default for
 workspaces without one is `general.layout` in `looknfeel.lua`.
 
@@ -202,9 +203,11 @@ hypertile-ctl apply <name|dwindle|scrolling|master> [--workspace N] [--quiet] [-
                                        the shell flashes the name (unless --quiet, or the workspace is
                                        not the active one) and the bar widget refreshes; --no-persist
                                        switches the compositor only
-hypertile-ctl cycle [--reverse] [--workspace N] [--quiet]
+hypertile-ctl cycle [--reverse] [--workspace N] [--quiet] [--now]
                                        apply the next layout: every saved layout in name order
-                                       (in_cycle = false skips one), then dwindle
+                                       (in_cycle = false skips one), then dwindle; presses within
+                                       200 ms become one switch to the layout landed on (--now
+                                       switches at once)
 hypertile-ctl heal [--workspace N]     manual recovery for a window drawn smaller than its tile
 hypertile-ctl current [--json]         active workspace id, name, layout; --json adds monitor size,
                                        reserved edges, gaps, border, layout area

@@ -861,6 +861,61 @@ function M.cycle_target(current, names, reverse)
   return cycle[((at - 1 + step) % #cycle) + 1]
 end
 
+-- Cycle debounce. A burst of SUPER+L presses becomes one switch to the
+-- layout landed on: every press records its target, and the press that
+-- goes unanswered for `cycle_debounce_ms` applies it. Each real switch
+-- re-places every window on the workspace, and a fast run of those is
+-- what leaves the compositor's acknowledged-size bookkeeping stale
+-- (docs/INTERNALS.md, Stale windows). Zero disables it.
+M.cycle_debounce_ms = tonumber(env_or("HYPERTILE_CYCLE_DEBOUNCE_MS", "200")) or 200
+
+local function pending_path(id)
+  return M.paths.runtime .. "/hypertile/cycle-" .. tostring(id) .. ".json"
+end
+
+-- The request a burst has built up for workspace `id`, or nil. One left
+-- behind by a waiter that never ran is ignored after a couple of seconds.
+function M.cycle_pending(id)
+  local text = read_file(pending_path(id))
+  if not text then
+    return nil
+  end
+  local ok, doc = pcall(json.decode, text)
+  if not ok or type(doc) ~= "table" or type(doc.target) ~= "string" then
+    return nil
+  end
+  if os.time() - (tonumber(doc.at) or 0) > 2 then
+    return nil
+  end
+  return doc
+end
+
+-- Record one press for workspace `id`, whose compositor layout is
+-- `current`: the target steps on from the pending target when a burst is
+-- under way. Returns the target and the request's sequence number.
+function M.cycle_request(id, current, reverse)
+  local pending = M.cycle_pending(id)
+  local target = M.cycle_target(pending and pending.target or current, M.cycle_names(), reverse)
+  local seq = (pending and tonumber(pending.seq) or 0) + 1
+  ensure_dir(M.paths.runtime .. "/hypertile")
+  local ok, err = write_file_atomic(pending_path(id), json.encode({ seq = seq, target = target, at = os.time() }))
+  if not ok then
+    return nil, err
+  end
+  return target, seq
+end
+
+-- Apply request `seq` for workspace `id` if no later press superseded it.
+-- Returns false when it did, otherwise what M.apply returns.
+function M.cycle_commit(id, seq)
+  local pending = M.cycle_pending(id)
+  if not pending or tonumber(pending.seq) ~= tonumber(seq) then
+    return false
+  end
+  os.remove(pending_path(id))
+  return M.apply(pending.target, id)
+end
+
 -- Notify the shell: OSD when `osd` is set, bar refresh always. Best effort;
 -- without a shell the switch itself is already done.
 function M.notify_shell(layout, osd)

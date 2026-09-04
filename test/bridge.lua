@@ -339,6 +339,19 @@ esac
   check(bridge.cycle_target("lua:a", names, true) == "dwindle" and bridge.cycle_target("dwindle", names, true) == "lua:b", "cycle_target --reverse walks back")
   check(bridge.cycle_target("scrolling", names) == "lua:a" and bridge.cycle_target("scrolling", names, true) == "dwindle", "a layout outside the cycle starts it over")
 
+  -- A burst of presses builds one request; only the last press applies it.
+  bridge.paths.runtime = tmp .. "/runtime"
+  local on_disk = bridge.cycle_names()
+  local t1, s1 = bridge.cycle_request("3", "dwindle", false)
+  local t2, s2 = bridge.cycle_request("3", "dwindle", false)
+  check(t1 == bridge.cycle_target("dwindle", on_disk) and s1 == 1, "the first press targets the next layout: " .. tostring(t1))
+  check(t2 == bridge.cycle_target(t1, on_disk) and s2 == 2, "the second press steps on from the pending target: " .. tostring(t2))
+  local rules_before = slurp(tmp .. "/rule.log")
+  check(bridge.cycle_commit("3", 1) == false and slurp(tmp .. "/rule.log") == rules_before, "a superseded press applies nothing")
+  local applied = bridge.cycle_commit("3", 2)
+  check(applied == t2 and slurp(tmp .. "/rule.log"):sub(#rules_before + 1):find("3 " .. t2, 1, true), "the last press applies its target: " .. tostring(applied))
+  check(bridge.cycle_pending("3") == nil and bridge.cycle_commit("3", 2) == false, "the request is cleared once applied")
+
   -- The word to the shell: OSD only when asked, the bar refresh always.
   local fake_shell = tmp .. "/fake-shell"
   local sf = assert(io.open(fake_shell, "w"))
@@ -423,12 +436,14 @@ do
   local lf = assert(io.open(config_home .. "/hypr/looknfeel.lua", "w"))
   lf:write('hl.config({\n  general = {\n    layout = "dwindle",\n  },\n})\n')
   lf:close()
-  local function run(args, stdin)
+  -- `env` adds or overrides variables; the cycle debounce is off unless a
+  -- test turns it on.
+  local function run(args, stdin, env)
     local cmd = string.format(
       "(cd '%s' && HOME='%s' XDG_CONFIG_HOME='%s' XDG_STATE_HOME='%s' XDG_RUNTIME_DIR='%s/runtime' HYPERTILE_SRC='%s'"
         .. " HYPERTILE_LAYOUTS_DIR='%s/layouts' HYPERTILE_RULES_DIR='%s/workspace-rules'"
-        .. " HYPERTILE_HYPRCTL_BIN='%s/fake-hyprctl' HYPERTILE_SHELL_BIN='%s/fake-shell' lua bin/hypertile-ctl %s)",
-      root, home, config_home, state_home, tmp, root, tmp, tmp, tmp, tmp, args
+        .. " HYPERTILE_HYPRCTL_BIN='%s/fake-hyprctl' HYPERTILE_SHELL_BIN='%s/fake-shell' HYPERTILE_CYCLE_DEBOUNCE_MS=0 %s lua bin/hypertile-ctl %s)",
+      root, home, config_home, state_home, tmp, root, tmp, tmp, tmp, tmp, env or "", args
     )
     if stdin then
       cmd = "printf '%s' '" .. stdin:gsub("'", "'\\''") .. "' | " .. cmd
@@ -500,6 +515,28 @@ do
   check(ccode == 0 and cout:find("workspace 3 -> " .. bridge.cycle_target("lua:quad", on_disk), 1, true), "cli cycle applies the next layout in the cycle: " .. cout)
   local rvout = run("cycle --reverse")
   check(rvout:find("workspace 3 -> " .. bridge.cycle_target("lua:quad", on_disk, true), 1, true), "cli cycle --reverse applies the previous one: " .. rvout)
+
+  -- Two presses inside the debounce window: one switch, to the second target.
+  -- Workspace-rule lines for workspace 3 (window-rule lines start with "window").
+  local function rule_lines(text)
+    local n = 0
+    for _ in ("\n" .. text):gmatch("\n3 ") do n = n + 1 end
+    return n
+  end
+  -- The window has to outlast two CLI start-ups, which take tens of ms each.
+  local before = slurp(tmp .. "/rule.log")
+  local p1 = run("cycle --quiet", nil, "HYPERTILE_CYCLE_DEBOUNCE_MS=400")
+  local p2 = run("cycle --quiet", nil, "HYPERTILE_CYCLE_DEBOUNCE_MS=400")
+  local second = bridge.cycle_target(bridge.cycle_target("lua:quad", on_disk), on_disk)
+  check(p1:find("(pending)", 1, true) and p2:find("-> " .. second .. " (pending)", 1, true) and slurp(tmp .. "/rule.log") == before,
+    "debounced presses report their target as pending and apply nothing yet: " .. p2)
+  os.execute("sleep 1")
+  local after = slurp(tmp .. "/rule.log")
+  local added = after:sub(#before + 1)
+  check(rule_lines(added) == 1 and added:find("3 " .. second, 1, true), "the burst becomes one switch to the layout landed on: " .. added)
+  check(not exists(tmp .. "/runtime/hypertile/cycle-3.json"), "the pending request is cleared once applied")
+  local now = run("cycle --now --quiet", nil, "HYPERTILE_CYCLE_DEBOUNCE_MS=400")
+  check(now:find("workspace 3 -> ", 1, true) and not now:find("pending", 1, true), "cycle --now switches at once: " .. now)
   -- Point the rules the applies above wrote elsewhere so demo can go.
   run("apply dwindle --workspace 1 --quiet")
   run("apply dwindle --workspace 3 --quiet")

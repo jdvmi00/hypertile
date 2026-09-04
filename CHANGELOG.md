@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.1 (2026-09-04)
+
+- `hypertile-ctl cycle` debounces: presses within 200 ms become one switch
+  to the layout landed on, with the OSD still flashing every name. A fast
+  run of real switches could leave a slow client drawn smaller than its
+  tile; `--now` bypasses the debounce.
+
 ## 1.0.0 (2026-09-04)
 
 First public release, packaged as an Omarchy shell plugin.
