@@ -1,0 +1,11 @@
+--- a/src/desktop/view/Window.cpp
++++ b/src/desktop/view/Window.cpp
+@@ -1518,7 +1518,7 @@
+         return;
+ 
+     m_pendingSizeAck = *SERIAL;
+-    std::erase_if(m_pendingSizeAcks, [&](const auto& el) { return el.first <= SERIAL->first; });
++    std::erase_if(m_pendingSizeAcks, [serial](const auto& el) { return el.first <= serial; });
+ 
+     if (m_isX11)
+         return;

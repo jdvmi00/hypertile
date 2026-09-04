@@ -108,7 +108,7 @@ PY
 fi
 
 # Files.
-for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua; do
+for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua; do
   rm -f "$hypr/$f"
 done
 rm -f "$bin/hypertile-ctl"

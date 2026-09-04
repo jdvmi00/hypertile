@@ -59,6 +59,17 @@ one hard bug so far. The user guide is `README.md`.
 
 ## Stale windows
 
+**Root cause established 2026-09-04:** Hyprland 0.56.2's `CWindow::onAck`
+uses an iterator into its pending-size vector as an erase cutoff while the
+erase compacts that vector. This can delete the final size for a newer,
+coalesced configure serial, leaving the compositor's acknowledged size
+incorrect even though the client supplied the correct buffer. The
+[investigation and executable regression](diagnostics/size-acks/README.md)
+include a minimal compositor backport. Upstream's newer acknowledgment
+tracker already captures the cutoff by value. The switching and reload
+behavior described below can trigger the defect; suppressing those sequences
+does not correct the compositor bug.
+
 Symptom: after cycling layouts quickly a window sits at the right box
 but only its top-left part is drawn, at its natural scale, and the rest
 of the tile shows the wallpaper. Measured live (Hyprland 0.56.2): a

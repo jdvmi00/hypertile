@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Read-only check of the temporary Hyprland size-ack backport.
+set -uo pipefail
+
+marker=/usr/share/hyprland/backports/size-acks
+issues=()
+installed=$(pacman -Q hyprland 2>/dev/null || true)
+printf 'Installed: %s\n' "${installed:-Hyprland not found}"
+
+if [[ ! -r "$marker.version" || ! -r "$marker.patch" ]]; then
+  issues+=("The local sizing backport is absent. Check whether this package includes the upstream correction before rebuilding or retiring the backport.")
+elif [[ $(cat "$marker.version") != "$installed" ]]; then
+  issues+=("Backport marker does not match the installed package; reinstall or investigate.")
+else
+  printf 'Backport marker: %s\n' "$(cat "$marker.version")"
+  if [[ -r "$marker.dependencies" ]]; then
+    while read -r package built_version; do
+      current=$(pacman -Q "$package" 2>/dev/null || true)
+      if [[ "$current" != "$package $built_version" ]]; then
+        issues+=("Library package changed: $package (built with $built_version; now ${current:-missing}). Review/rebuild against the updated system before restarting Hyprland.")
+      fi
+    done < "$marker.dependencies"
+  else
+    issues+=("Build dependency record is missing; compatibility has not been checked.")
+  fi
+fi
+
+if [[ -x /usr/bin/Hyprland ]]; then
+  linkage=$(ldd /usr/bin/Hyprland 2>&1)
+  if [[ $? != 0 || "$linkage" == *'not found'* ]]; then
+    issues+=("Hyprland has a dynamic-library loading problem. Repair the package before logging out or rebooting: $linkage")
+  fi
+  running=0
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    running=1
+    if ! cmp -s "/proc/$pid/exe" /usr/bin/Hyprland; then
+      issues+=("Running Hyprland (PID $pid) differs from the installed binary. Save your work and start a new desktop session after package checks pass; hyprctl reload is insufficient.")
+    fi
+  done < <(pgrep -u "$(id -u)" -x Hyprland || true)
+  (( running )) || printf 'No Hyprland process is running for this user.\n'
+fi
+
+if (( ${#issues[@]} )); then
+  printf '\nREVIEW NEEDED:\n'
+  printf -- '- %s\n' "${issues[@]}"
+  printf '\nGuide: docs/HYPRLAND-SIZING-BUG.md in the Hypertile checkout.\n'
+  if [[ ${1:-} == --notify ]] && command -v notify-send >/dev/null; then
+    notify-send -u critical 'Hyprland sizing backport needs review' \
+      'Run hypertile-backport-status. An update, library change, or pending desktop restart needs attention.' || true
+  fi
+  exit 1
+fi
+printf 'Local backport present; tracked libraries unchanged; running binary matches when present.\n'
+printf 'This checks package state, not an end-to-end reproduction of the sizing bug.\n'

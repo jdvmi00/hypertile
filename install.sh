@@ -64,7 +64,7 @@ backup() {
   cp "$1" "$1.hypertile.bak"
 }
 
-for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua; do
+for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua; do
   install -m 0644 "$src/$f" "$hypr/$f"
 done
 install -m 0755 "$src/bin/hypertile-ctl" "$bin/hypertile-ctl"
@@ -189,6 +189,15 @@ fi
 # find it again.
 bindings="$hypr/bindings.lua"
 if (( want_keybinds )) && [[ -e "$bindings" ]]; then
+  if ! grep -q 'require("hypr.hypertile-navigation")' "$bindings"; then
+    backup "$bindings"
+    cat >>"$bindings" <<'LUA'
+
+-- hypertile: focus and swap across gaps, replacing Omarchy's directional bindings.
+require("hypr.hypertile-navigation").bind()
+LUA
+    echo "bound SUPER+arrows and SUPER+SHIFT+arrows to gap-aware focus and swaps (replaces stock directional bindings)"
+  fi
   if ! grep -q "Layouts overlay" "$bindings"; then
     backup "$bindings"
     cat >>"$bindings" <<LUA

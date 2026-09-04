@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# Report only: never block Omarchy updates or silently build/install packages.
+"$HOME/.local/bin/hypertile-backport-status" --notify || true

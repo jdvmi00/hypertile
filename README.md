@@ -44,6 +44,7 @@ everything else in place, and is the one to run again after every update:
   overlay; `SUPER+L` cycles the workspace through your layouts and then
   dwindle, replacing Omarchy's dwindle/scrolling toggle, which cannot
   return to a Lua layout; `SUPER+SHIFT+L` cycles the other way
+- `SUPER+Arrow` focuses and `SUPER+SHIFT+Arrow` swaps with the nearest window in that direction,
 
 Every config file it edits is first copied to `<file>.hypertile.bak`. It
 then reloads Hyprland and checks `hyprctl configerrors`. Update with:
@@ -66,6 +67,13 @@ back to dwindle if it pointed at a hypertile layout, and keeps your layouts
 told otherwise.
 
 ## Using it
+
+**Hyprland 0.56.2 sizing bug:** after a layout switch or save, a window's
+content can remain smaller than its tile. `hypertile-ctl heal` is temporary
+recovery. A one-line compositor backport fixes the identified acknowledgment
+bookkeeping defect. See [the sizing bug and backport guide](docs/HYPRLAND-SIZING-BUG.md)
+for building/installing it, checking it after Omarchy updates, rollback, and
+returning to an official package that includes the upstream correction.
 
 | Where | What |
 |---|---|
