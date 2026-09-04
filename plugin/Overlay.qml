@@ -1203,11 +1203,11 @@ Item {
         id: rail
         overlay: root
         anchors.top: parent.top
-        anchors.right: root.dockLeft ? undefined : parent.right
-        anchors.left: root.dockLeft ? parent.left : undefined
         anchors.topMargin: window.edgeTop
-        anchors.rightMargin: window.edgeRight
-        anchors.leftMargin: window.edgeLeft
+        // Positioned by x rather than a left/right anchor: flipping the
+        // side rebinds the two anchors one at a time, and while both are
+        // set the rail is stretched across the screen and loses its width.
+        x: root.dockLeft ? window.edgeLeft : parent.width - window.edgeRight - width
         maxHeight: window.height - window.edgeTop - window.edgeBottom
         opacity: root.peeking ? 0.12 : 1
         Behavior on opacity { NumberAnimation { duration: root.motionFast; easing.type: Easing.OutCubic } }
