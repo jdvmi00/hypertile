@@ -333,16 +333,26 @@ Zone math lives in `plugin/Geometry.js`; edits are pure functions in
 
 ## Development
 
-From a checkout outside the plugins directory, `./install.sh` copies the
-manifest and `plugin/` into `~/.config/omarchy/plugins/jmartin.hypertile/`
-and restarts the shell when they changed (the shell caches compiled QML, so
-a rescan is not enough). It refuses to overwrite a checkout that `omarchy
-plugin add` made; update that one with `omarchy plugin update` instead.
+For live development, keep one checkout and link the installed plugin to it:
+
+```sh
+./dev link       # preserves the existing installation, then links this checkout
+./install.sh     # first-time runtime/config setup
+./dev apply      # validates and applies changes; restarts affected components
+./dev status
+```
+
+After setup, edit locally and run `./dev apply`. See the
+[development README](docs/README.md) for component reloads, layout previews,
+backup/recovery paths, and isolated testing. The regular installer also supports
+an unlinked source checkout when the destination is a plain plugin copy; it
+refuses to overwrite a different Git checkout.
 
 Run the tests from the repository root:
 
 ```bash
 lua test/harness.lua    # engine: placement, rules, capacity, messages, hot swap
+python3 test/dev.py     # deployment: preservation, selective restarts, failure handling
 python3 test/session.py # recovery: interrupted writes, shutdown, restart, identity
 lua test/session.lua    # recovery adapter: window order, layout specs, against a fake compositor
 lua test/bridge.lua     # bridge and CLI: JSON, round trips, save/list/remove, against a fake hyprctl

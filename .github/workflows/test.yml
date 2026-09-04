@@ -16,6 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Scripts
         run: shellcheck install.sh uninstall.sh
+      - name: Development helper
+        run: python3 test/dev.py
       - name: Engine
         run: lua test/harness.lua
       - name: Bridge and CLI

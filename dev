@@ -1,0 +1,320 @@
+#!/usr/bin/env python3
+"""Link and apply a Hypertile checkout to an existing Omarchy installation."""
+import argparse
+from contextlib import contextmanager, nullcontext
+import fcntl
+import hashlib
+import json
+import os
+from pathlib import Path
+import shlex
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+ROOT = Path(__file__).resolve().parent
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
+STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "hypertile"
+PLUGIN = CONFIG / "omarchy/plugins/jmartin.hypertile"
+BIN = Path.home() / ".local/bin"
+ENV = dict(os.environ)
+ENV.pop("HYPERTILE_SRC", None)  # Runtime commands must address installed code.
+
+
+def run(*argv, check=True, timeout=15, **kwargs):
+    result = subprocess.run([str(a) for a in argv], cwd=ROOT, env=ENV, text=True,
+                            capture_output=True, timeout=timeout, **kwargs)
+    if check and result.returncode:
+        raise RuntimeError(f"{' '.join(map(str, argv))}:\n{result.stderr or result.stdout}")
+    return result
+
+
+def read_json(path, default):
+    return json.loads(path.read_text()) if path.exists() else default
+
+
+def atomic_write(path, content, mode=0o600):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".hypertile-dev-", dir=path.parent)
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(content)
+            os.fchmod(stream.fileno(), mode)
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def receipt():
+    return read_json(STATE / "dev/applied.json", {})
+
+
+def groups():
+    return {
+        "lua": sorted(ROOT.glob("hypertile*.lua")),
+        "cli": [ROOT / "bin/hypertile-ctl"],
+        "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "session").glob("*.py"))],
+        "shell": [ROOT / "manifest.json", *sorted(p for p in (ROOT / "plugin").rglob("*") if p.is_file())],
+    }
+
+
+def fingerprints(sources):
+    return {group: hashlib.sha256(b"".join(
+        str(path.relative_to(ROOT)).encode() + b"\0" + path.read_bytes() + b"\0" for path in files
+    )).hexdigest() for group, files in sources.items()}
+
+
+def destination(path):
+    relative = path.relative_to(ROOT)
+    if relative.parts[0] == "bin":
+        return BIN / path.name
+    if relative.parts[0] == "session":
+        return DATA / "hypertile" / relative
+    return CONFIG / "hypr" / path.name
+
+
+def pending(sources, hashes):
+    applied = receipt()
+    previous = applied.get("components", {}) if applied.get("source") == str(ROOT) else {}
+    changed = {group for group in sources if hashes[group] != previous.get(group)}
+    for group in ("lua", "cli", "session"):
+        for path in sources[group]:
+            target = destination(path)
+            if not target.exists() or target.read_bytes() != path.read_bytes():
+                changed.add(group)
+    return changed
+
+
+def validate(sources):
+    lua = sources["lua"] + sources["cli"] + sorted((ROOT / "layouts").glob("*.lua"))
+    run("lua", "-", *lua, input="for _, path in ipairs(arg) do assert(loadfile(path)) end\n")
+    for path in sources["session"] + [ROOT / "dev"]:
+        compile(path.read_bytes(), str(path), "exec")
+    run("omarchy", "plugin", "validate", ROOT)
+    qmlformat = shutil.which("qmlformat") or "/usr/lib/qt6/bin/qmlformat"
+    if Path(qmlformat).is_file():
+        # Parse only; formatted output is discarded. Imports/type resolution
+        # still require the running shell, so exercise the overlay after apply.
+        run(qmlformat, "--ignore-settings", *(p for p in sources["shell"] if p.suffix == ".qml"), timeout=30)
+    else:
+        print("qmlformat unavailable; QML syntax will be checked when the shell loads it.")
+    print("Validated Lua, Python, and plugin manifest.")
+
+
+@contextmanager
+def exclusive(path):
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("a") as lock:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            raise RuntimeError("another dev command is running") from None
+        yield
+
+
+def backup_directory(kind):
+    parent = STATE / "dev/backups"
+    parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    return Path(tempfile.mkdtemp(prefix=time.strftime(f"{kind}-%Y%m%d-%H%M%S-"), dir=parent))
+
+
+def link():
+    if PLUGIN.resolve() == ROOT:
+        print(f"Plugin already uses {ROOT}")
+        return
+    if ROOT.is_relative_to(PLUGIN.resolve()):
+        raise RuntimeError("checkout is inside the installed plugin; move it outside before linking")
+    validate(groups())
+    backup = None
+    PLUGIN.parent.mkdir(parents=True, exist_ok=True)
+    if PLUGIN.exists() or PLUGIN.is_symlink():
+        backup = backup_directory("plugin") / PLUGIN.name
+        # Move the directory itself, preserving .git, uncommitted and untracked
+        # files. Symlinks are moved as links; their targets are never modified.
+        shutil.move(str(PLUGIN), str(backup))
+        print(f"Previous installation preserved at {backup}")
+    try:
+        PLUGIN.symlink_to(ROOT, target_is_directory=True)
+    except OSError:
+        if backup is not None:
+            shutil.move(str(backup), str(PLUGIN))
+        raise
+    print(f"Linked {PLUGIN} -> {ROOT}")
+    print("Run ./install.sh once for setup, then ./dev apply after edits.")
+
+
+def session_status():
+    result = run(BIN / "hypertile-session", "status", check=False, timeout=3)
+    return json.loads(result.stdout) if result.returncode == 0 else None
+
+
+def wait_for(probe, description, seconds=10):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        result = probe()
+        if result:
+            return result
+        time.sleep(0.1)
+    raise RuntimeError(f"timed out waiting for {description}")
+
+
+@contextmanager
+def stopped_session():
+    path = STATE / "sessions/writer.lock"
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with path.open("a") as lock:
+        def available():
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                return False
+        if not available():
+            status = session_status()
+            if not status:
+                raise RuntimeError("session writer is busy but not responding; no files were changed")
+            if status.get("instance") != ENV.get("HYPRLAND_INSTANCE_SIGNATURE"):
+                raise RuntimeError("session service belongs to another compositor; use its terminal or --instance")
+            run(BIN / "hypertile-session", "stop")
+            wait_for(available, "session service to stop")
+        # Hold the writer lock across installation/reload. The loader cannot
+        # start a watcher against a half-updated set of runtime files.
+        yield
+
+
+def lua_string(value):
+    return '"' + ''.join('\\' + c if c in '\\"' else f"\\{ord(c):03d}" if ord(c) < 32 else c for c in value) + '"'
+
+
+def autoreload(enabled):
+    run("hyprctl", "eval", "hl.config({misc={disable_autoreload=" + ("false" if enabled else "true") + "}})")
+
+
+def reload_lua():
+    run("hyprctl", "reload")
+    errors = run("hyprctl", "configerrors").stdout.strip()
+    if errors:
+        raise RuntimeError("Hyprland config errors:\n" + errors)
+    print("Reloaded Hyprland; no config errors.")
+
+
+def start_session():
+    settings = read_json(CONFIG / "hypertile/session.json", {})
+    if settings.get("enabled", True) is False:
+        print("Session service is disabled in session.json.")
+        return
+    command = shlex.join(["env", "-u", "HYPERTILE_SRC", str(BIN / "hypertile-session"), "daemon"])
+    run("hyprctl", "eval", f"hl.exec_cmd({lua_string(command)})")
+    result = wait_for(session_status, "session service to answer")
+    print(f"Session service started ({result.get('mode')}).")
+
+
+def apply(force):
+    if PLUGIN.resolve() != ROOT:
+        raise RuntimeError("plugin does not use this checkout; run ./dev link first")
+    main = CONFIG / "hypr/hyprland.lua"
+    if not main.exists() or 'require("hypr.hypertile-layouts")' not in main.read_text():
+        raise RuntimeError("run ./install.sh once before ./dev apply")
+    if not ENV.get("HYPRLAND_INSTANCE_SIGNATURE"):
+        raise RuntimeError("run from a Hyprland terminal or pass --instance SIGNATURE (see hyprctl instances)")
+    sources = groups()
+    hashes = fingerprints(sources)
+    contents = {path: path.read_bytes() for files in sources.values() for path in files}
+    validate(sources)
+    if fingerprints(groups()) != hashes:
+        raise RuntimeError("source changed during validation; run ./dev apply again")
+    changed = set(sources) if force else pending(sources, hashes)
+    if not changed:
+        print("Nothing to apply. Use --force to reload all components.")
+        return
+    run("hyprctl", "version")  # Fail before copying when outside a live session.
+    print("Applying: " + ", ".join(sorted(changed)))
+    runtime_changed = changed & {"lua", "cli", "session"}
+    if runtime_changed:
+        backup = backup_directory("runtime")
+        print(f"Previous runtime files: {backup}")
+        # Pause capture for Lua changes too: snapshots must not see the adapter
+        # halfway through a reload. CLI-only changes need no service restart.
+        with stopped_session() if changed & {"lua", "session"} else nullcontext():
+            previous = False
+            if "lua" in changed:
+                previous = json.loads(run("hyprctl", "getoption", "misc:disable_autoreload", "-j").stdout)["bool"]
+            try:
+                if "lua" in changed:
+                    autoreload(False)
+                for group in sorted(runtime_changed):
+                    for path in sources[group]:
+                        target = destination(path)
+                        content = contents[path]
+                        if target.exists() and target.read_bytes() == content:
+                            continue
+                        if target.exists():
+                            saved = backup / path.relative_to(ROOT)
+                            saved.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(target, saved)
+                        atomic_write(target, content, 0o755 if path.relative_to(ROOT).parts[0] == "bin" else 0o644)
+                if "lua" in changed:
+                    reload_lua()
+            finally:
+                if "lua" in changed:
+                    autoreload(not previous)
+        if changed & {"lua", "session"}:
+            start_session()
+    if "shell" in changed:
+        run("omarchy", "restart", "shell", timeout=45)
+        wait_for(lambda: run("omarchy-shell", "-q", "shell", "ping", check=False, timeout=2).returncode == 0,
+                 "Omarchy shell to answer")
+        print("Restarted Omarchy shell.")
+    if fingerprints(groups()) != hashes:
+        raise RuntimeError("source changed during apply; run ./dev apply again")
+    atomic_write(STATE / "dev/applied.json", json.dumps({
+        "source": str(ROOT), "applied_at": time.strftime("%Y-%m-%d %H:%M:%S %z"),
+        "instance": ENV.get("HYPRLAND_INSTANCE_SIGNATURE"), "components": hashes,
+    }, indent=2).encode())
+    print("Applied successfully. Open the overlay and inspect the result.")
+
+
+def status():
+    print(f"Source: {ROOT}")
+    version = run("git", "describe", "--always", "--dirty", check=False).stdout.strip()
+    if version:
+        print(f"Revision: {version}")
+    print(f"Plugin: {PLUGIN} -> {PLUGIN.resolve()}")
+    applied = receipt()
+    print(f"Last successful dev apply: {applied.get('applied_at', 'none')} ({applied.get('instance', 'no instance')})")
+    sources = groups()
+    changed = pending(sources, fingerprints(sources))
+    print("Pending components: " + (", ".join(sorted(changed)) or "none"))
+    print("Hyprland: " + ("responding" if run("hyprctl", "version", check=False).returncode == 0 else "unavailable in this environment"))
+    print("Shell: " + ("responding" if run("omarchy-shell", "-q", "shell", "ping", check=False, timeout=3).returncode == 0 else "not responding"))
+    service = session_status() if (BIN / "hypertile-session").exists() else None
+    print("Session: " + (f"{service.get('mode')} ({service.get('instance')})" if service else "not responding"))
+    print("Pending compares source and installed files with the last verified apply; it is not a process-code probe.")
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("command", choices=("link", "apply", "status"))
+    parser.add_argument("--force", action="store_true", help="reload all components with apply")
+    parser.add_argument("--instance", help="Hyprland instance signature; default: this terminal's environment")
+    args = parser.parse_args()
+    if args.force and args.command != "apply":
+        parser.error("--force is only valid with apply")
+    if args.instance:
+        ENV["HYPRLAND_INSTANCE_SIGNATURE"] = args.instance
+    if args.command == "status":
+        status()
+    else:
+        with exclusive(STATE / "dev/command.lock"):
+            link() if args.command == "link" else apply(args.force)
+
+
+if __name__ == "__main__":
+    try:
+        main()
+    except (OSError, ValueError, SyntaxError, RuntimeError, subprocess.TimeoutExpired) as error:
+        print(f"dev: {error}", file=sys.stderr)
+        sys.exit(1)
