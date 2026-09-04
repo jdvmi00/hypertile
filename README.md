@@ -13,6 +13,8 @@ Requires Omarchy 4 (the Lua Hyprland config and the Omarchy shell);
 developed against Hyprland 0.56.2 / Omarchy 4.0.2. `lua` and `jq` ship
 with Omarchy.
 
+![Browsing layouts with the arrow keys while the windows follow, then dragging a divider in edit mode](docs/demo.gif)
+
 ![The overlay over the quad layout: eight windows, numbered zones, the inspector rail on the left](docs/screenshots/overlay-view.jpg)
 
 <p>
