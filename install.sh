@@ -111,7 +111,8 @@ else
 fi
 
 if command -v omarchy-plugin-validate >/dev/null 2>&1; then
-  omarchy-plugin-validate "$plugin_dst" >/dev/null || echo "warning: plugin manifest did not validate" >&2
+  # A development link points at the plugin root; validate its contents.
+  omarchy-plugin-validate "$(cd "$plugin_dst" && pwd -P)" >/dev/null || echo "warning: plugin manifest did not validate" >&2
 fi
 
 shell_up=0
