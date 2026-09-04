@@ -10,7 +10,7 @@ layout on each monitor, `SUPER+L` cycles through your layouts, and a CLI
 does everything the overlay does from a script.
 
 Requires Omarchy 4 (the Lua Hyprland config and the Omarchy shell);
-developed against Hyprland 0.56.2 / Omarchy 4.0.2. `lua` and `jq` ship
+developed against Hyprland 0.56.2 / Omarchy 4.0.2. `lua`, `jq`, and Python 3 ship
 with Omarchy.
 
 ![Browsing layouts with the arrow keys while the windows follow, then dragging a divider in edit mode](docs/demo.gif)
@@ -37,9 +37,12 @@ everything else in place, and is the one to run again after every update:
 - the engine and bridge into `~/.config/hypr/`, and the two shipped layouts
   into `~/.config/hypr/layouts/` (a layout that already exists is left alone)
 - `hypertile-ctl` into `~/.local/bin/`
+- the session recovery service, started by the layout loader
 - a `require("hypr.hypertile-layouts")` line in `hyprland.lua`
 - the bar widget after the workspaces (skipped when it is already on the bar)
 - a **Layouts** entry in the `SUPER+SPACE` menu (`--no-menu` skips it)
+- guarded logout/reboot/shutdown menu actions that save the session before
+  Omarchy closes windows (custom actions are left alone; `--no-menu` skips these)
 - three keybinds (`--no-keybinds` skips them): `SUPER+ALT+L` opens the
   overlay; `SUPER+L` cycles the workspace through your layouts and then
   dwindle, replacing Omarchy's dwindle/scrolling toggle, which cannot
@@ -89,6 +92,23 @@ the cycle and still shown by the overlay. Pressing `SUPER+L` several times
 quickly flashes each name and switches once, to the layout you stop on. Each workspace remembers its
 layout in `~/.local/state/hypertile/workspace-rules/`; the default for
 workspaces without one is `general.layout` in `looknfeel.lua`.
+
+## Session recovery
+
+Hypertile saves the desktop after changes and restores supported applications
+on the next Hyprland session. It restores zone layouts, native window order,
+pins, runtime sizing, workspaces, floating geometry, and focus. Applications
+restore their own tabs/documents; terminal commands are not replayed.
+
+Use the guarded Omarchy menu actions or `hypertile-ctl session logout`,
+`reboot`, or `shutdown` so the snapshot is saved before applications close.
+`hypertile-ctl session status` reports progress and unmatched windows. A partial
+restore protects the original snapshot until you retry or explicitly accept
+the current desktop with `hypertile-ctl session resume`.
+
+`hypertile-ctl session save work` saves a named session; `session restore work`
+returns to it. See [session recovery](docs/SESSIONS.md) for app recipes,
+shutdown integration, storage, and limits.
 
 ## Overlay
 
@@ -286,8 +306,11 @@ hypertile.lua          engine: spec -> layout provider (hot-swappable)
 hypertile-bridge.lua   bridge: load/serialize/JSON/save/preview/apply
 hypertile-json.lua     JSON encode/decode (pure Lua)
 hypertile-layouts.lua  loader: requires every ~/.config/hypr/layouts/*.lua
+hypertile-session.lua  compositor adapter: capture and restore window placement
+session/service.py    session watcher, durable snapshots, app launch and matching
 layouts/*.lua          shipped layouts: ultrawide, quad
 bin/hypertile-ctl      CLI over the bridge
+bin/hypertile-session  session service entry point (also via hypertile-ctl session)
 install.sh             puts the engine, CLI, layouts, keybinds, and menu entry in place
 uninstall.sh           takes them out again
 probe.lua              live probe (logs everything the API hands a layout)
@@ -319,6 +342,7 @@ Run the tests from the repository root:
 
 ```bash
 lua test/harness.lua    # engine: placement, rules, capacity, messages, hot swap
+python3 test/session.py # recovery: interrupted writes, shutdown, restart, identity
 lua test/bridge.lua     # bridge and CLI: JSON, round trips, save/list/remove, against a fake hyprctl
 node test/geometry.js   # overlay drawing math
 node test/editor.js     # editor operations, every result validated by the engine

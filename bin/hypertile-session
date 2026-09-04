@@ -1,0 +1,9 @@
+#!/usr/bin/env python3
+"""Installed entry point; HYPERTILE_SRC selects a development checkout."""
+import os
+from pathlib import Path
+import runpy
+
+source = os.environ.get("HYPERTILE_SRC")
+root = Path(source) if source else Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hypertile"
+runpy.run_path(str(root / "session/service.py"), run_name="__main__")

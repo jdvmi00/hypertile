@@ -4,6 +4,7 @@
 .DS_Store
 *~
 *.swp
+__pycache__/
 
 
 # Private planning notes, kept locally only

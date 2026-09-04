@@ -40,6 +40,12 @@ state="${XDG_STATE_HOME:-$HOME/.local/state}/hypertile"
 plugin_id="jmartin.hypertile"
 plugin_dst="$config/omarchy/plugins/$plugin_id"
 
+# Stop the writer before removing its code; retain recovery snapshots unless
+# --purge was requested. A missing/stopped service is harmless.
+if [[ -x "$bin/hypertile-session" ]]; then
+  "$bin/hypertile-session" stop >/dev/null 2>&1 || true
+fi
+
 # One backup per edited config file, overwritten on each edit.
 backup() {
   cp "$1" "$1.hypertile.bak"
@@ -85,7 +91,7 @@ fi
 
 # Menu entry.
 menu_ext="$config/omarchy/extensions/omarchy-menu.jsonc"
-if [[ -e "$menu_ext" ]] && grep -q "\"layouts\":.*$plugin_id" "$menu_ext"; then
+if [[ -e "$menu_ext" ]] && grep -qE "\"layouts\":.*$plugin_id|hypertile-ctl session (logout|reboot|shutdown)" "$menu_ext"; then
   backup "$menu_ext"
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$menu_ext" "$plugin_id" <<'PY'
@@ -93,6 +99,9 @@ import sys
 path, pid = sys.argv[1], sys.argv[2]
 lines = open(path).read().split("\n")
 lines = [l for l in lines if not (l.lstrip().startswith('"layouts"') and pid in l)]
+lines = [l for l in lines if not any(
+    l.strip() == '"system.%s": {"action":"hypertile-ctl session %s"}%s' % (a, a, comma)
+    for a in ("logout", "reboot", "shutdown") for comma in ("", ","))]
 # The entry before it may now be the last one and must lose its comma.
 body = [i for i, l in enumerate(lines) if l.strip() and not l.strip().startswith("//")]
 if len(body) >= 2:
@@ -108,10 +117,11 @@ PY
 fi
 
 # Files.
-for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua; do
+for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
   rm -f "$hypr/$f"
 done
 rm -f "$bin/hypertile-ctl"
+rm -f "$bin/hypertile-session" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/service.py"
 echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then

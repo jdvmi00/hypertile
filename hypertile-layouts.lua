@@ -49,3 +49,16 @@ if hl.timer then
 else
   apply_persisted_rules()
 end
+
+-- The service holds an exclusive writer lock, so reloads cannot create a
+-- second watcher or trigger a second restore. Start after workspace rules.
+if hl.timer then
+  hl.timer(function()
+    local command = (os.getenv("HOME") or "") .. "/.local/bin/hypertile-session"
+    local f = io.open(command, "r")
+    if f then
+      f:close()
+      hl.exec_cmd("'" .. command:gsub("'", "'\\''") .. "' daemon")
+    end
+  end, { timeout = 1000, type = "oneshot" })
+end

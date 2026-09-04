@@ -51,8 +51,19 @@ config="${XDG_CONFIG_HOME:-$HOME/.config}"
 hypr="$config/hypr"
 bin="$HOME/.local/bin"
 state="${XDG_STATE_HOME:-$HOME/.local/state}/hypertile"
+plugin_id="jmartin.hypertile"
+plugin_dst="$config/omarchy/plugins/$plugin_id"
 
-for tool in lua jq; do
+# Fail before changing the engine or CLI if the shell checkout is managed
+# elsewhere. Otherwise a refused update could still start a new session service.
+if [[ -d "$plugin_dst/.git" && "$(cd "$plugin_dst" && pwd -P)" != "$src" ]]; then
+  echo "install.sh: $plugin_dst is a git checkout managed by omarchy plugin;" >&2
+  echo "  update it with: omarchy plugin update $plugin_id" >&2
+  echo "  then run: $plugin_dst/install.sh" >&2
+  exit 1
+fi
+
+for tool in lua jq python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "install.sh: $tool is required" >&2; exit 1; }
 done
 [[ -e "$hypr/hyprland.lua" ]] || { echo "install.sh: $hypr/hyprland.lua not found; is this an Omarchy 4 (Lua config) system?" >&2; exit 1; }
@@ -64,10 +75,14 @@ backup() {
   cp "$1" "$1.hypertile.bak"
 }
 
-for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua; do
+for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
   install -m 0644 "$src/$f" "$hypr/$f"
 done
 install -m 0755 "$src/bin/hypertile-ctl" "$bin/hypertile-ctl"
+install -m 0755 "$src/bin/hypertile-session" "$bin/hypertile-session"
+session_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session"
+mkdir -p "$session_data"
+install -m 0644 "$src/session/service.py" "$session_data/service.py"
 
 for f in "$src"/layouts/*.lua; do
   name="$(basename "$f")"
@@ -78,18 +93,10 @@ for f in "$src"/layouts/*.lua; do
 done
 
 # ---------------------------------------------------------------- shell plugin
-plugin_id="jmartin.hypertile"
-plugin_dst="$config/omarchy/plugins/$plugin_id"
-
 if [[ -d "$plugin_dst" && "$(cd "$plugin_dst" && pwd -P)" == "$src" ]]; then
   # Running from the installed plugin itself (omarchy plugin add, or a clone
   # straight into the plugins directory). The shell reads it in place.
   echo "shell plugin runs from $plugin_dst"
-elif [[ -d "$plugin_dst/.git" ]]; then
-  echo "install.sh: $plugin_dst is a git checkout managed by omarchy plugin;" >&2
-  echo "  update it with: omarchy plugin update $plugin_id" >&2
-  echo "  then run: $plugin_dst/install.sh" >&2
-  exit 1
 else
   # A development checkout elsewhere: copy what the shell loads.
   mkdir -p "$plugin_dst/plugin"
@@ -179,6 +186,33 @@ PY
   else
     echo "note: python3 not found, skipped the menu entry (add one to $menu_ext by hand)"
   fi
+fi
+
+# Omarchy closes apps before the compositor exits. Override only stock menu
+# actions; explicit user overrides retain ownership. Guarded commands freeze
+# the durable session before delegating to Omarchy.
+if (( want_menu )) && [[ -e "$menu_ext" ]]; then
+  python3 - "$menu_ext" <<'PY'
+import re
+import shutil
+import sys
+path = sys.argv[1]
+text = open(path).read().rstrip()
+entries = []
+for action in ("logout", "reboot", "shutdown"):
+    if not re.search(r'"system\.' + action + r'"\s*:', text):
+        entries.append('  "system.%s": {"action":"hypertile-ctl session %s"}' % (action, action))
+if entries:
+    close = text.rfind("}")
+    if close == -1:
+        sys.exit("install.sh: invalid Omarchy menu extension")
+    head = text[:close].rstrip()
+    lines = [line for line in head.splitlines() if line.strip() and not line.strip().startswith("//")]
+    if lines and not lines[-1].rstrip().endswith(("{", ",")):
+        head += ","
+    shutil.copy2(path, path + ".hypertile.bak")
+    open(path, "w").write(head + "\n" + ",\n".join(entries) + "\n}\n")
+PY
 fi
 
 # --------------------------------------------------------------- keybinds

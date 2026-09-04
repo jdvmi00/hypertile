@@ -579,10 +579,23 @@ function M.provider(name, spec)
   M.state[name] = state
   local live = M.live[name] or {}
   live.compiled = compiled
+  live.spec = spec
   live.state = state
+  live.orders = live.orders or {}
   M.live[name] = live
   return {
     recalculate = function(ctx)
+      -- Keep only addresses, never compositor-owned targets/userdata. Session
+      -- recovery needs the compositor's order (which changes on swaps).
+      local order, workspace = {}, nil
+      for _, target in ipairs(ctx.targets) do
+        local win = target.window
+        if win and win.workspace then
+          workspace = tostring(win.workspace.id)
+          order[#order + 1] = window_key(win)
+        end
+      end
+      if workspace then live.orders[workspace] = order end
       local ok, err = pcall(M.recalculate, live.compiled, ctx, live.state)
       if not ok then
         print("hypertile[" .. name .. "]: " .. tostring(err))
