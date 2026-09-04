@@ -1,0 +1,11 @@
+*.log
+
+# Editor and OS metadata
+.DS_Store
+*~
+*.swp
+
+
+# Private planning notes, kept locally only
+docs/PLAN.md
+docs/REMOTE-SOURCES.md

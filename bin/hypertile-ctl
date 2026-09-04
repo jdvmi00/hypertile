@@ -1,0 +1,384 @@
+#!/usr/bin/env lua
+-- hypertile-ctl: bridge between layout files, the running compositor, and
+-- editors that speak JSON. See `hypertile-ctl help`.
+
+local function die(msg, code)
+  io.stderr:write("hypertile-ctl: " .. tostring(msg) .. "\n")
+  os.exit(code or 1)
+end
+
+-- The installed bridge lives under the config home as hypr.hypertile-bridge.
+-- HYPERTILE_SRC=/path/to/repo runs the checkout's copy instead.
+local bridge
+local src = os.getenv("HYPERTILE_SRC")
+if src and src ~= "" then
+  package.path = src .. "/?.lua;" .. package.path
+  bridge = require("hypertile-bridge")
+else
+  local config_home = os.getenv("XDG_CONFIG_HOME")
+  if config_home == nil or config_home == "" then
+    config_home = (os.getenv("HOME") or "") .. "/.config"
+  end
+  package.path = config_home .. "/?.lua;" .. package.path
+  bridge = require("hypr.hypertile-bridge")
+end
+local json = bridge.json
+
+local builtins = table.concat(bridge.builtins, "|")
+local USAGE = ([[
+hypertile-ctl <command> [args]
+
+Layout files (one per layout):  ~/.config/hypr/layouts/<name>.lua
+JSON exchanged with editors:    {"name": "...", "spec": {...}}
+
+  list [--json]              layouts on disk (and which is on the active workspace);
+                             --json includes each spec
+  dump <name>                print a layout as JSON
+  validate [file|-]          check a JSON layout, print nothing on success
+  save [file|-] [--no-reload]
+                             write JSON layout to disk, then reload Hyprland
+  rename <old> <new> [--no-reload]
+                             rename a layout; workspace rules and the default
+                             follow it
+  remove <name> [--force] [--no-reload]
+                             delete a layout file, then reload Hyprland; refuses
+                             while it is the default, and while a workspace rule
+                             uses it unless --force drops those rules
+  preview [file|-] [--workspace N] [--no-apply]
+                             register JSON layout in the running compositor
+                             (no disk write) and put workspace N (default: the
+                             active one) on it; --no-apply only registers
+  heal [--workspace N]       manual recovery for a window drawn smaller than its
+                             tile: 1px shrink and back, so the compositor sends a
+                             fresh configure; default: active workspace
+  apply <name|BUILTINS> [--workspace N] [--quiet] [--no-persist]
+                             point a workspace at a layout, persisted; the
+                             shell flashes the name unless --quiet;
+                             --no-persist switches the compositor only
+  cycle [--reverse] [--workspace N] [--quiet]
+                             apply the next layout: every saved layout in name
+                             order (those with in_cycle = false skipped), then
+                             dwindle
+  current [--json]           active workspace id, name, and layout; --json adds
+                             monitor size, reserved edges, gaps, and layout area
+  workspaces [--json]        every workspace with its monitor and layout
+  windows [--json]           open windows (class, title, workspace)
+  default [name|BUILTINS] [--no-reload]
+                             show or set the default layout (general.layout
+                             in looknfeel.lua), then reload
+  path [name]                layouts directory, or a layout's file path
+  help
+
+Reads JSON from a file, or from stdin when the argument is - or omitted.
+]]):gsub("BUILTINS", builtins)
+
+local function read_input(arg_path)
+  if not arg_path or arg_path == "-" then
+    return io.read("a")
+  end
+  local text, err = bridge.read_file(arg_path)
+  if not text then
+    die(err)
+  end
+  return text
+end
+
+-- Flags that consume the next argument (--flag value or --flag=value).
+local takes_value = { workspace = true }
+
+-- Split argv into positionals and --flags.
+local function parse(argv)
+  local pos, flags = {}, {}
+  local i = 1
+  while i <= #argv do
+    local a = argv[i]
+    local key = a:match("^%-%-(.+)$")
+    if key then
+      local k, v = key:match("^([^=]+)=(.*)$")
+      if k then
+        flags[k] = v
+      elseif takes_value[key] then
+        if argv[i + 1] == nil then
+          die("--" .. key .. " needs a value")
+        end
+        flags[key] = argv[i + 1]
+        i = i + 1
+      else
+        flags[key] = true
+      end
+    else
+      pos[#pos + 1] = a
+    end
+    i = i + 1
+  end
+  return pos, flags
+end
+
+local function reload_unless(flags)
+  if flags["no-reload"] then
+    return
+  end
+  local ok, err = bridge.reload()
+  if not ok then
+    die("reload reported errors:\n" .. tostring(err))
+  end
+end
+
+local function load_json_arg(path)
+  local name, spec = bridge.from_json(read_input(path))
+  if not name then
+    die(spec)
+  end
+  return name, spec
+end
+
+local commands = {}
+
+function commands.list(pos, flags)
+  local entries = bridge.list()
+  local active = bridge.active_workspace()
+  local active_layout = active and active.layout or nil
+  if flags.json then
+    local out = {}
+    for _, e in ipairs(entries) do
+      out[#out + 1] = {
+        name = e.name,
+        path = e.path,
+        error = e.error,
+        active = (active_layout == "lua:" .. e.name) or nil,
+        spec = e.spec and bridge.plain(e.spec) or nil,
+      }
+    end
+    print(json.encode({ layouts = json.array(out), active = active_layout }))
+    return
+  end
+  if #entries == 0 then
+    print("no layouts in " .. bridge.paths.layouts_dir)
+    return
+  end
+  for _, e in ipairs(entries) do
+    local mark = (active_layout == "lua:" .. e.name) and "* " or "  "
+    if e.error then
+      print(mark .. e.name .. "  (error: " .. tostring(e.error) .. ")")
+    else
+      print(mark .. e.name .. "  " .. e.path)
+    end
+  end
+  if active then
+    print("active workspace " .. tostring(active.id) .. ": " .. tostring(active_layout))
+  end
+end
+
+function commands.dump(pos)
+  local name = pos[1] or die("dump needs a layout name")
+  local spec, err = bridge.load(name)
+  if not spec then
+    die(err)
+  end
+  print(bridge.to_json(name, spec))
+end
+
+function commands.validate(pos)
+  load_json_arg(pos[1])
+end
+
+function commands.save(pos, flags)
+  local name, spec = load_json_arg(pos[1])
+  local path, err = bridge.save(name, spec)
+  if not path then
+    die(err)
+  end
+  print(path)
+  reload_unless(flags)
+end
+
+function commands.rename(pos, flags)
+  local old = pos[1] or die("rename needs the current name")
+  local new = pos[2] or die("rename needs the new name")
+  local path, refs = bridge.rename(old, new)
+  if not path then
+    die(refs)
+  end
+  print("renamed " .. old .. " -> " .. path)
+  for _, id in ipairs(refs.workspaces) do
+    print("workspace " .. id .. " now uses " .. new)
+  end
+  if refs.default then
+    print("default layout -> lua:" .. new)
+  end
+  reload_unless(flags)
+end
+
+function commands.remove(pos, flags)
+  local name = pos[1] or die("remove needs a layout name")
+  local path, dropped = bridge.remove(name, flags.force)
+  if not path then
+    die(dropped)
+  end
+  print("removed " .. path)
+  for _, id in ipairs(dropped) do
+    print("workspace " .. id .. " falls back to the default layout")
+  end
+  reload_unless(flags)
+end
+
+function commands.preview(pos, flags)
+  local name, spec = load_json_arg(pos[1])
+  local workspace = flags.workspace
+  if not workspace and not flags["no-apply"] then
+    local active, err = bridge.active_workspace()
+    if not active then
+      die(err)
+    end
+    workspace = active.id
+  end
+  local ok, err = bridge.preview(name, spec, workspace)
+  if not ok then
+    die(err)
+  end
+  if workspace then
+    print("previewing lua:" .. name .. " on workspace " .. tostring(workspace))
+  else
+    print("registered lua:" .. name)
+  end
+end
+
+function commands.heal(pos, flags)
+  local ws, err = bridge.heal(flags.workspace)
+  if not ws then
+    die(err)
+  end
+  print("healed workspace " .. ws)
+end
+
+-- apply and cycle share the switch. Notify the shell: OSD when the switch
+-- was on the workspace on screen, bar refresh always.
+local function switch_to(name, flags)
+  local layout, id = bridge.apply(name, flags.workspace, { persist = not flags["no-persist"] })
+  if not layout then
+    die(id)
+  end
+  print("workspace " .. id .. " -> " .. layout .. (flags["no-persist"] and " (not persisted)" or ""))
+  local osd = not flags.quiet
+  if osd and flags.workspace then
+    local active = bridge.active_workspace()
+    osd = active ~= nil and tostring(active.id) == tostring(id)
+  end
+  bridge.notify_shell(layout, osd)
+end
+
+function commands.apply(pos, flags)
+  local name = pos[1] or die("apply needs a layout name")
+  switch_to(name, flags)
+end
+
+function commands.cycle(pos, flags)
+  local current
+  if flags.workspace then
+    local list, err = bridge.workspaces()
+    if not list then
+      die(err)
+    end
+    for _, ws in ipairs(list) do
+      if tostring(ws.id) == tostring(flags.workspace) then
+        current = ws.layout
+      end
+    end
+  else
+    local active, err = bridge.active_workspace()
+    if not active then
+      die(err)
+    end
+    current = active.layout
+  end
+  switch_to(bridge.cycle_target(current or "", bridge.cycle_names(), flags.reverse), flags)
+end
+
+function commands.current(pos, flags)
+  if flags.json then
+    local geo, gerr = bridge.geometry()
+    if not geo then
+      die(gerr)
+    end
+    print(json.encode(geo))
+    return
+  end
+  local active, err = bridge.active_workspace()
+  if not active then
+    die(err)
+  end
+  print(string.format("%s\t%s\t%s", tostring(active.id), tostring(active.name), tostring(active.layout)))
+end
+
+function commands.workspaces(pos, flags)
+  local list, err = bridge.workspaces()
+  if not list then
+    die(err)
+  end
+  if flags.json then
+    print(json.encode({ workspaces = json.array(list) }))
+    return
+  end
+  for _, ws in ipairs(list) do
+    print(string.format("%s%s\t%s\t%s\t%d windows", ws.active and "* " or "  ", tostring(ws.id), ws.monitor, ws.layout, ws.windows))
+  end
+end
+
+function commands.windows(pos, flags)
+  local list, err = bridge.windows()
+  if not list then
+    die(err)
+  end
+  if flags.json then
+    print(json.encode({ windows = json.array(list) }))
+    return
+  end
+  for _, w in ipairs(list) do
+    print(string.format("%s\t%s\t%s", tostring(w.workspace), w.class, w.title))
+  end
+end
+
+function commands.default(pos, flags)
+  if pos[1] then
+    local layout, err = bridge.set_default_layout(pos[1])
+    if not layout then
+      die(err)
+    end
+    print("default layout -> " .. layout)
+    reload_unless(flags)
+    return
+  end
+  local value, err = bridge.default_layout()
+  if not value then
+    die(err)
+  end
+  print(value)
+end
+
+function commands.path(pos)
+  if pos[1] then
+    local path, err = bridge.layout_path(pos[1])
+    if not path then
+      die(err)
+    end
+    print(path)
+  else
+    print(bridge.paths.layouts_dir)
+  end
+end
+
+function commands.help()
+  io.write(USAGE)
+end
+
+local argv = { ... }
+local cmd = table.remove(argv, 1)
+if not cmd or cmd == "-h" or cmd == "--help" then
+  cmd = "help"
+end
+local fn = commands[cmd]
+if not fn then
+  io.stderr:write(USAGE)
+  die("unknown command " .. cmd, 2)
+end
+fn(parse(argv))

@@ -1,0 +1,31 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      # The engine targets the Lua that Hyprland embeds (5.5); Arch tracks it.
+      - name: Install Lua, Node, jq, and shellcheck
+        run: pacman -Syu --noconfirm --needed lua nodejs jq git shellcheck && lua -v
+      - uses: actions/checkout@v4
+      - name: Scripts
+        run: shellcheck install.sh uninstall.sh
+      - name: Engine
+        run: lua test/harness.lua
+      - name: Bridge and CLI
+        run: lua test/bridge.lua
+      - name: Overlay geometry
+        run: node test/geometry.js
+      - name: Overlay editor
+        run: node test/editor.js
+      - name: Plugin manifest
+        run: |
+          jq -e '.schemaVersion == 1 and (.entryPoints | to_entries | all(.value as $p | ($p | test("^[^/].*") and (contains("..") | not))))' manifest.json
+          for ep in $(jq -r '.entryPoints[]' manifest.json); do test -f "$ep" || { echo "missing entry point $ep"; exit 1; }; done
+          test -z "$(find . -path ./.git -prune -o -type l -print)"
