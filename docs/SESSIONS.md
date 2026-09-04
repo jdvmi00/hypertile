@@ -32,10 +32,12 @@ hypertile-ctl session shutdown
 service first allows normal autostart applications to appear, then launches
 missing supported apps. It never closes unrelated windows. An incomplete
 restore enters `partial` mode and stops automatic checkpointing, so a
-missing app cannot destroy the source session. Open the missing app and retry
-`restore`, add an app recipe and restart the watcher, or use `resume` to accept
-the desktop as it stands. A failed application launch is retried only on an
-explicit retry, not in a loop.
+missing app cannot destroy the source session. A desktop notification reports
+the incomplete restore, and the guarded logout, reboot and shutdown commands
+warn again while saving is paused, since the desktop you are leaving will not
+be saved. Open the missing app and retry `restore`, add an app recipe and
+restart the watcher, or use `resume` to accept the desktop as it stands. A
+failed application launch is retried only on an explicit retry, not in a loop.
 
 `freeze` persists across service restarts within the same compositor. If a
 logout is cancelled, use `resume`. Freezing during recovery preserves the
@@ -46,7 +48,9 @@ original recovery source and stops restoration.
 The installer overrides the stock Omarchy menu's logout, reboot and shutdown
 actions with the guarded commands above. Existing custom actions are left
 alone; `--no-menu` skips these overrides. Uninstall removes only the entries
-Hypertile owns. Packaged Omarchy files are never changed.
+Hypertile owns. Packaged Omarchy files are never changed. The guard never
+blocks the action: if the service is not running or cannot save, a critical
+notification says the session was not saved and Omarchy proceeds anyway.
 
 **Omarchy closes windows before it asks the desktop to exit.** Use the guarded
 menu actions or `hypertile-ctl session logout|reboot|shutdown`. Direct
@@ -107,7 +111,10 @@ can happen when an app restores several windows with identical titles;
 lines would run terminal jobs again, so Hypertile intentionally uses app
 recipes and desktop entries instead.
 
-Hypertile zone layouts and their native order are restored. Built-in dwindle,
+Hypertile zone layouts and their native order are restored. A layout that
+still exists keeps its current definition, so edits made after the snapshot
+are not reverted; only a layout that no longer exists is re-registered from the
+snapshot's copy of its spec. Built-in dwindle,
 master, and scrolling layouts regain their workspace/layout selection, but
 this feature does not reconstruct their internal trees. Hyprland tab groups
 and app-internal tabs/documents are not reconstructed. Missing monitors fall
@@ -122,7 +129,11 @@ service does not automatically relaunch apps merely because they close.
 State lives under `$XDG_STATE_HOME/hypertile/sessions` (normally
 `~/.local/state/hypertile/sessions`):
 
-- `latest.json` and three previous generations: automatic checkpoints.
+- `latest.json` and three previous generations: automatic checkpoints. A
+  generation is promoted only when the outgoing latest is at least two minutes
+  newer than the previous one, so the frequent title-change checkpoints, and an
+  unguarded logout closing every window, cannot flush the history within
+  seconds. `restore @previous-1` then loses at most two minutes of changes.
 - `recovery.json`: protected source of the current/most recent restore.
 - `status.json`: lifecycle and launch progress, used after a service restart.
 - `saved/<name>.json`: explicitly saved sessions, never changed by autosave.
@@ -132,7 +143,10 @@ launch metadata. Publishing uses a sibling temporary file, file `fsync`,
 atomic rename, and directory `fsync`. Previous generations are copied before
 the newest is published; an invalid latest generation falls back to a valid
 previous one. An unreadable/unsupported recovery source is not overwritten
-with an empty session.
+with an empty session. A startup failure (an unreadable status file, a missing
+recovery source, a compositor query error) is reported in `status` and as a
+notification; the service keeps running so checkpoints and the guarded
+commands still work.
 
 One service owns a filesystem lock and serializes all changes. Hyprland IPC
 events mark the session dirty. A checkpoint is due after one second of quiet,

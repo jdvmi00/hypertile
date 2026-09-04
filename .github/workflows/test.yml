@@ -21,7 +21,7 @@ jobs:
       - name: Bridge and CLI
         run: lua test/bridge.lua
       - name: Session recovery
-        run: python3 test/session.py
+        run: python3 test/session.py && lua test/session.lua
       - name: Overlay geometry
         run: node test/geometry.js
       - name: Overlay editor

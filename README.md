@@ -104,7 +104,8 @@ Use the guarded Omarchy menu actions or `hypertile-ctl session logout`,
 `reboot`, or `shutdown` so the snapshot is saved before applications close.
 `hypertile-ctl session status` reports progress and unmatched windows. A partial
 restore protects the original snapshot until you retry or explicitly accept
-the current desktop with `hypertile-ctl session resume`.
+the current desktop with `hypertile-ctl session resume`; a notification says
+so, and again at logout while saving is still paused.
 
 `hypertile-ctl session save work` saves a named session; `session restore work`
 returns to it. See [session recovery](docs/SESSIONS.md) for app recipes,
@@ -343,6 +344,7 @@ Run the tests from the repository root:
 ```bash
 lua test/harness.lua    # engine: placement, rules, capacity, messages, hot swap
 python3 test/session.py # recovery: interrupted writes, shutdown, restart, identity
+lua test/session.lua    # recovery adapter: window order, layout specs, against a fake compositor
 lua test/bridge.lua     # bridge and CLI: JSON, round trips, save/list/remove, against a fake hyprctl
 node test/geometry.js   # overlay drawing math
 node test/editor.js     # editor operations, every result validated by the engine

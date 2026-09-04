@@ -6,7 +6,8 @@
   previous generations; named sessions; protected partial restores; supported
   app relaunch; workspace/layout, native window order, pins, sizing, floating
   geometry, and focus restoration. The Omarchy menu saves before shutdown
-  closes applications. See [session recovery](docs/SESSIONS.md) for app support
+  closes applications and never blocks them; notifications report an
+  unsaved session. See [session recovery](docs/SESSIONS.md) for app support
   and remaining limits.
 
 ## 1.0.1 (2026-09-04)

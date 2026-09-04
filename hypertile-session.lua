@@ -18,7 +18,9 @@ function M.snapshot()
   for _, mon in ipairs(hl.get_monitors()) do
     out.monitors[#out.monitors + 1] = { name = mon.name, x = mon.x, y = mon.y }
   end
+  local existing = {}
   for _, ws in ipairs(hl.get_workspaces()) do
+    existing[tostring(ws.id)] = true
     local name = ws.tiled_layout:match("^lua:(.+)$")
     local live = name and engine.live[name]
     out.workspaces[#out.workspaces + 1] = {
@@ -28,6 +30,13 @@ function M.snapshot()
     }
     if live then
       out.layouts[name] = { spec = live.spec, sizes = live.state.sizes }
+    end
+  end
+  -- The engine caches an order per workspace id and never sees a workspace
+  -- go away; this query runs every few seconds, so prune here.
+  for _, live in pairs(engine.live) do
+    for id in pairs(live.orders or {}) do
+      if not existing[id] then live.orders[id] = nil end
     end
   end
   for _, win in ipairs(hl.get_windows()) do
@@ -72,16 +81,28 @@ local function dispatch(fn, args)
   if type(result) == "table" and result.error then error(result.error) end
 end
 
+-- A layout that still exists keeps its current definition: the user may have
+-- edited it since the snapshot, and silently reverting to the saved spec
+-- until the next reload would be surprising. Only a layout that no longer
+-- exists is re-registered from the snapshot so its workspaces can be rebuilt.
+local function current_spec(name, saved)
+  local live = engine.live[name]
+  if live then return live.spec end
+  return saved and saved.spec
+end
+
 function M.prepare(snapshot)
   local bridge = require(prefix .. "hypertile-bridge")
   for name, saved in pairs(snapshot.layouts) do
-    engine.layout(name, saved.spec)
+    if not engine.live[name] then
+      engine.layout(name, saved.spec)
+    end
     engine.state[name].sizes = saved.sizes
   end
   for _, ws in ipairs(snapshot.workspaces) do
     local name = ws.layout:match("^lua:(.+)$")
-    local saved = name and snapshot.layouts[name]
-    assert(load(bridge.rule_source(ws.layout, ws.selector, saved and saved.spec), "=session-workspace", "t"))()
+    local spec = name and current_spec(name, snapshot.layouts[name])
+    assert(load(bridge.rule_source(ws.layout, ws.selector, spec), "=session-workspace", "t"))()
   end
   return true
 end
@@ -107,8 +128,40 @@ function M.place(request)
   return true
 end
 
+-- Reorder a workspace's tiled windows so that the matched ones sit in their
+-- saved sequence. The compositor's order is read once, from the engine's
+-- cache, and then tracked locally through each swap: whether the compositor
+-- recalculates synchronously after a swap is not something to depend on.
+local function reorder(live, wanted, warnings, label)
+  dispatch(hl.dsp.window.resize, { window = "address:" .. wanted[1], x = 0, y = 0, relative = true })
+  local current_ws
+  for _, w in ipairs(hl.get_windows()) do
+    if w.address == wanted[1] and w.workspace then current_ws = tostring(w.workspace.id) end
+  end
+  local order, index = {}, {}
+  for i, address in ipairs(live.orders[current_ws] or {}) do
+    order[i], index[address] = address, i
+  end
+  for _, address in ipairs(wanted) do
+    if not index[address] then
+      warnings[#warnings + 1] = "workspace " .. label .. ": window order not restored (order cache is stale)"
+      return
+    end
+  end
+  for i, address in ipairs(wanted) do
+    local occupant = order[i]
+    if occupant ~= address then
+      dispatch(hl.dsp.window.swap, { window = "address:" .. address, target = "address:" .. occupant })
+      local from = index[address]
+      order[i], order[from] = address, occupant
+      index[address], index[occupant] = i, from
+    end
+  end
+end
+
 function M.finish(request)
   local snapshot, matches = request.snapshot, request.matches
+  local warnings = json.array()
   local monitors = {}
   for _, mon in ipairs(hl.get_monitors()) do monitors[mon.name] = true end
   for _, ws in ipairs(snapshot.workspaces) do
@@ -118,19 +171,8 @@ function M.finish(request)
     for _, old in ipairs(ws.order) do
       if matches[old] then wanted[#wanted + 1] = matches[old] end
     end
-    -- A no-op resize requests a recalculation without changing target order.
     if live and wanted[1] then
-      dispatch(hl.dsp.window.resize, { window = "address:" .. wanted[1], x = 0, y = 0, relative = true })
-      local current_ws
-      for _, w in ipairs(hl.get_windows()) do
-        if w.address == wanted[1] then current_ws = tostring(w.workspace.id) end
-      end
-      for i, address in ipairs(wanted) do
-        local order = live.orders[current_ws] or {}
-        if order[i] and order[i] ~= address then
-          dispatch(hl.dsp.window.swap, { window = "address:" .. address, target = "address:" .. order[i] })
-        end
-      end
+      reorder(live, wanted, warnings, ws.selector)
     end
     local populated = false
     for _, saved in ipairs(snapshot.windows) do
@@ -177,7 +219,7 @@ function M.finish(request)
   elseif snapshot.workspace then
     dispatch(hl.dsp.focus, { workspace = snapshot.workspace })
   end
-  return true
+  return { warnings = warnings }
 end
 
 return M

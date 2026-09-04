@@ -1,7 +1,10 @@
 """Regression checks for data loss and duplicate/incorrect restoration."""
 import copy
 import json
+import os
 from pathlib import Path
+import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -130,6 +133,87 @@ class SessionTests(unittest.TestCase):
             self.assertEqual(recovery.tick(11), "complete")
             self.assertEqual(recovery.matches, {"1": "3", "2": "4"})
             self.assertEqual(launch.call_count, 2)
+
+    def test_generations_are_time_spaced(self):
+        def at(stamp, address):
+            return dict(record(window(address)), saved_at=stamp)
+        def generations():
+            return [self.store.load(name)["saved_at"] if (self.root / (name[1:] + ".json")).exists() else None
+                    for name in ("@previous-1", "@previous-2", "@previous-3")]
+        self.store.checkpoint(at(0, "1"))
+        self.store.checkpoint(at(30, "2"))  # nothing to lose yet: promote
+        self.assertEqual(generations(), [0, None, None])
+        self.store.checkpoint(at(200, "3"))  # outgoing latest (30) is too close to previous-1
+        self.assertEqual(generations(), [0, None, None])
+        self.store.checkpoint(at(205, "4"))  # outgoing latest (200) is far enough: promote
+        self.assertEqual(generations(), [200, 0, None])
+        self.store.checkpoint(at(206, "5"))  # a close-all storm within seconds cannot flush it
+        self.store.checkpoint(at(207, "6"))
+        self.assertEqual(generations(), [200, 0, None])
+        self.assertEqual(self.store.load()["saved_at"], 207)
+        self.store.checkpoint(at(400, "7"))
+        self.store.checkpoint(at(401, "8"))
+        self.assertEqual(generations(), [400, 200, 0])
+
+    def test_startup_survives_corrupt_status_and_missing_recovery_source(self):
+        comp = FakeCompositor(record(window("1"))["desktop"])
+        (self.root / "status.json").write_text("{bad")
+        daemon = Service(self.store, comp, Launchers())
+        daemon.startup()
+        self.assertEqual(daemon.mode, "watching")
+        self.assertIsNotNone(self.store.load())
+        (self.root / "status.json").write_text(json.dumps({"mode": "partial", "instance": "old"}))
+        restarted = Service(self.store, comp, Launchers())
+        restarted.startup()
+        self.assertEqual(restarted.mode, "watching")
+        self.assertIn("recovery source unavailable", restarted.error)
+
+    def test_failed_restore_keeps_serving_and_retries_from_protected_source(self):
+        self.store.checkpoint(record(window("1")))
+        comp = FakeCompositor(record()["desktop"])
+        calls = comp.call
+        def failing(method, value):
+            if method == "prepare":
+                raise RuntimeError("compositor query failed")
+            return calls(method, value)
+        comp.call = failing
+        daemon = Service(self.store, comp, Launchers())
+        daemon.startup()
+        self.assertEqual(daemon.mode, "partial")
+        self.assertIn("compositor query failed", daemon.error)
+        self.assertEqual(daemon.command({"command": "freeze"})["saved"], False)
+        comp.call = calls
+        daemon.command({"command": "restore"})
+        self.assertEqual(daemon.mode, "restoring")
+        self.assertEqual(daemon.recovery.record, self.store.load())
+
+    def test_finish_warnings_reach_the_report(self):
+        saved = record(window("1"))
+        comp = FakeCompositor(saved["desktop"])
+        def call(method, value):
+            comp.calls.append((method, value))
+            return {"warnings": ["workspace 1: window order not restored"]} if method == "finish" else True
+        comp.call = call
+        recovery = Recovery(saved, comp, Launchers(), 0, lambda value: None)
+        self.assertEqual(recovery.tick(3), "restoring")
+        self.assertEqual(recovery.tick(5), "complete")
+        self.assertIn("workspace 1: window order not restored", recovery.report()["limitations"])
+
+    def test_power_action_proceeds_and_warns_when_the_service_is_down(self):
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        for tool in ("omarchy", "notify-send"):
+            script = fake_bin / tool
+            script.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >> "$HYPERTILE_TEST_LOG.' + tool + '"\n')
+            script.chmod(script.stat().st_mode | stat.S_IXUSR)
+        env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ.get("PATH", ""),
+                   XDG_RUNTIME_DIR=str(self.root), XDG_STATE_HOME=str(self.root), XDG_CONFIG_HOME=str(self.root),
+                   HYPERTILE_TEST_LOG=str(self.root / "log"))
+        service = Path(__file__).resolve().parents[1] / "session" / "service.py"
+        result = subprocess.run([sys.executable, str(service), "logout"], env=env, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((self.root / "log.omarchy").read_text().split(), ["system", "logout"])
+        self.assertIn("not saved", (self.root / "log.notify-send").read_text())
 
 
 if __name__ == "__main__":

@@ -46,6 +46,16 @@ def read_json(path):
         return json.load(stream)
 
 
+def notify(summary, body, urgency="normal"):
+    """Desktop notification plus stderr; the menu runs actions without a terminal."""
+    print(f"hypertile-session: {summary}: {body}", file=sys.stderr)
+    try:
+        subprocess.run(["notify-send", "--app-name=Hypertile", "--urgency=" + urgency, summary, body],
+                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def validate(record):
     if not isinstance(record, dict) or record.get("version") != 1:
         raise ValueError("unsupported session format")
@@ -99,17 +109,32 @@ class Store:
             raise ValueError(f"no saved session {name}")
         return None
 
+    # Generations are promoted only when the outgoing latest is this much newer
+    # than previous-1. Title changes checkpoint every few seconds; rotating on
+    # each of them would let a close-all storm flush every generation before
+    # the compositor exits. Spacing bounds the loss to this many seconds.
+    SPACING = 120
+
+    def generation(self, name):
+        try:
+            return validate(read_json(self.root / name))
+        except (FileNotFoundError, ValueError, KeyError, TypeError):
+            return None
+
     def checkpoint(self, record):
         # Copies preserve the last valid generation even if power fails halfway
         # through rotation. The newest generation is published last.
-        for source, destination in (("previous-2.json", "previous-3.json"),
-                                    ("previous-1.json", "previous-2.json"),
-                                    ("latest.json", "previous-1.json")):
-            try:
-                old = validate(read_json(self.root / source))
-            except (FileNotFoundError, ValueError, KeyError, TypeError):
-                continue
-            atomic_json(self.root / destination, old)
+        latest, previous = self.generation("latest.json"), self.generation("previous-1.json")
+        def saved_at(value):
+            stamp = value.get("saved_at")
+            return stamp if isinstance(stamp, (int, float)) else 0
+        if latest and (previous is None or saved_at(latest) - saved_at(previous) >= self.SPACING):
+            for source, destination in (("previous-2.json", "previous-3.json"),
+                                        ("previous-1.json", "previous-2.json")):
+                old = self.generation(source)
+                if old:
+                    atomic_json(self.root / destination, old)
+            atomic_json(self.root / "previous-1.json", latest)
         atomic_json(self.root / "latest.json", record)
 
     def status(self, **values):
@@ -175,7 +200,7 @@ class Launchers:
                     app = entry["Desktop Entry"]
                     if app.get("Type") != "Application" or app.getboolean("Hidden", fallback=False):
                         continue
-                    keys = [path.stem, app.get("StartupWMClass", "")]
+                    keys = [desktop_id[:-len(".desktop")], app.get("StartupWMClass", "")]
                     for key in keys:
                         if key:
                             self.entries.setdefault(key.casefold(), []).append(str(path))
@@ -279,6 +304,7 @@ class Recovery:
         self.children = []
         self.persist = persist
         self.errors = []
+        self.warnings = []
         self.next_launch = now + 3  # Let normal autostart/session-aware apps settle.
         self.deadline = now + max(30, len(self.desktop["windows"]) * 3 + 10)
         self.settled = None
@@ -322,12 +348,12 @@ class Recovery:
         if not pending:
             self.settled = self.settled or now
             if now - self.settled >= 2:
-                self.compositor.call("finish", {"snapshot": self.desktop, "matches": self.matches})
+                self.finish()
                 return "complete"
         else:
             self.settled = None
         if now >= self.deadline:
-            self.compositor.call("finish", {"snapshot": self.desktop, "matches": self.matches})
+            self.finish()
             return "partial"
         if now >= self.next_launch and not self.outstanding:
             for saved in pending:
@@ -359,8 +385,13 @@ class Recovery:
                 break
         return "restoring"
 
+    def finish(self):
+        result = self.compositor.call("finish", {"snapshot": self.desktop, "matches": self.matches})
+        if isinstance(result, dict):
+            self.warnings = [str(w) for w in result.get("warnings", [])]
+
     def report(self):
-        limitations = []
+        limitations = list(self.warnings)
         if any(w.get("grouped") for w in self.desktop["windows"]):
             limitations.append("Hyprland tab groups are not reconstructed")
         if any(not w["layout"].startswith("lua:") for w in self.desktop["workspaces"]):
@@ -432,25 +463,52 @@ class Service:
         return self.status()
 
     def startup(self):
+        # Nothing restarts the service until the next config reload, and a
+        # missing service blocks nothing but loses every checkpoint. Startup
+        # failures therefore degrade to a reported error, never an exit.
+        try:
+            self.begin()
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as error:
+            self.error = f"startup: {error}"
+            if self.mode == "restoring":
+                self.mode = "partial"
+            self.status()
+            notify("Session recovery failed to start", str(error))
+
+    def recovery_source(self):
+        return validate(read_json(self.store.root / "recovery.json"))
+
+    def begin(self):
         try:
             previous = read_json(self.store.root / "status.json")
-        except FileNotFoundError:
+        except (FileNotFoundError, ValueError):
             previous = {}
+        if not isinstance(previous, dict):
+            previous = {}
+        same = previous.get("instance") == self.compositor.instance
+        note = None
         if previous.get("mode") in ("restoring", "partial"):
-            progress = previous.get("progress") if previous.get("instance") == self.compositor.instance else None
-            self.restore(validate(read_json(self.store.root / "recovery.json")), progress)
-            return
+            try:
+                source = self.recovery_source()
+            except (FileNotFoundError, ValueError, KeyError, TypeError) as error:
+                note = f"recovery source unavailable ({error}); using the latest checkpoint"
+            else:
+                self.restore(source, previous.get("progress") if same else None)
+                return
         record = self.store.load()
         if record and record["instance"] != self.compositor.instance:
             self.restore(record)
-        elif previous.get("mode") == "frozen" and previous.get("instance") == self.compositor.instance:
+        elif previous.get("mode") == "frozen" and same:
             self.mode = "frozen"
             self.status()
         else:
             if record and record["instance"] == self.compositor.instance:
                 self.last = record["desktop"]
             self.checkpoint()
+            self.error = note
             self.status()
+            if note:
+                notify("Session recovery", note)
 
     def command(self, request):
         command, name = request["command"], request.get("name")
@@ -462,19 +520,28 @@ class Service:
             atomic_json(self.store.named(name), self.record())
             return {"saved": name}
         if command == "restore":
-            retry = not name and self.mode == "partial" and self.recovery is not None
-            record = self.recovery.record if retry else self.store.load(name)
+            retry = not name and self.mode == "partial"
+            progress = None
+            if retry and self.recovery is not None:
+                record, progress = self.recovery.record, {"matches": dict(self.recovery.matches)}
+            elif retry and (self.store.root / "recovery.json").exists():
+                # The protected source outlives a restore that failed before
+                # matching started (for example a compositor error at startup).
+                record = self.recovery_source()
+            else:
+                record = self.store.load(name)
             if record is None:
                 raise ValueError("no recovery snapshot")
-            return self.restore(record, {"matches": dict(self.recovery.matches)} if retry else None)
+            return self.restore(record, progress)
         if command == "freeze":
             # During partial restoration, preserve the original source.
+            saved = self.mode == "watching"
             self.checkpoint()
             if self.mode == "restoring":
                 self.mode = "partial"
             elif self.mode != "partial":
                 self.mode = "frozen"
-            return self.status()
+            return dict(self.status(), saved=saved)
         if command == "resume":
             if self.mode == "restoring":
                 raise ValueError("wait for restoration to finish before accepting the current desktop")
@@ -509,6 +576,17 @@ class Service:
             # asking logind to shut down. No authentication prompt is allowed.
             shutdown = None
             shutdown_buffer = b""
+            def release():
+                # Drop the delay inhibitor. A stuck monitor must not take the
+                # event loop down with a TimeoutExpired.
+                if shutdown.poll() is None:
+                    os.killpg(shutdown.pid, signal.SIGTERM)
+                try:
+                    shutdown.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    os.killpg(shutdown.pid, signal.SIGKILL)
+                    shutdown.wait()
+                shutdown.stdout.close()
             try:
                 shutdown = subprocess.Popen([
                     "systemd-inhibit", "--no-ask-password", "--what=shutdown", "--mode=delay",
@@ -534,11 +612,7 @@ class Service:
                                         self.command({"command": "freeze"})
                                 finally:
                                     self.selector.unregister(shutdown.stdout)
-                                    # Release the inhibitor, even if capture fails.
-                                    if shutdown.poll() is None:
-                                        os.killpg(shutdown.pid, signal.SIGTERM)
-                                    shutdown.wait(timeout=3)
-                                    shutdown.stdout.close()
+                                    release()  # even if capture fails
                         elif key.data == "control":
                             connection, _ = server.accept()
                             with connection:
@@ -583,6 +657,11 @@ class Service:
                                 self.mode = "watching" if result == "complete" else "partial"
                                 self.checkpoint()
                                 self.status()
+                                if result == "partial":
+                                    report = self.recovery.report()
+                                    notify("Session restore incomplete",
+                                           f"{report['total'] - report['matched']} of {report['total']} windows were not "
+                                           "restored. Automatic saving is paused; see hypertile-ctl session status.")
                         elif self.mode == "watching":
                             due = self.changed_at is not None and (now - self.changed_at >= 1 or now - self.dirty_since >= 5)
                             if due or now >= next_reconcile:
@@ -601,11 +680,8 @@ class Service:
             finally:
                 socket_path.unlink(missing_ok=True)
                 self.selector.close()
-                if shutdown:
-                    if shutdown.poll() is None:
-                        os.killpg(shutdown.pid, signal.SIGTERM)
-                    shutdown.wait(timeout=3)
-                    shutdown.stdout.close()
+                if shutdown and not shutdown.stdout.closed:
+                    release()
 
 
 def paths():
@@ -648,13 +724,26 @@ def main():
                 disabled = False
             if disabled:
                 os.execvp("omarchy", ["omarchy", "system", args.command])
-        command = "freeze" if power_action else args.command
-        value = request(runtime, command, args.name)
-        if power_action:
-            # No application closes until the durable snapshot/freeze is ACKed.
-            os.execvp("omarchy", ["omarchy", "system", args.command])
-        print(json.dumps(value, indent=2))
-        return
+        if not power_action:
+            print(json.dumps(request(runtime, args.command, args.name), indent=2))
+            return
+        # No application closes until the durable snapshot/freeze is ACKed. A
+        # service that cannot answer must never leave the user unable to log
+        # out: warn, then delegate to Omarchy anyway.
+        try:
+            value = request(runtime, "freeze")
+        except (OSError, RuntimeError) as error:
+            notify("Desktop session not saved", f"session service unavailable ({error}); "
+                   f"{args.command} continues without a snapshot", urgency="critical")
+        else:
+            if not value.get("saved"):
+                reasons = {"partial": "an incomplete restore still protects the previous snapshot",
+                           "frozen": "the session was frozen earlier and later changes were not saved",
+                           "restoring": "a restore is still running"}
+                notify("Desktop session not saved",
+                       reasons.get(value.get("mode"), "automatic saving is paused")
+                       + "; hypertile-ctl session resume re-enables saving", urgency="critical")
+        os.execvp("omarchy", ["omarchy", "system", args.command])
     os.umask(0o077)
     store = Store(state)
     with (state / "writer.lock").open("w") as lock:
