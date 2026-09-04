@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import selectors
+import shutil
 import signal
 import socket
 import subprocess
@@ -234,6 +235,9 @@ class Launchers:
             except (OSError, UnicodeError):
                 pass
             return {"argv": argv, "per_window": False}
+        webapp = self.webapp(window)
+        if webapp:
+            return webapp
         terminals = {"com.mitchellh.ghostty": ["ghostty", "--working-directory="],
                      "alacritty": ["alacritty", "--working-directory"],
                      "kitty": ["kitty", "--directory"], "foot": ["foot", "--working-directory="]}
@@ -256,6 +260,35 @@ class Launchers:
         if len(candidates) == 1:
             return {"argv": ["gio", "launch", candidates.pop()], "per_window": False}
         return None
+
+    def webapp(self, window):
+        """Chromium-family app windows (--app=URL) carry their URL in the class:
+        chrome-<host>_<path with / as _>-<profile>. The browser's own session
+        restore does not bring them back; Omarchy launches them through
+        omarchy-launch-webapp, which picks the default browser."""
+        cls = window["initial_class"] or window["class"]
+        if not cls.startswith("chrome-") or "-" not in cls[7:]:
+            return None
+        app, profile = cls[7:].rsplit("-", 1)
+        if "_" not in app:
+            return None
+        host, path = app.split("_", 1)
+        if not re.fullmatch(r"[A-Za-z0-9.-]+", host) or not re.fullmatch(r"[A-Za-z0-9._~%-]*", path):
+            return None
+        url = f"https://{host}/" + path.replace("_", "/").lstrip("/")
+        if shutil.which("omarchy-launch-webapp"):
+            argv = ["omarchy-launch-webapp", url]
+        else:
+            # The window's process is the browser itself; its executable is
+            # the only process argument replayed.
+            try:
+                executable = Path(f"/proc/{window['pid']}/cmdline").read_bytes().split(b"\0")[0].decode()
+            except (OSError, UnicodeError):
+                return None
+            if not executable:
+                return None
+            argv = [executable, "--app=" + url]
+        return {"argv": argv + ["--profile-directory=" + profile], "per_window": True}
 
     def capture(self, desktop):
         for window in desktop["windows"]:
@@ -358,8 +391,13 @@ class Recovery:
         if now >= self.next_launch and not self.outstanding:
             for saved in pending:
                 cls = saved["initial_class"] or saved["class"]
-                # A recipe explicitly changed after the snapshot takes precedence.
-                recipe = self.launchers.recipe(saved) if cls in self.launchers.apps else saved.get("launch")
+                # A recipe explicitly changed after the snapshot takes precedence,
+                # and a built-in recipe added since the snapshot can rescue a
+                # window the snapshot had no recipe for.
+                if cls in self.launchers.apps:
+                    recipe = self.launchers.recipe(saved)
+                else:
+                    recipe = saved.get("launch") or self.launchers.recipe(saved)
                 if not recipe:
                     continue
                 peers = [w for w in current["windows"] if (w["initial_class"] or w["class"]) == cls]

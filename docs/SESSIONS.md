@@ -67,7 +67,10 @@ never trigger a final query of the disappearing desktop.
 ## Application launching and identity
 
 Chrome/Chromium launch with their session restore option and saved profile
-selectors. Desktop entries are matched by desktop ID or `StartupWMClass`.
+selectors. Their web app windows (`--app=URL`, class `chrome-<host>…-<profile>`)
+are not covered by the browser's own restore; they relaunch through
+`omarchy-launch-webapp` with the URL read from the window class. Desktop
+entries are matched by desktop ID or `StartupWMClass`.
 General desktop applications are launched once per saved process/recipe;
 apps with several windows must restore those windows themselves.
 
@@ -97,7 +100,8 @@ Configure applications in `~/.config/hypertile/session.json`:
 Keys are exact initial window classes (falling back to the current class).
 `argv` is an argument array, executed without a shell. `per_window` defaults
 to false. The snapshot retains the recipe used at capture time; an explicit
-current configuration overrides it. After changing configuration, run
+current configuration overrides it, and a window the snapshot had no recipe
+for is retried with the current built-in recipes. After changing configuration, run
 `hypertile-ctl session stop`, then `hyprctl reload`. Set `enabled` to false
 to disable the watcher on subsequent starts.
 The guarded menu actions delegate directly to Omarchy while it is disabled.

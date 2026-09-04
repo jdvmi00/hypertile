@@ -44,6 +44,9 @@ class FakeCompositor:
 class Launchers:
     apps = {}
 
+    def recipe(self, window):
+        return None
+
     def capture(self, desktop):
         return desktop
 
@@ -214,6 +217,32 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "log.omarchy").read_text().split(), ["system", "logout"])
         self.assertIn("not saved", (self.root / "log.notify-send").read_text())
+
+    def test_chromium_app_windows_get_a_web_app_recipe(self):
+        from service import Launchers as RealLaunchers
+        with patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root), "XDG_DATA_DIRS": str(self.root)}):
+            launchers = RealLaunchers({})
+        with patch("service.shutil.which", return_value="/usr/bin/omarchy-launch-webapp"):
+            recipe = launchers.recipe(window("1", "Home / X", "chrome-x.com__-Default"))
+            self.assertEqual(recipe, {"argv": ["omarchy-launch-webapp", "https://x.com/", "--profile-directory=Default"], "per_window": True})
+            slack = launchers.recipe(window("2", "Slack", "chrome-app.slack.com__client-Profile 2"))
+            self.assertEqual(slack["argv"][1:], ["https://app.slack.com/client", "--profile-directory=Profile 2"])
+            self.assertIsNone(launchers.recipe(window("3", "odd", "chrome-bad host__-Default")))
+        with patch("service.shutil.which", return_value=None):
+            with patch("service.Path.read_bytes", return_value=b"/opt/google/chrome/chrome\0--type=main\0"):
+                recipe = launchers.recipe(window("4", "Home / X", "chrome-x.com__-Default"))
+            self.assertEqual(recipe["argv"], ["/opt/google/chrome/chrome", "--app=https://x.com/", "--profile-directory=Default"])
+
+    def test_retry_uses_a_builtin_recipe_the_snapshot_lacked(self):
+        saved = record(dict(window("1", "Home / X", "chrome-x.com__-Default"), launch=None))
+        comp = FakeCompositor(record()["desktop"])
+        class Rescuing(Launchers):
+            def recipe(self, window):
+                return {"argv": ["omarchy-launch-webapp", "https://x.com/"], "per_window": True}
+        recovery = Recovery(saved, comp, Rescuing(), 0, lambda value: None)
+        with patch("service.subprocess.Popen") as launch:
+            recovery.tick(4)
+            self.assertEqual(launch.call_args[0][0], ["omarchy-launch-webapp", "https://x.com/"])
 
 
 if __name__ == "__main__":
