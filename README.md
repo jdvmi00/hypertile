@@ -367,6 +367,12 @@ put them (within 1px on stacked heights, where hypertile rounds edges
 instead of sizes to avoid seams). The CLI runs from a checkout without
 installing: `HYPERTILE_SRC=$PWD bin/hypertile-ctl list`.
 
+## Remote desktops
+
+Remote desktops can be assigned to named zones with `hypertile-ctl stream`.
+See [remote desktop setup and recovery](docs/STREAMS.md) for computer profiles,
+the Mac display adapter, and the Windows externally managed profile.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

@@ -1,0 +1,12 @@
+#!/usr/bin/env python3
+"""Entry point for the installed stream controller (or HYPERTILE_SRC)."""
+import os
+from pathlib import Path
+import runpy
+import sys
+
+root = Path(os.environ["HYPERTILE_SRC"]) if os.environ.get("HYPERTILE_SRC") else Path(
+    os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hypertile"
+sys.path.insert(0, str(root / "session"))
+sys.path.insert(0, str(root / "stream"))
+runpy.run_path(str(root / "stream/controller.py"), run_name="__main__")

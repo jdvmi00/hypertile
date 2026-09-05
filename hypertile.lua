@@ -240,6 +240,7 @@ end
 -- inside a slot regardless of whether they arrived by pin, rule, or fill.
 function M.assign(compiled, targets, state)
   local pins = state and state.pins or {}
+  local reserved = state and state.reserved or {}
   local slot_of = {}
   local count = {}
   for _, name in ipairs(compiled.leaves) do
@@ -252,6 +253,7 @@ function M.assign(compiled, targets, state)
   end
 
   local function has_room(name)
+    if reserved[name] then return false end
     if compiled.leaf_opts[name].never_split then
       return count[name] < 1
     end
@@ -265,7 +267,11 @@ function M.assign(compiled, targets, state)
     local win = target.window
     local key = window_key(win)
     local slot = key and pins[key]
-    if slot and compiled.leaf_set[slot] and not compiled.leaf_opts[slot].spacer then
+    for name, owner in pairs(reserved) do
+      if key == owner then slot = name end
+    end
+    if slot and compiled.leaf_set[slot] and not compiled.leaf_opts[slot].spacer
+      and (not reserved[slot] or reserved[slot] == key) then
       take(slot, i)
     else
       -- Among every rule this window matches, take the slot with the lowest
@@ -317,18 +323,25 @@ function M.assign(compiled, targets, state)
       local fallback
       for _ = 1, #compiled.cycle do
         local name = next_slot()
-        if not compiled.leaf_opts[name].never_split then
+        if not reserved[name] and not compiled.leaf_opts[name].never_split then
           fallback = name
           break
         end
       end
-      take(fallback or next_slot(), i)
+      if not fallback then
+        for _, name in ipairs(compiled.cycle) do
+          if not reserved[name] then fallback = name; break end
+        end
+      end
+      assert(fallback, "stream assignments must leave a local overflow zone")
+      take(fallback, i)
     end
   end
 
   local buckets = {}
   for _, name in ipairs(compiled.leaves) do
     buckets[name] = {}
+    buckets[name].reserved = reserved[name] ~= nil
   end
   for i, target in ipairs(targets) do
     table.insert(buckets[slot_of[i]], target)
@@ -343,7 +356,7 @@ end
 local function subtree_has_windows(node, buckets)
   if node.kind == "leaf" then
     -- A spacer is a fixed hole: it is never collapsed away.
-    return node.spacer or #buckets[node.name] > 0
+    return node.spacer or buckets[node.name].reserved or #buckets[node.name] > 0
   end
   for _, child in ipairs(node.children) do
     if subtree_has_windows(child, buckets) then
@@ -453,6 +466,12 @@ function M.recalculate(compiled, ctx, state)
     return {}
   end
   local area = ctx.area
+  -- Reservations are workspace-specific and contain only placement data.
+  -- The external controller owns every process and network operation.
+  local win = targets[1].window
+  local workspace = win and win.workspace and tostring(win.workspace.id)
+  local reserved = state and state.reservations and state.reservations[workspace] or {}
+  state = setmetatable({ reserved = reserved }, { __index = state or {} })
   local buckets = M.assign(compiled, targets, state)
   -- state.jiggle: true for every workspace on this layout, or a workspace
   -- id to jiggle only that workspace (looked up from the first window).
@@ -464,7 +483,7 @@ function M.recalculate(compiled, ctx, state)
   end
   state = state or { pins = {}, sizes = {} }
   local jstate = { pins = state.pins, sizes = state.sizes, jiggle = jiggle and true or false }
-  if n == 1 and compiled.single == "collapse" then
+  if n == 1 and compiled.single == "collapse" and next(reserved) == nil then
     -- The lone window takes the whole area, but keeps its slot's shape.
     local slot
     for _, name in ipairs(compiled.leaves) do

@@ -40,10 +40,27 @@ state="${XDG_STATE_HOME:-$HOME/.local/state}/hypertile"
 plugin_id="jmartin.hypertile"
 plugin_dst="$config/omarchy/plugins/$plugin_id"
 
+# Keep recovery available until every managed source is disconnected/restored.
+if [[ -e "$state/streams/state.json" ]]; then
+  python3 - "$state/streams/state.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1]) as source:
+    records = json.load(source).get("computers", {})
+pending = [name for name, r in records.items() if r.get("desired") or r.get("journal")]
+if pending:
+    sys.exit("uninstall.sh: disconnect/restore remote sources first: " + ", ".join(pending)
+             + ". Use hypertile-ctl stream status --json for recovery actions.")
+PY
+fi
+
 # Stop the writer before removing its code; retain recovery snapshots unless
 # --purge was requested. A missing/stopped service is harmless.
 if [[ -x "$bin/hypertile-session" ]]; then
   "$bin/hypertile-session" stop >/dev/null 2>&1 || true
+fi
+if [[ -x "$bin/hypertile-stream" ]]; then
+  "$bin/hypertile-stream" stop >/dev/null 2>&1 || true
 fi
 
 # One backup per edited config file, overwritten on each edit.
@@ -121,7 +138,10 @@ for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts
   rm -f "$hypr/$f"
 done
 rm -f "$bin/hypertile-ctl"
-rm -f "$bin/hypertile-session" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/service.py"
+rm -f "$bin/hypertile-session" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/service.py" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/streams.py"
+rm -f "$bin/hypertile-stream" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/controller.py" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/mac_display.py"
 echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then

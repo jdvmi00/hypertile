@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import streams
 
 
 def atomic_json(path, value):
@@ -217,6 +218,8 @@ class Launchers:
                     continue
 
     def recipe(self, window):
+        if window.get("stream"):
+            return None
         cls = window["initial_class"] or window["class"]
         explicit = self.apps.get(cls, self.apps.get(window["class"]))
         if explicit is False:
@@ -389,6 +392,7 @@ class Recovery:
         self.deadline = now + max(30, len(self.desktop["windows"]) * 3 + 10)
         self.settled = None
         compositor.call("prepare", self.desktop)
+        self.warnings.extend(streams.restore(self.desktop.get("streams", [])))
 
     def progress(self):
         return {"matches": self.matches, "launched": sorted(self.launched)}
@@ -481,7 +485,7 @@ class Recovery:
     def finish(self):
         result = self.compositor.call("finish", {"snapshot": self.desktop, "matches": self.matches})
         if isinstance(result, dict):
-            self.warnings = [str(w) for w in result.get("warnings", [])]
+            self.warnings.extend(str(w) for w in result.get("warnings", []))
 
     def report(self):
         limitations = list(self.warnings)
@@ -510,7 +514,7 @@ class Service:
 
     def record(self):
         return {"version": 1, "instance": self.compositor.instance, "saved_at": time.time(),
-                "desktop": self.launchers.capture(self.compositor.snapshot())}
+                "desktop": self.launchers.capture(streams.capture(self.compositor.snapshot()))}
 
     def status(self):
         value = {"instance": self.compositor.instance, "mode": self.mode, "error": self.error}

@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "computers": {
+    "macbook": {
+      "host": "macbook.example.ts.net",
+      "pairing_uuid": "00000000-0000-0000-0000-000000000001",
+      "title": "MacBook - Moonlight",
+      "ssh": { "user": "yourname" },
+      "profiles": {
+        "desktop": {
+          "stream_resolution": "2560x1440",
+          "fps": 60,
+          "bitrate": 60000,
+          "codec": "HEVC",
+          "decoder": "hardware",
+          "hdr": false,
+          "yuv444": false,
+          "aspect": "fit",
+          "audio": "focus",
+          "input": "absolute",
+          "keep_awake": "visible",
+          "display": {
+            "adapter": "betterdisplay",
+            "uuid": "00000000-0000-0000-0000-000000000002",
+            "mode": { "resolution": "1920x1080", "hidpi": false, "refresh": 60 },
+            "require_ac": true
+          }
+        }
+      }
+    },
+    "work-laptop": {
+      "host": "work-laptop.example.ts.net",
+      "pairing_uuid": "00000000-0000-0000-0000-000000000003",
+      "title": "WorkLaptop - Moonlight",
+      "profiles": {
+        "desktop": {
+          "stream_resolution": "2560x1600",
+          "fps": 60,
+          "bitrate": 60000,
+          "codec": "HEVC",
+          "audio": "focus",
+          "keep_awake": "visible",
+          "display": { "adapter": "external" }
+        }
+      }
+    }
+  }
+}

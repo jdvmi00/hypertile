@@ -56,7 +56,8 @@ def groups():
     return {
         "lua": sorted(ROOT.glob("hypertile*.lua")),
         "cli": [ROOT / "bin/hypertile-ctl"],
-        "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "session").glob("*.py"))],
+        "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "bin").glob("hypertile-stream")),
+                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "stream").glob("*.py"))],
         "shell": [ROOT / "manifest.json", *sorted(p for p in (ROOT / "plugin").rglob("*") if p.is_file())],
     }
 
@@ -71,7 +72,7 @@ def destination(path):
     relative = path.relative_to(ROOT)
     if relative.parts[0] == "bin":
         return BIN / path.name
-    if relative.parts[0] == "session":
+    if relative.parts[0] in ("session", "stream"):
         return DATA / "hypertile" / relative
     return CONFIG / "hypr" / path.name
 
@@ -163,6 +164,20 @@ def wait_for(probe, description, seconds=10):
 
 @contextmanager
 def stopped_session():
+    stream_lock = None
+    if (BIN / "hypertile-stream").exists():
+        path = STATE / "streams/writer.lock"
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        stream_lock = path.open("a")
+        def stream_available():
+            try:
+                fcntl.flock(stream_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                return False
+        if not stream_available():
+            run(BIN / "hypertile-stream", "stop", timeout=55)
+            wait_for(stream_available, "stream controller to stop")
     path = STATE / "sessions/writer.lock"
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     with path.open("a") as lock:
@@ -182,7 +197,11 @@ def stopped_session():
             wait_for(available, "session service to stop")
         # Hold the writer lock across installation/reload. The loader cannot
         # start a watcher against a half-updated set of runtime files.
-        yield
+        try:
+            yield
+        finally:
+            if stream_lock:
+                stream_lock.close()
 
 
 def lua_string(value):
@@ -202,6 +221,9 @@ def reload_lua():
 
 
 def start_session():
+    if (BIN / "hypertile-stream").exists():
+        command = shlex.join(["env", "-u", "HYPERTILE_SRC", str(BIN / "hypertile-stream"), "daemon"])
+        run("hyprctl", "eval", f"hl.exec_cmd({lua_string(command)})")
     settings = read_json(CONFIG / "hypertile/session.json", {})
     if settings.get("enabled", True) is False:
         print("Session service is disabled in session.json.")

@@ -6,6 +6,7 @@ local prefix = modname:match("^(.-)hypertile%-session$") or ""
 local engine = require(prefix .. "hypertile")
 local json = require(prefix .. "hypertile-json")
 local M = {}
+local streams = {}
 
 local function selector(ws)
   if ws.special then return ws.name end
@@ -15,6 +16,8 @@ end
 
 function M.snapshot()
   local out = { windows = json.array(), workspaces = json.array(), layouts = {}, monitors = json.array() }
+  out.streams = json.array()
+  for _, source in pairs(streams) do out.streams[#out.streams + 1] = source end
   for _, mon in ipairs(hl.get_monitors()) do
     out.monitors[#out.monitors + 1] = { name = mon.name, x = mon.x, y = mon.y }
   end
@@ -43,6 +46,10 @@ function M.snapshot()
     if win.mapped and win.workspace then
       local name = win.workspace.tiled_layout:match("^lua:(.+)$")
       local live = name and engine.live[name]
+      local source
+      for id, s in pairs(streams) do
+        if s.address == win.address and s.pid == win.pid and s.stable_id == win.stable_id then source = id end
+      end
       out.windows[#out.windows + 1] = {
         address = win.address, stable_id = win.stable_id, pid = win.pid, class = win.class, title = win.title,
         initial_class = win.initial_class, initial_title = win.initial_title,
@@ -50,6 +57,7 @@ function M.snapshot()
         at = win.at, size = win.size, floating = win.floating, pinned = win.pinned,
         fullscreen = win.fullscreen, fullscreen_client = win.fullscreen_client,
         pin = live and live.state.pins[win.address], grouped = win.group ~= nil,
+        stream = source,
       }
     end
   end
@@ -79,6 +87,141 @@ end
 local function dispatch(fn, args)
   local result = hl.dispatch(fn(args))
   if type(result) == "table" and result.error then error(result.error) end
+end
+
+local function stream_target(request)
+  for _, ws in ipairs(hl.get_workspaces()) do
+    if selector(ws) == request.workspace then
+      if ws.tiled_layout ~= request.layout then error("assignment-invalid: workspace layout changed") end
+      local live = engine.live[request.layout:match("^lua:(.+)$")]
+      if not live or not live.compiled.leaf_set[request.zone]
+        or live.compiled.leaf_opts[request.zone].spacer then error("assignment-invalid: zone is missing or a spacer") end
+      return ws, live
+    end
+  end
+  error("assignment-invalid: workspace is unavailable")
+end
+
+function M.stream_check(request)
+  local ws, live = stream_target(request)
+  local zones = {}
+  for _, s in pairs(streams) do
+    if s.computer ~= request.computer and s.workspace == request.workspace then
+      if s.zone == request.zone then error("zone already owned by " .. s.computer) end
+      zones[s.zone] = true
+    end
+  end
+  zones[request.zone] = true
+  local available = false
+  for _, name in ipairs(live.compiled.cycle) do if not zones[name] then available = true end end
+  if not available then error("assignment-invalid: leave one fill zone for local windows") end
+  return { workspace_id = ws.id }
+end
+
+local function refresh_workspace(ws)
+  -- Target a window explicitly: neither this nor session.place changes focus.
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and w.workspace and w.workspace.id == ws.id and not w.floating and (w.fullscreen or 0) == 0 then
+      dispatch(hl.dsp.window.resize, { window = "address:" .. w.address, x = 0, y = 0, relative = true })
+      break
+    end
+  end
+end
+
+function M.stream_release(request)
+  local old = streams[request.computer]
+  if not old then return true end
+  streams[request.computer] = nil
+  if hl.window_rule then
+    hl.window_rule({ name = "hypertile-stream-" .. request.computer, enabled = false })
+  end
+  for _, live in pairs(engine.live) do
+    local reservations = live.state.reservations or {}
+    local slots = reservations[tostring(old.workspace_id)]
+    if slots then slots[old.zone] = nil end
+    if old.address then live.state.pins[old.address] = nil end
+  end
+  for _, ws in ipairs(hl.get_workspaces()) do
+    if ws.id == old.workspace_id then refresh_workspace(ws) end
+  end
+  return true
+end
+
+function M.stream_assign(request)
+  local checked = M.stream_check(request)
+  local ws, live = stream_target(request)
+  local found
+  if request.address then
+    for _, w in ipairs(hl.get_windows()) do
+      if w.address == request.address and w.pid == request.pid and w.stable_id == request.stable_id
+        and w.class == "com.moonlight_stream.Moonlight" and w.title == request.title then found = w end
+    end
+    if not found then error("stream window identity changed") end
+  end
+  M.stream_release(request)
+  request.workspace_id = checked.workspace_id
+  streams[request.computer] = request
+  if hl.window_rule and request.title then
+    -- Launch rules can be consumed by Moonlight's temporary renderer window.
+    -- Cover the subsequent host-titled window while this source is assigned.
+    local title = request.title:gsub("([^%w _%-])", "\\%1")
+    hl.window_rule({ name = "hypertile-stream-" .. request.computer, enabled = true,
+      match = { class = "^com\\.moonlight_stream\\.Moonlight$", title = "^" .. title .. "$" },
+      workspace = request.workspace .. " silent", no_initial_focus = true,
+      suppress_event = "fullscreen maximize activate activatefocus fullscreenoutput" })
+  end
+  live.state.reservations = live.state.reservations or {}
+  local key = tostring(ws.id)
+  live.state.reservations[key] = live.state.reservations[key] or {}
+  live.state.reservations[key][request.zone] = request.address or true
+  if found then
+    -- Clear startup fullscreen once. Reconciliation must not undo a later
+    -- explicit compositor fullscreen action on the already placed window.
+    if not request.placed or selector(found.workspace) ~= request.workspace or found.floating then
+      M.place({ address = found.address, layout = request.layout,
+        saved = { workspace = request.workspace, pin = request.zone, floating = false } })
+    end
+    live.state.pins[found.address] = request.zone
+  end
+  refresh_workspace(ws)
+  return true
+end
+
+function M.stream_focus(request)
+  local s = streams[request.computer]
+  if not s or not s.address then error("stream has no ready window") end
+  for _, w in ipairs(hl.get_windows()) do
+    if w.address == s.address and w.pid == s.pid and w.stable_id == s.stable_id then
+      dispatch(hl.dsp.focus, { window = "address:" .. w.address })
+      return true
+    end
+  end
+  error("stream window has closed")
+end
+
+function M.stream_launch(request)
+  M.stream_check(request)
+  -- exec preserves the PID through the small launcher and into Moonlight,
+  -- so Hyprland's launch rules apply to this process only.
+  local result = hl.dispatch(hl.dsp.exec_cmd(request.command, {
+    workspace = request.workspace .. " silent", no_initial_focus = true,
+    suppress_event = "fullscreen maximize activate activatefocus fullscreenoutput",
+  }))
+  if type(result) == "table" and result.error then error(result.error) end
+  return true
+end
+
+function M.stream_inhibit(request)
+  local s = streams[request.computer]
+  if not s or not s.address then return false end
+  for _, w in ipairs(hl.get_windows()) do
+    if w.address == s.address and w.pid == s.pid and w.stable_id == s.stable_id then
+      dispatch(hl.dsp.window.set_prop, { window = "address:" .. w.address, prop = "idle_inhibit",
+        value = request.enabled and "always" or "none" })
+      return true
+    end
+  end
+  return false
 end
 
 -- A layout that still exists keeps its current definition: the user may have

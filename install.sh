@@ -80,9 +80,13 @@ for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts
 done
 install -m 0755 "$src/bin/hypertile-ctl" "$bin/hypertile-ctl"
 install -m 0755 "$src/bin/hypertile-session" "$bin/hypertile-session"
+install -m 0755 "$src/bin/hypertile-stream" "$bin/hypertile-stream"
 session_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session"
 mkdir -p "$session_data"
-install -m 0644 "$src/session/service.py" "$session_data/service.py"
+for f in "$src"/session/*.py; do install -m 0644 "$f" "$session_data/$(basename "$f")"; done
+stream_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream"
+mkdir -p "$stream_data"
+for f in "$src"/stream/*.py; do install -m 0644 "$f" "$stream_data/$(basename "$f")"; done
 
 for f in "$src"/layouts/*.lua; do
   name="$(basename "$f")"
