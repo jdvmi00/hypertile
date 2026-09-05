@@ -9,7 +9,17 @@ def host_headset(pid, run=subprocess.run):
         return {"state": "unverified", "error": "Install pactl or mute Moonlight locally for host-headset audio"}
     try:
         result = run(["pactl", "--format=json", "list", "sink-inputs"], capture_output=True, text=True, timeout=3, check=True)
-        streams = [v for v in json.loads(result.stdout) if str(v.get("properties", {}).get("application.process.id")) == str(pid)]
+        inputs = json.loads(result.stdout)
+        clients = {}
+        if any(not v.get("properties", {}).get("application.process.id") and v.get("client") is not None for v in inputs):
+            # Native PipeWire/SDL nodes omit the PID that PulseAudio streams
+            # carry. pactl exposes their owning client using its serial index
+            # (not the PipeWire client.id property on the node).
+            result = run(["pactl", "--format=json", "list", "clients"], capture_output=True, text=True, timeout=3, check=True)
+            clients = {str(v["index"]): v.get("properties", {}).get("application.process.id")
+                       for v in json.loads(result.stdout)}
+        streams = [v for v in inputs if str(v.get("properties", {}).get("application.process.id")
+                   or clients.get(str(v.get("client")))) == str(pid)]
         for stream in streams:
             if not stream.get("mute"):
                 run(["pactl", "set-sink-input-mute", str(int(stream["index"])), "1"], capture_output=True, timeout=3, check=True)

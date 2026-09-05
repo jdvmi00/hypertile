@@ -226,3 +226,91 @@ activity blocks restoration. Normal window-close handling is covered by the
 controller tests; the live offline test exercised client termination. Pre-login,
 lock-screen, sleep/wake, reboot and a physical network outage still require
 separate validation.
+
+## Mac pointer scaling after a mode change
+
+Fixed and installed on 2026-09-05. Switching the Dell from 1920×1080 HiDPI to
+1920×1080 without HiDPI left the stream with an incorrect pointer range.
+[Sunshine caches the macOS input scale at startup](https://github.com/LizardByte/Sunshine/blob/v2026.516.143833/src/platform/macos/input.cpp#L525).
+The adapter now verifies each changed mode and restarts Sunshine afterward,
+including when the capture display ID is unchanged and when restoring a mode.
+
+The regression test covers both HiDPI transition directions with an unchanged
+capture output. All 37 stream tests and the Windows adapter, scene and quality
+tests pass. The live Mac reconnected in its original quad tile with a 1:1 display
+coordinate/pixel ratio; the user confirmed the pointer reaches the full window
+and clicks correctly. This validates the desktop profile; HiDPI absolute input
+and physical edge crossing in relative mode still need their own checks.
+
+## Mac lid transitions
+
+Opening the MacBook lid reset the captured Dell from 1920×1080 to its native
+6144×2560 mode while the stream remained connected. The built-in panel became
+the main display at 1728×1117. The Mac adapter now reports lid state and the
+capture display's current numeric ID. The controller checks every five seconds
+and reconnects after a detected lid transition, restoring the selected profile
+with a fresh mouse scale. Capture selection still uses the persistent display
+UUID; the built-in panel's mode is not changed.
+
+Five additional regression tests cover lid recovery across controller restart,
+preserving the original journal and assignment, numeric display-ID changes,
+manual changes, compare-before-write conflicts and disconnect during recovery.
+All 42 stream tests and the Windows adapter, scene and quality suites pass.
+The explicit `reconnect --repair-display` path restored the live Dell to
+1920×1080 with the lid open, leaving the built-in panel at 1728×1117 and retaining
+the existing restoration baseline. A fresh physical close/open cycle is pending.
+
+
+## Follow the Mac's main screen
+
+Added and installed on 2026-09-05 after the user confirmed that capturing the
+Dell's extended desktop was the wrong behavior with the MacBook lid open.
+`display.follow_main` resolves the current primary screen through CoreGraphics.
+Only the configured external UUID receives the profile's display mode; other
+primary screens retain their existing mode. Restoration is bound to the physical
+UUID, including when the external display is temporarily unavailable.
+
+Six additional regression tests cover separate display baselines, switching in
+both directions, unplugged-display restoration, ProMotion without an advertised
+external mode, controller restart/disconnect during a main-screen change,
+recovery after a capture-output write crash, and rejecting a changed main screen
+before a write. All 48 stream tests pass; Windows adapter, scene and quality
+suites also pass.
+
+The old live session disconnected with its journal fully restored. All MacBook
+profiles now enable main-screen following. With the lid open, the new session
+selected built-in display 1 at its unchanged 1728×1117 HiDPI/ProMotion setting,
+with Sunshine output 1 and a 2560×1440/60 HEVC stream. A physical lid-close
+event was then detected automatically: the stream reconnected to the Dell at
+1920×1080 without HiDPI in the same quad tile in 20.9 seconds. Reopening the
+lid automatically reconnected to built-in display 1 at its unchanged
+1728×1117 HiDPI/ProMotion mode, with no error. Both physical transitions are
+verified; subjective pointer behavior still needs user confirmation.
+
+
+## Basic desktop profiles and native macOS adapter
+
+Installed on 2026-09-05. The local MacBook and work-laptop configurations now
+contain only `desktop`, with host audio, ordinary absolute pointer input and
+keep-awake enabled. The example configuration also starts with one desktop per
+computer. Remote applications retain their own microphone/webcam selection;
+this change does not forward or select those devices.
+
+The MacBook uses the new `macos` adapter. CoreGraphics reads the main display,
+logical and actual pixel dimensions, and nominal refresh. Display modes are
+never changed. Only capture output is restored; existing BetterDisplay profiles
+remain supported for users who explicitly configure them. Two new tests cover
+native configuration without a UUID/mode and rejection of mode writes without
+invoking BetterDisplay. All 50 stream, 8 Windows, 14 quality and 24 scene tests pass.
+
+A live native probe returned built-in display 1, 1728×1117 logical / 3456×2234
+pixels, with a nominal 120 Hz timing (the physical ProMotion setting was not
+changed). The desktop connected with a 2560×1440/60 decoded stream and host audio
+requested. No active local audio stream was available to verify playback muting;
+actual speakers, microphone and webcam behavior remains a user/app check. The
+previously verified main-screen lifecycle is shared by this adapter; a fresh
+physical lid cycle with the native adapter has not yet been exercised.
+
+The native Mac test disconnected and cleared its output journal. Windows SSH/helper
+was unreachable during this change, so its updated profile was not live-tested;
+its existing pending display recovery was preserved.

@@ -33,6 +33,7 @@ Column {
   readonly property var sel: overlay.selectedZone
   readonly property var source: overlay.contentFor(overlay.selected)
   readonly property var runtime: (source && source.runtime) ? source.runtime : ({})
+  readonly property var controls: Content.streamControls(runtime)
   readonly property bool isStream: source !== null && source.type === "stream"
   readonly property var quality: runtime.quality || ({})
   readonly property var measurement: (quality.current || {}).measurement || ({})
@@ -433,11 +434,20 @@ Column {
         visible: pane.isStream
         width: pane.width
         spacing: Style.spacing.sm
-        Action { text: "Focus"; tooltipText: "Focus the remote desktop and close"; enabled: !pane.overlay.busy && !!pane.runtime.window; onClicked: pane.overlay.streamAction("focus", pane.source.computer, true) }
-        Action { text: "Disconnect"; tooltipText: "Close the view; the zone goes back to local windows"; onClicked: pane.overlay.streamAction("disconnect", pane.source.computer) }
-        Action { text: "Reconnect"; tooltipText: "Restart the view in the same zone"; enabled: !pane.overlay.busy && !!pane.runtime.window && pane.runtime.observed === "window-ready"; onClicked: pane.overlay.streamAction("reconnect", pane.source.computer) }
-        Action { text: "Retry"; visible: !pane.runtime.window && pane.runtime.desired === true; onClicked: pane.overlay.streamAction("retry", pane.source.computer) }
-        Action { text: "Restore display"; visible: !!pane.runtime.journal && pane.runtime.desired !== true; tooltipText: "Put the host's display settings back"; onClicked: pane.overlay.streamAction("restore", pane.source.computer) }
+        Action { text: "Focus"; tooltipText: "Focus the remote desktop and close"; enabled: !pane.overlay.busy && pane.controls.focus; onClicked: pane.overlay.streamAction("focus", pane.source.computer, true) }
+        Action { text: "Disconnect"; visible: pane.controls.disconnect; tooltipText: "Close the view; the zone goes back to local windows"; onClicked: pane.overlay.streamAction("disconnect", pane.source.computer) }
+        Action {
+          text: "Reconnect"
+          tooltipText: "Open the remote desktop in this zone"
+          enabled: !pane.overlay.busy && pane.controls.reconnect !== ""
+          onClicked: {
+            if (pane.controls.reconnect === "connect")
+              pane.overlay.assignContent("stream", pane.source.computer, pane.source.profile)
+            else pane.overlay.streamAction("reconnect", pane.source.computer)
+          }
+        }
+        Action { text: "Retry"; visible: pane.controls.retry; onClicked: pane.overlay.streamAction("retry", pane.source.computer) }
+        Action { text: "Restore display"; visible: pane.controls.restore; tooltipText: "Put the host's display settings back"; onClicked: pane.overlay.streamAction("restore", pane.source.computer) }
       }
 
       Disclosure {

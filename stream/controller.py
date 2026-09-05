@@ -24,7 +24,7 @@ import uuid
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "session"))
 from service import Compositor, atomic_json, read_json
-from mac_display import same_setting
+from mac_display import same_setting, manages_mode
 from scenes import Manager
 from audio import host_headset
 from quality import Tracker, VideoStats
@@ -92,7 +92,7 @@ def configuration(path):
             for flag in ("hdr", "yuv444"):
                 require(type(p.get(flag, False)) is bool, "invalid " + flag)
             display = p.get("display", {"adapter": "external"})
-            require(display.get("adapter") in ("external", "betterdisplay", "windows"), "unknown display adapter")
+            require(display.get("adapter") in ("external", "betterdisplay", "macos", "windows"), "unknown display adapter")
             if display["adapter"] == "windows":
                 require(computer.get("platform") == "windows", "Windows display adapter requires platform=windows")
                 require(windows_display.ALIAS.fullmatch(computer.get("ssh", {}).get("alias", "")), "Windows adapter requires an approved ssh.alias")
@@ -101,10 +101,16 @@ def configuration(path):
                         and all(ord(c) >= 32 for c in device), "Windows adapter requires a persistent display device_id")
             if display["adapter"] == "betterdisplay":
                 require(UUID.fullmatch(display.get("uuid", "")), "display requires a persistent UUID")
+                require(type(display.get("follow_main", False)) is bool, "follow_main must be boolean")
                 mode = display.get("mode", {})
                 resolution(mode.get("resolution"))
                 require(type(mode.get("hidpi")) is bool and type(mode.get("refresh")) in (int, float)
                         and 20 <= mode["refresh"] <= 240, "invalid host mode")
+            if display["adapter"] in ("betterdisplay", "macos"):
+                if display["adapter"] == "macos":
+                    require(computer.get("platform") == "macos", "native adapter requires platform=macos")
+                    require(display.get("follow_main", True) is True, "native desktop follows the main display")
+                    require("mode" not in display and "uuid" not in display, "native desktop preserves the main display mode")
                 ssh = computer.get("ssh", {})
                 require(re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]{0,63}", ssh.get("user", "")), "Mac adapter requires ssh.user")
                 if "control_path" in ssh:
@@ -141,7 +147,8 @@ class Host:
         if ssh.get("control_path"):
             argv += ["-S", ssh["control_path"]]
         argv += [ssh["user"] + "@" + self.computer["host"], "python3 -"]
-        request = {"operation": operation, "display_uuid": self.display["uuid"],
+        request = {"operation": operation, "adapter": self.display["adapter"], "display_uuid": self.display.get("uuid"),
+                   "follow_main": self.display.get("follow_main", self.display["adapter"] == "macos"),
                    "pairing_uuid": self.computer["pairing_uuid"], **values}
         program = "REQUEST = " + repr(request) + "\n" + Path(__file__).with_name("mac_display.py").read_text()
         p = subprocess.run(argv, input=program, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=40)
@@ -186,13 +193,19 @@ class Host:
         if self.display["adapter"] == "windows":
             require(not observed.get("error"), observed.get("error", "Windows display helper error"))
             return {**info, "display": observed, "restoration": "managed"}
-        require(any(same_setting("mode", self.display["mode"], m) for m in observed["modes"]),
+        require(not manages_mode(self.display, observed) or
+                any(same_setting("mode", self.display["mode"], m) for m in observed["modes"]),
                 "display-mode-unavailable: requested mode is not advertised")
         require(not self.display.get("require_ac", False) or observed["ac_power"], "power-required: connect the Mac to AC")
         return {**info, **observed, "restoration": "managed"}
 
-    def change(self, field, expected, value):
-        return self.remote("change", field=field, expected=expected, value=value)
+    def change(self, field, expected, value, **guards):
+        return self.remote("change", field=field, expected=expected, value=value, **guards)
+
+    def for_display(self, identity):
+        profile = copy.deepcopy(self.profile)
+        profile["display"].update(uuid=identity, follow_main=False)
+        return Host(self.computer, profile)
 
 
 def prepare(record, host, persist):
@@ -201,38 +214,77 @@ def prepare(record, host, persist):
     if host.display["adapter"] == "windows":
         return windows_display.prepare(record, host, persist)
     observed = host.probe(pairing=False)
-    desired = {"mode": host.display["mode"], "output": observed["identity"]["displayID"]}
+    following = host.display.get("follow_main", host.display["adapter"] == "macos")
+    desired = {"output": observed["identity"]["displayID"]}
+    if manages_mode(host.display, observed):
+        desired["mode"] = host.display["mode"]
+    recovery = record.get("display_recovery")
+    if recovery:
+        require(observed.get("topology") == recovery["topology"], "display-topology-changed: lid changed again during recovery")
+        for field in desired:
+            require(same_setting(field, observed["current"][field], recovery["current"][field])
+                    or same_setting(field, observed["current"][field], desired[field]),
+                    "restore-conflict: display changed after recovery was requested")
     journal = record.setdefault("journal", {})
+    if "mode" not in desired and "mode" in journal:
+        # A mode belongs to its physical UUID, never to whichever panel is now
+        # primary. Restore the old display when reachable; retain pending work
+        # if it has been unplugged or changed independently.
+        restore(record, host, persist, fields=("mode",))
+        observed = host.probe(pairing=False)
+        require(observed["identity"]["displayID"] == desired["output"], "display-topology-changed: main display moved")
     # Capture every baseline before the first mutation. Restarting Sunshine
     # must not turn a side effect into the next setting's "original" value.
-    for field in ("output", "mode"):
+    for field in desired:
         current = observed["current"][field]
         if field not in journal and not same_setting(field, current, desired[field]):
             journal[field] = {"original": current, "applied": desired[field], "phase": "intent"}
+            if following and field == "mode":
+                journal[field]["display_uuid"] = observed["identity"]["UUID"]
     persist()
-    for field in ("output", "mode"):
+    for field in desired:
         current = observed["current"][field]
         entry = journal.get(field)
         if entry is None:
             require(same_setting(field, current, desired[field]), "restore-conflict: unchanged setting moved during preparation")
             continue
+        if field == "mode" and following:
+            require(entry.get("display_uuid", host.display["uuid"]).lower() == observed["identity"]["UUID"].lower(),
+                    "display-identity-changed: mode journal belongs to another display")
+        if field == "output" and recovery and entry["applied"] != desired[field]:
+            require(entry["applied"] == recovery["current"][field], "capture-display-changed: output no longer owned")
+            # Follow a new main display or a renewed CoreGraphics ID without
+            # replacing the original Sunshine output baseline.
+            entry.update(applied=desired[field], phase="intent")
+            persist()
         require(same_setting(field, entry["applied"], desired[field]), "display-identity-changed: restore the previous journal first")
         if same_setting(field, current, entry["applied"]):
             entry["phase"] = "applied"  # Recover a crash after the write, before readback.
             persist()
             continue
-        require(same_setting(field, current, entry["original"]) and entry["phase"] == "intent", "restore-conflict: host setting changed while owned")
-        host.change(field, current, entry["applied"])
+        expected = recovery["current"][field] if recovery else entry["original"]
+        require(same_setting(field, current, expected) and (recovery or entry["phase"] == "intent"),
+                "restore-conflict: host setting changed while owned")
+        guards = {"expected_identity": observed["identity"]["UUID"]} if following else {}
+        host.change(field, current, entry["applied"], **guards)
         observed = host.probe(pairing=False)
+        require(observed["identity"]["displayID"] == desired["output"], "display-topology-changed: main display moved")
         require(same_setting(field, observed["current"][field], entry["applied"]), "display-readback-failed: restoration required")
         entry["requested"] = desired[field]
         entry["applied"] = observed["current"][field]
         entry["phase"] = "applied"
         persist()
+    if following:
+        # Opening/closing a panel can change Sunshine's cached input display
+        # even when its numeric output setting needed no write.
+        host.remote("refresh", expected_identity=observed["identity"]["UUID"], expected=observed["current"])
     record["resolved"] = {**record.get("resolved", {}), **{k: v for k, v in observed.items() if k != "modes"}}
+    record["mac_topology"] = observed.get("topology")
+    record.pop("display_recovery", None)
+    persist()
 
 
-def restore(record, host, persist):
+def restore(record, host, persist, fields=("mode", "output")):
     if host.display["adapter"] == "windows":
         return windows_display.restore(record, host, persist)
     journal = record.get("journal", {})
@@ -240,25 +292,38 @@ def restore(record, host, persist):
         return True
     # Mode is a compound setting: changing only one component can select another
     # mode. Compare/restore the entire tuple, then the capture output.
-    observed = host.remote("probe")
-    for field in ("mode", "output"):
+    for field in fields:
         entry = journal.get(field)
         if not entry:
+            continue
+        target = host.for_display(entry.get("display_uuid", host.display["uuid"])) if field == "mode" and host.display.get("follow_main") else host
+        try:
+            observed = target.remote("probe")
+        except ValueError as error:
+            if field != "mode" or "display-missing" not in str(error):
+                raise
+            entry["phase"] = "unavailable"
+            persist()
             continue
         current = observed["current"][field]
         if same_setting(field, current, entry["original"]):
             del journal[field]
             persist()
             continue
-        if not same_setting(field, current, entry["applied"]):
+        recovery = record.get("display_recovery")
+        lid_reset = (recovery and observed.get("topology") == recovery["topology"]
+                     and same_setting(field, current, recovery["current"][field]))
+        if not same_setting(field, current, entry["applied"]) and not lid_reset:
             entry["phase"] = "conflict"
             persist()
             continue
-        host.change(field, current, entry["original"])
-        observed = host.remote("probe")
+        target.change(field, current, entry["original"])
+        observed = target.remote("probe")
         require(same_setting(field, observed["current"][field], entry["original"]), "restore-readback-failed")
         del journal[field]
         persist()
+    if not journal:
+        record.pop("display_recovery", None)
     return not journal
 
 
@@ -434,7 +499,7 @@ class Controller:
         out["version"] = 1
         out["requested"] = {k: v for k, v in r["settings"].items() if k in
                             ("stream_resolution", "fps", "bitrate", "codec", "decoder", "hdr", "yuv444", "input", "system_keys", "audio", "keep_awake", "display")}
-        mac = r["config"].get("platform") == "macos" or r["settings"].get("display", {}).get("adapter") == "betterdisplay"
+        mac = r["config"].get("platform") == "macos" or r["settings"].get("display", {}).get("adapter") in ("betterdisplay", "macos")
         out["clipboard"] = {"state": "unsupported" if mac else "unverified",
                             "reason": "Stock Sunshine on macOS does not implement clipboard text input" if mac else None}
         out["quality"] = self.quality.report(r)
@@ -576,6 +641,11 @@ class Controller:
             if r.get("reconnecting"):
                 return self.public(r)
             require(r["phase"] == "watching" and self.processes.pid(r), "stream is not ready; use retry after it stops")
+            if request.get("repair_display"):
+                host = self.host_factory(r["config"], r["settings"])
+                require(host.display["adapter"] == "betterdisplay", "display repair requires a managed Mac display")
+                health = host.remote("probe")
+                r["display_recovery"] = {"current": health["current"], "topology": health.get("topology")}
             r.update(phase="reconnect-stop", observed="reconnecting", next_at=0, reconnecting=True,
                      stopping_at=self.now(), close_requested=False, error=None,
                      generation=r["generation"] + 1, operation=uuid.uuid4().hex)
@@ -773,7 +843,7 @@ class Controller:
             self.assign(r)
             prepare(r, self.host_factory(r["config"], r["settings"]), self.persist)
             r.update(phase="launch", observed="connecting")
-            r["next_host_probe"] = now + 30
+            r["next_host_probe"] = now + (5 if r["settings"].get("display", {}).get("adapter") in ("betterdisplay", "macos") else 30)
         elif phase == "launch":
             # The token and launch intent survive a dispatch timeout or crash.
             if not r.get("token") or self.processes.events(r).get("closed"):
@@ -808,8 +878,8 @@ class Controller:
                         require(not health.get("error"), health.get("error", "Windows display helper error"))
                         require(health.get("phase") in ("preparing", "streaming"), "display-restored: reconnect the Windows stream")
                         r["host_health"] = {"state": "checked", "at": now}
-                if r["settings"].get("display", {}).get("adapter") == "betterdisplay" and now >= r.get("next_host_probe", 0):
-                    r["next_host_probe"] = now + 30
+                if r["settings"].get("display", {}).get("adapter") in ("betterdisplay", "macos") and now >= r.get("next_host_probe", 0):
+                    r["next_host_probe"] = now + 5
                     host = self.host_factory(r["config"], r["settings"])
                     try:
                         health = host.remote("probe")
@@ -821,8 +891,27 @@ class Controller:
                         r["host_health"] = {"state": "unknown", "error": "SSH probe timed out"}
                     else:
                         require(not host.display.get("require_ac") or health["ac_power"], "power-required: host lost AC power")
+                        before, after = r.get("mac_topology") or {}, health.get("topology") or {}
+                        lid_changed = (type(before.get("lid_closed")) is bool and type(after.get("lid_closed")) is bool
+                                       and before["lid_closed"] != after["lid_closed"])
+                        following = host.display.get("follow_main", host.display["adapter"] == "macos")
+                        capture_changed = following and before and (
+                            before.get("display_id") != after.get("display_id") or
+                            before.get("display_uuid") != after.get("display_uuid"))
+                        unmanaged_mode_changed = (following and not manages_mode(host.display, health) and
+                            not same_setting("mode", health["current"]["mode"], r["resolved"]["current"]["mode"]))
+                        if lid_changed or capture_changed or unmanaged_mode_changed:
+                            require(health["current"]["output"] == r["resolved"]["current"]["output"],
+                                    "capture-display-changed: capture output changed during lid transition")
+                            r["display_recovery"] = {"current": health["current"], "topology": health["topology"]}
+                            self.command({"command": "reconnect", "computer": r["computer"],
+                                          "reason": "main-display-change" if following else "lid-change"})
+                            return  # Stop the local client before refreshing Sunshine's display/input state.
                         require(health["current"]["output"] == health["identity"]["displayID"], "capture-display-changed: check Sunshine configuration")
+                        r["mac_topology"] = health.get("topology")
                         r["host_health"] = {"state": "checked", "at": now}
+                        if manages_mode(host.display, health) and not same_setting("mode", health["current"]["mode"], host.display["mode"]):
+                            r["host_health"] = {"state": "unknown", "error": "display-mode-changed: use reconnect --repair-display to restore the stream size"}
                         r["resolved"].update({k: v for k, v in health.items() if k != "modes"})
                 if r.get("host_health", {}).get("state") == "unknown":
                     r["observed"] = "degraded"
@@ -1036,6 +1125,8 @@ def main():
             p.add_argument("--keep-host-settings", action="store_true")
         if name == "measure":
             p.add_argument("--seconds", type=int, default=30)
+        if name == "reconnect":
+            p.add_argument("--repair-display", action="store_true", help="explicitly restore the managed Mac display mode")
         if name == "readability":
             p.add_argument("value", choices=("readable", "too-small", "blurry"))
     args = parser.parse_args()

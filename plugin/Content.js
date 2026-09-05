@@ -27,6 +27,21 @@ function inProgress(value) {
   return ["connecting", "preflight", "preparing", "preparing-display", "startup-window", "reconnecting", "restoring", "stopping", "layout", "pending"].indexOf(value) !== -1
 }
 
+function streamControls(runtime) {
+  var r = runtime || {}, desired = r.desired === true
+  var journal = !!r.journal && Object.keys(r.journal).length > 0
+  var pending = inProgress(r.observed)
+  var connected = desired && !!r.window
+  return {
+    focus: connected,
+    disconnect: desired,
+    reconnect: connected && ["window-ready", "degraded"].indexOf(r.observed) !== -1 ? "reconnect"
+      : !desired && !r.pid && !r.window && !journal && !pending ? "connect" : "",
+    retry: desired && !r.window && !pending,
+    restore: !desired && journal && !pending
+  }
+}
+
 function audio(value) {
   return value === "continuous" ? "Audio continues when you use local apps" :
     value === "host" ? "Use the host headset; local stream playback is muted" :

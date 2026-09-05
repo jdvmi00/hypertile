@@ -28,42 +28,77 @@ requires that title, Moonlight's class, its owned process and the compositor's
 window identity. It does not adopt a manually launched stream. Close that view
 before the first managed connection.
 
-For automatic Mac preparation, BetterDisplay must already be running with CLI
-integration enabled, and Sunshine must already have screen recording and input
-permissions. Configure an approved SSH account with existing host-key trust and
+The basic example has one `desktop` profile per computer with `audio: host`.
+Sound plays through the remote computer's selected speakers/headset/dock, with
+local Moonlight playback muted. Conferencing apps running on that computer use
+its own selected microphone and webcam; Hypertile does not select those devices
+or forward the Linux computer's microphone/webcam.
+
+On macOS, `display: {"adapter": "macos"}` uses native CoreGraphics APIs to read
+the main screen and its logical/pixel dimensions. It preserves macOS's resolution,
+HiDPI and refresh settings, follows main-screen changes, and refreshes Sunshine's
+capture/input context during reconnects. No BetterDisplay installation, display
+UUID or forced mode is required. Sunshine still handles video capture/encoding
+and Moonlight receives it. Only Sunshine's capture-output setting is journaled
+and restored. The external screen may therefore use its normal ultrawide mode
+with the lid closed; this basic profile does not force a 16:9 desktop.
+
+Sunshine must already have screen recording and input permissions.
+Configure an approved SSH account with existing host-key trust and
 noninteractive authentication. An optional absolute `ssh.control_path` uses an
 already authenticated multiplex connection; once it expires the adapter reports
 SSH unavailable. SSH passwords and Sunshine admin credentials are not stored.
 
-Find the physical display UUID on the Mac:
+The optional `betterdisplay` adapter additionally manages a physical display's
+mode. For that adapter, BetterDisplay must be running with CLI integration enabled.
+Find its physical display UUID on the Mac:
 
 ```bash
 /Applications/BetterDisplay.app/Contents/MacOS/BetterDisplay \
   get -type=Display -name='Your display' -identifiers
 ```
 
-Preflight authenticates an app-list request through Moonlight. The Mac adapter
+Preflight authenticates an app-list request through Moonlight. The BetterDisplay adapter
 also checks Sunshine's stored computer UUID over the approved SSH connection
 before any display operation. It resolves the display UUID to the current
 CoreGraphics display ID and checks that it is active. It verifies the advertised
 mode and, when `require_ac` is true,
-AC power. `output_name` in `~/.config/sunshine/sunshine.conf` is mapped to that ID;
-changing it restarts Sunshine. Display groups and virtual displays are excluded.
+AC power. `output_name` in `~/.config/sunshine/sunshine.conf` is mapped to that ID.
+Changing the display mode or capture output restarts Sunshine. Mode changes are
+read back before restarting: Sunshine's macOS input context caches its pointer
+scale at startup, so changing HiDPI afterward can leave mouse coordinates scaled
+for the previous mode.
+Display groups and virtual displays are excluded.
 The BetterDisplay `connected` getter is not required: physical activity is read
 through CoreGraphics. Permission status is reported as unknown until tested in
 the stream. No lid/sleep settings are modified.
+
+Set `display.follow_main: true` on a BetterDisplay profile to capture the Mac's
+current main screen. Opening the lid can then switch the stream from the external
+display to the built-in panel; closing it switches back when macOS makes the
+external display primary. The configured `display.uuid` and `display.mode`
+apply only when that physical display is primary. Other screens retain their
+own resolution, HiDPI and refresh settings, including ProMotion. This follows
+macOS's main-screen selection; it does not change which screen is primary or
+move apps between extended desktops.
+
+Main-screen changes trigger a reconnect in the same zone and refresh Sunshine's
+input mapping. The previous display's mode is restored by its own UUID. If that
+display is unplugged or changed independently, its restoration remains pending;
+the built-in panel can still stream. Reconnect the missing display and use
+`stream restore COMPUTER` after disconnect to retry pending restoration.
+Disconnect an existing stream before enabling this policy in `computers.json`.
 
 The three sizes are separate. `display.mode.resolution` is the logical desktop;
 `hidpi: true` renders twice as many pixels per dimension. `stream_resolution` is
 the encoded video size. Probe and status expose the resolved host mode. For
 example, a 1920×1080 HiDPI desktop renders at 3840×2160 and streams at 2560×1440.
 
-Sunshine 2026.516.143833 on the tested Mac produced a 2× absolute-pointer offset
-with HiDPI capture. The example uses HiDPI off to keep ordinary absolute clicks
-correct while retaining the same logical desktop size. For HiDPI, explicitly
-choose `input: relative` and validate captured-pointer behavior; use
-Ctrl+Alt+Shift+Z to release capture. `input: absolute` is the default. This is a
-host/client compatibility limit, not a reason to silently select another display.
+Sunshine 2026.516.143833 on the tested Mac produced an absolute-pointer offset
+when HiDPI changed after Sunshine started. The adapter now restarts Sunshine
+after changing modes or following the main screen to refresh that mapping.
+`input: absolute` is the default; `input: relative` captures the pointer instead.
+Use Ctrl+Alt+Shift+Z to release relative capture.
 
 Use `display.adapter: external` for any host whose display settings
 are managed elsewhere. Hypertile reports this explicitly and changes no host
@@ -201,8 +236,25 @@ ambiguous closes stop for attention. No scheduled retry survives a disconnect.
 Use `hypertile-ctl stream retry macbook` for a source still assigned to its zone.
 Individual SSH steps have a 40-second deadline; the single writer accepts the
 next command between steps, so a stalled remote operation can delay a command.
-Running Mac sources recheck display identity, capture output and power every
-30 seconds. Losing the SSH observation channel marks the source degraded while
+Running Mac sources recheck display identity, capture output, lid state and power
+every five seconds. A detected lid transition reconnects the local view and
+reapplies the selected display mode if macOS reset it. The original restoration
+journal and tile assignment are retained. Recovery compares the observed mode
+and lid state again before writing, so a later manual change is preserved.
+Only the selected capture display is changed; the built-in panel keeps its mode.
+With `follow_main`, a main-screen change also reconnects, and the profile mode
+is applied only to the configured physical UUID when it is primary. Changes to
+an unmanaged primary panel's mode trigger an input refresh without reverting
+that mode.
+
+A managed mode change without a detected lid transition is preserved and
+reported as degraded. To explicitly restore the selected profile in a running Mac stream:
+
+```sh
+hypertile-ctl stream reconnect macbook --repair-display
+```
+
+Losing the SSH observation channel marks the source degraded while
 its view keeps running; a confirmed missing display or power prerequisite stops
 the view and requests restoration.
 

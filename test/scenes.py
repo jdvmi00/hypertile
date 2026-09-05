@@ -392,6 +392,23 @@ class SceneTests(unittest.TestCase):
             self.assertEqual(host_headset(100, run)["state"], "local-muted")
         self.assertEqual(calls[1:], [["pactl", "set-sink-input-mute", "1", "1"]])
 
+    def test_host_audio_resolves_native_pipewire_client_without_muting_others(self):
+        calls = []
+        inputs = [
+            {"index": 10, "client": "6131", "mute": False, "properties": {"client.id": "82"}},
+            {"index": 11, "client": "6132", "mute": False, "properties": {}},
+            {"index": 12, "client": "missing", "mute": False, "properties": {"application.name": "Moonlight"}},
+            {"index": 13, "client": "6131", "mute": False, "properties": {"application.process.id": "200"}}]
+        clients = [{"index": 6131, "properties": {"application.process.id": "100"}},
+                   {"index": 6132, "properties": {"application.process.id": "200"}}]
+        def run(argv, **_):
+            calls.append(argv)
+            return SimpleNamespace(stdout=json.dumps(clients if argv[-1] == "clients" else inputs))
+        with patch("audio.shutil.which", return_value="/usr/bin/pactl"):
+            self.assertEqual(host_headset(100, run)["state"], "local-muted")
+        self.assertEqual([v for v in calls if v[1] == "set-sink-input-mute"],
+                         [["pactl", "set-sink-input-mute", "10", "1"]])
+
     def test_layout_failure_remains_recoverable(self):
         self.ready()
         self.save("move", zone="left")
