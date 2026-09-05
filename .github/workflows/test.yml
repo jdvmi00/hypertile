@@ -2,12 +2,16 @@ name: tests
 
 on:
   push:
-    branches: [main]
+    branches: [main, develop]
   pull_request:
+
+permissions:
+  contents: read
 
 jobs:
   windows-display-policy:
     runs-on: windows-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - name: Windows PowerShell display policy and journal
@@ -15,6 +19,7 @@ jobs:
         run: .\stream\windows\Test.ps1 -PolicyOnly
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     container: archlinux:latest
     steps:
       # The engine targets the Lua that Hyprland embeds (5.5); Arch tracks it.
