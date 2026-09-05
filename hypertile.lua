@@ -86,6 +86,7 @@ local function normalize_node(node, path)
   return {
     kind = "leaf",
     name = node.name,
+    id = node.id,
     size = size,
     stack = node.stack,
     spacer = node.spacer == true,
@@ -119,6 +120,16 @@ function M.compile(spec)
     leaves[#leaves + 1] = name
   end
   local leaf_set = seen
+  assert(spec.layout_id == nil or (type(spec.layout_id) == "string" and spec.layout_id:match("^[%w_%-]+$") and #spec.layout_id <= 128), "hypertile: invalid layout id")
+  local zone_ids = {}
+  for _, name in ipairs(leaves) do
+    local id = leaf_opts[name].id
+    if id ~= nil then
+      assert(type(id) == "string" and id:match("^[%w_%-]+$") and #id <= 128, "hypertile: invalid zone id")
+      assert(not zone_ids[id], "hypertile: duplicate zone id " .. id)
+      zone_ids[id] = name
+    end
+  end
   local fillable = {}
   for _, name in ipairs(leaves) do
     local o = leaf_opts[name]
@@ -177,6 +188,7 @@ function M.compile(spec)
     leaves = leaves,
     fillable = fillable,
     leaf_set = leaf_set,
+    zone_ids = zone_ids,
     leaf_opts = leaf_opts,
     fill = fill,
     fill_pos = fill_pos,
@@ -480,7 +492,9 @@ function M.recalculate(compiled, ctx, state)
   -- The external controller owns every process and network operation.
   local win = targets[1].window
   local workspace = win and win.workspace and tostring(win.workspace.id)
-  local reserved = state and state.reservations and state.reservations[workspace] or {}
+  local reserved = {}
+  for name, owner in pairs(state and state.reservations and state.reservations[workspace] or {}) do reserved[name] = owner end
+  for name in pairs(state and state.scene_empty and state.scene_empty[workspace] or {}) do reserved[name] = true end
   state = setmetatable({ reserved = reserved }, { __index = state or {} })
   local buckets = M.assign(compiled, targets, state)
   -- state.jiggle: true for every workspace on this layout, or a workspace

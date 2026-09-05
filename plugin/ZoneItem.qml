@@ -21,9 +21,10 @@ Item {
   readonly property color fg: overlay.foreground
   readonly property color accent: overlay.accent
   readonly property bool editing: overlay.editing
-  readonly property bool isSelected: editing && overlay.selected === modelData.name
-  readonly property bool isHovered: editing && !overlay.numbering && !overlay.dragDivider && !overlay.hoverDivider && overlay.hoverZone === modelData.name
-  readonly property bool isSpacer: modelData.spacer === true
+  readonly property bool isSelected: (editing || overlay.contentMode) && overlay.selected === modelData.name
+  readonly property bool isHovered: (editing || overlay.contentMode) && !overlay.numbering && !overlay.dragDivider && !overlay.hoverDivider && overlay.hoverZone === modelData.name
+  readonly property var source: overlay.contentFor(modelData.name)
+  readonly property bool isSpacer: modelData.spacer === true || (source !== null && source.type === "empty")
   readonly property bool fitted: modelData.fitted === true && !isSpacer
   readonly property int inset: Style.space(6)
   readonly property int stackCount: modelData.neverSplit ? 1 : Math.max(1, modelData.numbers.length)
@@ -152,6 +153,15 @@ Item {
     y: zone.pad
     width: parent.width - zone.pad * 2
     spacing: Style.spacing.sm
+
+    Chip {
+      visible: zone.source !== null || zone.overlay.contentMode
+      text: zone.overlay.contentLabel(zone.modelData.name)
+      foreground: zone.fg
+      fontFamily: zone.overlay.fontFamily
+      fontSize: zone.overlay.uiFontSmall
+      strong: zone.source !== null && zone.source.type === "stream"
+    }
 
     Row {
       spacing: Style.spacing.sm

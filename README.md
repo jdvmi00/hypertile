@@ -372,6 +372,10 @@ installing: `HYPERTILE_SRC=$PWD bin/hypertile-ctl list`.
 Remote desktops can be assigned to named zones with `hypertile-ctl stream`.
 Use `SUPER+SHIFT+Arrow` to swap a ready stream with a neighboring window; its
 zone reservation and saved assignment move with it.
+
+The overlay’s **Scenes & content** view assigns computers/profiles, local apps,
+and Empty to zones. Save and restore workspace scenes with `hypertile-ctl scene`.
+See [scenes and content](docs/SCENES.md) for the UI, CLI, and stable zone references.
 See [remote desktop setup and recovery](docs/STREAMS.md) for computer profiles,
 the Mac display adapter, and the Windows externally managed profile.
 

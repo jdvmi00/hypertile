@@ -399,6 +399,16 @@ Card {
       width: scroller.width
       spacing: Style.spacing.xl
 
+      Flow {
+        visible: !overlay.editing
+        width: parent.width
+        spacing: Style.spacing.sm
+        Action { text: "Layouts"; selected: !overlay.contentMode; onClicked: overlay.showContent(false) }
+        Action { text: "Scenes & content"; selected: overlay.contentMode; onClicked: overlay.showContent(true) }
+      }
+
+      ContentPane { visible: overlay.contentMode && !overlay.editing; width: parent.width; overlay: rail.overlay }
+
       // ---- Header: mode, name, meta, actions.
       Column {
         width: column.width

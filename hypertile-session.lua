@@ -7,6 +7,7 @@ local engine = require(prefix .. "hypertile")
 local json = require(prefix .. "hypertile-json")
 local M = {}
 local streams = {}
+local scene_content = {}
 
 local function selector(ws)
   if ws.special then return ws.name end
@@ -17,6 +18,7 @@ end
 function M.snapshot()
   local out = { windows = json.array(), workspaces = json.array(), layouts = {}, monitors = json.array() }
   out.streams = json.array()
+  out.scene_content = scene_content
   for _, source in pairs(streams) do out.streams[#out.streams + 1] = source end
   for _, mon in ipairs(hl.get_monitors()) do
     out.monitors[#out.monitors + 1] = { name = mon.name, x = mon.x, y = mon.y }
@@ -95,6 +97,9 @@ local function stream_target(request)
     if selector(ws) == request.workspace then
       if ws.tiled_layout ~= request.layout then error("assignment-invalid: workspace layout changed") end
       local live = engine.live[request.layout:match("^lua:(.+)$")]
+      if live and request.zone_id then
+        request.zone = live.compiled.zone_ids[request.zone_id]
+      end
       if not live or not live.compiled.leaf_set[request.zone]
         or live.compiled.leaf_opts[request.zone].spacer then error("assignment-invalid: zone is missing or a spacer") end
       return ws, live
@@ -106,6 +111,10 @@ end
 function M.stream_check(request)
   local ws, live = stream_target(request)
   local zones = {}
+  for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do
+    if name == request.zone then error("assignment-invalid: zone is intentionally empty") end
+    zones[name] = true
+  end
   for _, s in pairs(streams) do
     if s.computer ~= request.computer and s.workspace == request.workspace then
       if s.zone == request.zone then error("zone already owned by " .. s.computer) end
@@ -116,7 +125,7 @@ function M.stream_check(request)
   local available = false
   for _, name in ipairs(live.compiled.cycle) do if not zones[name] then available = true end end
   if not available then error("assignment-invalid: leave one fill zone for local windows") end
-  return { workspace_id = ws.id }
+  return { workspace_id = ws.id, zone = request.zone, zone_id = live.compiled.leaf_opts[request.zone].id }
 end
 
 local function refresh_workspace(ws)
@@ -127,6 +136,129 @@ local function refresh_workspace(ws)
       break
     end
   end
+end
+
+function M.scene_layout(request)
+  local bridge = require(prefix .. "hypertile-bridge")
+  if request.spec then engine.layout(request.layout:match("^lua:(.+)$"), request.spec) end
+  local rule = bridge.rule_source(request.workspace, request.layout, request.spec)
+  assert(load(rule, "=scene-workspace", "t"))()
+  return rule -- Persistence belongs to the external writer, never nested hyprctl.
+end
+
+function M.scene_clear(request)
+  local old = scene_content[request.workspace]
+  if not old then return true end
+  local windows = {}
+  for _, w in ipairs(hl.get_windows()) do windows[w.address] = w end
+  local live = engine.live[old.layout:match("^lua:(.+)$")]
+  if live then
+    if live.state.scene_empty then live.state.scene_empty[tostring(old.workspace_id)] = nil end
+    for _, p in ipairs(old.pins or {}) do
+      local w = windows[p.address]
+      if w and w.stable_id == p.stable_id and w.pid == p.pid and live.state.pins[p.address] == p.zone then
+        live.state.pins[p.address] = p.before
+        if live.state.exclusive_pins then live.state.exclusive_pins[p.address] = p.exclusive end
+      end
+    end
+  end
+  scene_content[request.workspace] = nil
+  for _, ws in ipairs(hl.get_workspaces()) do if selector(ws) == request.workspace then refresh_workspace(ws) end end
+  return true
+end
+
+function M.scene_content_apply(request)
+  local ws, live
+  for _, w in ipairs(hl.get_workspaces()) do
+    if selector(w) == request.workspace and w.tiled_layout == request.layout then ws = w end
+  end
+  assert(ws, "scene workspace or layout changed")
+  live = engine.live[request.layout:match("^lua:(.+)$")]
+  assert(live, "scene requires a Hypertile layout")
+  local empty, blocked = {}, {}
+  for _, source in ipairs(request.sources) do
+    local zone = source.zone_id and live.compiled.zone_ids[source.zone_id] or source.zone
+    assert(zone and live.compiled.leaf_set[zone], "scene zone no longer exists")
+    source.zone = zone
+    if source.type == "empty" then empty[zone], blocked[zone] = true, true end
+    if source.type == "stream" then blocked[zone] = true end
+  end
+  local available = false
+  for _, zone in ipairs(live.compiled.cycle) do if not blocked[zone] then available = true end end
+  assert(available, "leave one fill zone for local windows")
+  M.scene_clear(request)
+  live.state.scene_empty = live.state.scene_empty or {}
+  live.state.scene_empty[tostring(ws.id)] = empty
+  live.state.exclusive_pins = live.state.exclusive_pins or {}
+  local record = { workspace_id = ws.id, layout = request.layout, pins = json.array(), results = json.array() }
+  scene_content[request.workspace] = record
+  for _, source in ipairs(request.sources) do
+    if source.type == "local" and source.app_class then
+      local matches = {}
+      for _, w in ipairs(hl.get_windows()) do
+        if w.mapped and w.workspace and w.workspace.id == ws.id and not w.floating
+          and w.class == source.app_class then matches[#matches + 1] = w end
+      end
+      local result = { zone = source.zone, status = "needs-attention", error = #matches == 0 and "Open this app on the workspace" or "More than one matching app window is open" }
+      if #matches == 1 then
+        local w = matches[1]
+        record.pins[#record.pins + 1] = { address = w.address, pid = w.pid, stable_id = w.stable_id,
+          zone = source.zone, before = live.state.pins[w.address], exclusive = live.state.exclusive_pins[w.address] }
+        live.state.pins[w.address], live.state.exclusive_pins[w.address] = source.zone, true
+        result.status, result.error = "ready", nil
+      end
+      record.results[#record.results + 1] = result
+    end
+  end
+  refresh_workspace(ws)
+  return { results = record.results, pins = record.pins }
+end
+
+function M.scene_restore_pins(request)
+  for _, saved in ipairs(request.windows or {}) do
+    for _, w in ipairs(hl.get_windows()) do
+      if w.address == saved.address and w.stable_id == saved.stable_id and w.pid == saved.pid
+        and w.workspace and selector(w.workspace) == request.workspace then
+        local live = engine.live[w.workspace.tiled_layout:match("^lua:(.+)$")]
+        if live and live.state.pins[w.address] == saved.zone then
+          live.state.pins[w.address] = saved.before
+          live.state.exclusive_pins = live.state.exclusive_pins or {}
+          live.state.exclusive_pins[w.address] = saved.exclusive
+        end
+      end
+    end
+  end
+  for _, ws in ipairs(hl.get_workspaces()) do if selector(ws) == request.workspace then refresh_workspace(ws) end end
+  return true
+end
+
+function M.stream_shortcut(request)
+  local keys = { clipboard = "V", ["input-release"] = "Z", stats = "S" }
+  local key = assert(keys[request.action], "unknown stream shortcut")
+  local source = assert(streams[request.computer], "stream is not assigned")
+  for _, w in ipairs(hl.get_windows()) do
+    if w.address == source.address and w.stable_id == source.stable_id and w.pid == source.pid then
+      local address, stable_id, pid = w.address, w.stable_id, w.pid
+      local function still_owned()
+        for _, current in ipairs(hl.get_windows()) do
+          if current.address == address and current.stable_id == stable_id and current.pid == pid then return true end
+        end
+      end
+      local function send()
+        if not still_owned() then return end
+        dispatch(hl.dsp.send_key_state, { mods = "CTRL ALT SHIFT", key = key, state = "down", window = "address:" .. address })
+        hl.timer(function()
+          if still_owned() then dispatch(hl.dsp.send_key_state, { mods = "CTRL ALT SHIFT", key = key, state = "up", window = "address:" .. address }) end
+        end, { timeout = 50, type = "oneshot" })
+      end
+      -- Wayland clipboard offers and Moonlight keyboard capture require focus.
+      -- These controls are explicit actions; scene placement never takes focus.
+      dispatch(hl.dsp.focus, { window = "address:" .. address })
+      hl.timer(send, { timeout = 80, type = "oneshot" })
+      return true
+    end
+  end
+  error("stream has no ready window")
 end
 
 local function source_for(win)
@@ -165,9 +297,12 @@ function M.stream_swap_plan(request)
     if by_address[address] then targets[#targets + 1] = { window = by_address[address] }; by_address[address] = nil end
   end
   assert(next(by_address) == nil, "swap unavailable: waiting for layout order")
+  local reserved = {}
+  for name, owner in pairs((live.state.reservations or {})[tostring(ws.id)] or {}) do reserved[name] = owner end
+  for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do reserved[name] = true end
   local buckets = engine.assign(live.compiled, targets, {
     pins = live.state.pins, exclusive_pins = live.state.exclusive_pins,
-    reserved = (live.state.reservations or {})[tostring(ws.id)],
+    reserved = reserved,
   })
   local plan = { workspace = selector(ws), layout = ws.tiled_layout, windows = json.array() }
   for i, w in ipairs(windows) do
@@ -183,11 +318,15 @@ function M.stream_swap_plan(request)
     assert(zone, "swap unavailable: window has no zone")
     local s = source_for(w)
     plan.windows[i] = { address = w.address, stable_id = w.stable_id, pid = w.pid,
-      computer = s and s.computer, before = zone, pin = live.state.pins[w.address],
+      computer = s and s.computer, before = zone, before_id = live.compiled.leaf_opts[zone].id,
+      pin = live.state.pins[w.address],
       exclusive = live.state.exclusive_pins and live.state.exclusive_pins[w.address] or nil }
   end
   assert(plan.windows[1].before ~= plan.windows[2].before, "swap unavailable: windows share a zone")
-  for i, ref in ipairs(plan.windows) do ref.zone = plan.windows[3 - i].before end
+  for i, ref in ipairs(plan.windows) do
+    ref.zone = plan.windows[3 - i].before
+    ref.zone_id = live.compiled.leaf_opts[ref.zone].id
+  end
   return plan
 end
 
@@ -202,6 +341,9 @@ function M.stream_swap_apply(plan)
     assert(w.pid == ref.pid, "swap unavailable: window identity changed")
     assert(live.compiled.leaf_set[ref.zone] and not live.compiled.leaf_opts[ref.zone].spacer,
       "swap unavailable: zone changed")
+    assert((not ref.zone_id or live.compiled.leaf_opts[ref.zone].id == ref.zone_id)
+      and (not ref.before_id or (live.compiled.leaf_opts[ref.before] or {}).id == ref.before_id),
+      "swap unavailable: zone identity changed")
     local s = source_for(w)
     assert((s and s.computer) == ref.computer, "swap unavailable: source ownership changed")
     if s then
@@ -219,6 +361,10 @@ function M.stream_swap_apply(plan)
     end
   end
   local zones = {}
+  for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do
+    zones[name] = true
+    for _, ref in ipairs(plan.windows) do assert(ref.zone ~= name, "swap unavailable: zone is intentionally empty") end
+  end
   for _, s in pairs(streams) do
     if s.workspace == plan.workspace and not owners[s.computer] then zones[s.zone] = true end
   end
@@ -234,6 +380,7 @@ function M.stream_swap_apply(plan)
     live.state.exclusive_pins[ref.address] = not ref.computer or nil
     if ref.computer then
       streams[ref.computer].zone = ref.zone
+      streams[ref.computer].zone_id = ref.zone_id
       slots[ref.zone] = ref.address
     end
   end
@@ -266,6 +413,7 @@ function M.stream_swap_cancel(plan)
   end
   for _, item in ipairs(restored) do
     item.source.zone = item.ref.before
+    item.source.zone_id = item.ref.before_id
     item.slots[item.ref.before] = item.ref.address
     live.state.pins[item.ref.address] = item.ref.before
   end
@@ -411,7 +559,7 @@ function M.prepare(snapshot)
   for _, ws in ipairs(snapshot.workspaces) do
     local name = ws.layout:match("^lua:(.+)$")
     local spec = name and current_spec(name, snapshot.layouts[name])
-    assert(load(bridge.rule_source(ws.layout, ws.selector, spec), "=session-workspace", "t"))()
+    assert(load(bridge.rule_source(ws.selector, ws.layout, spec), "=session-workspace", "t"))()
   end
   return true
 end

@@ -178,3 +178,8 @@ intent before spawning apps, and persists successful matches. Restarting the
 service during recovery in the same compositor does not relaunch already
 attempted apps. Automatic saving resumes only after all saved windows have
 matched and settled, or after an explicit `resume`.
+
+Workspace [scenes](SCENES.md) are checkpointed as versioned definitions alongside
+stream references. The stream controller restores their content after the local
+workspace returns; it retains disconnect decisions independently of older
+checkpoints. Scene definitions do not include transient compositor window IDs.

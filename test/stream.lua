@@ -78,7 +78,8 @@ assert(rules["hypertile-stream-laptop"].enabled == false, "release disables the 
 
 -- Real engine assignment with an uncapped fill sequence: swapping must not
 -- stack an unrelated local window into the newly freed source zone.
-spec = { columns = { { name = "one" }, { name = "two" }, { name = "three" }, { name = "four" } },
+spec = { layout_id = "layout", columns = { { name = "one", id = "id-one" }, { name = "two", id = "id-two" },
+  { name = "three", id = "id-three" }, { name = "four", id = "id-four" } },
   fill = { "one", "two", "three", "four" }, empty = "keep", single = "slot" }
 engine.provider("test", spec)
 windows = {}
@@ -89,10 +90,13 @@ for i, address in ipairs({ "a", "b", "c", "d" }) do
 end
 local function assign_source(id, i, zone)
   local w = windows[i]
-  session.stream_assign({ computer = id, profile = "desktop", workspace = "1", layout = "lua:test", zone = zone,
-    address = w.address, pid = w.pid, stable_id = w.stable_id, title = w.title, placed = true })
+  local request = { computer = id, profile = "desktop", workspace = "1", layout = "lua:test", zone = zone,
+    zone_id = engine.live.test.compiled.leaf_opts[zone].id,
+    address = w.address, pid = w.pid, stable_id = w.stable_id, title = w.title, placed = true }
+  session.stream_assign(request)
+  return request
 end
-assign_source("laptop", 1, "two")
+local laptop = assign_source("laptop", 1, "two")
 assign_source("second", 4, "four")
 engine.live.test.orders["1"] = { "a", "b", "c", "d" }
 local function positions()
@@ -111,10 +115,12 @@ local function plan(a, b) return session.stream_swap_plan({ windows = { windows[
 local before = positions()
 assert(before.a == "two" and before.b == "one" and before.c == "three" and before.d == "four")
 local exchange = plan(1, 2)
+assert(exchange.windows[1].before_id == "id-two" and exchange.windows[1].zone_id == "id-one", "swap plan includes both stable zone identities")
 calls = {}
 session.stream_swap_apply(exchange)
 session.stream_swap_apply(exchange) -- lost reply: absolute replay, no toggle
 local after = positions()
+assert(laptop.zone_id == "id-one", "compositor source identity follows the swap immediately")
 assert(after.a == "one" and after.b == "two" and after.c == "three" and after.d == "four",
   "source/local swap preserves unrelated windows and handles uncapped fill")
 windows[5] = { address = "extra", pid = 5, stable_id = 5, workspace = ws, mapped = true }
@@ -130,6 +136,7 @@ after = positions()
 assert(after.a == "four" and after.d == "one", "two source reservations exchange atomically")
 session.stream_swap_cancel(exchange)
 after = positions()
+assert(laptop.zone_id == "id-one", "cancel restores the original source zone identity")
 assert(after.a == "one" and after.d == "four", "cancel restores both sides of an uncertain exchange")
 exchange = plan(1, 2)
 windows[2].stable_id = 99
@@ -140,6 +147,12 @@ windows[2].fullscreen = 2
 ok = pcall(session.stream_swap_apply, exchange)
 assert(not ok and positions().a == "one", "fullscreen change rejects the whole swap")
 windows[2].fullscreen = 0
+local destination = engine.live.test.compiled.leaf_opts[exchange.windows[1].zone]
+local original_id = destination.id
+destination.id = "replacement-zone"
+ok = pcall(session.stream_swap_apply, exchange)
+assert(not ok and positions().a == "one", "reusing a zone name cannot replay a stale swap")
+destination.id = original_id
 session.stream_swap_apply(exchange)
 session.stream_swap_cancel(exchange)
 assert(positions().b == "three" and engine.state.test.exclusive_pins.b, "cancel restores the previous local swap pin")

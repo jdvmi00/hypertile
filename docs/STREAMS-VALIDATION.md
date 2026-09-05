@@ -1,4 +1,4 @@
-# Milestone A1 implementation checks
+# Remote desktop and scene implementation checks
 
 Implementation and local installation: 2026-09-04. Usage and limitations are in
 [STREAMS.md](STREAMS.md). This records what was exercised; the full hardware
@@ -70,8 +70,9 @@ Two compatibility issues changed the implementation:
 - Opening/closing the Mac lid during a managed transaction, battery-only use,
   and removing the Dell. Earlier prototype lid-closed evidence does not establish
   those additional combinations.
-- Relative-input HiDPI behavior, modifier shortcuts, clipboard, audio routing,
-  Teams camera/microphone use and virtual displays.
+- Relative-input HiDPI behavior, Windows modifier/clipboard behavior, audible
+  audio routing, Teams camera/microphone use and virtual displays. Mac modifier
+  and clipboard results are recorded below.
 - End-to-end latency, dropped-frame and sustained presentation measurements.
   `window-ready` and decoder initialization deliberately do not claim verified
   frame presentation.
@@ -82,3 +83,52 @@ startup window disappears. The Mac display adapter currently uses an approved
 SSH multiplex session; future connections need that session or independently
 configured noninteractive SSH authentication. The active stream does not require
 continuous SSH connectivity to keep rendering.
+
+## A2 scenes and everyday controls
+
+Implemented and installed locally on 2026-09-04. See [SCENES.md](SCENES.md).
+
+Automated checks add 22 Python scene/input/audio tests, Lua scene adapter checks,
+and JavaScript Content/identity checks. They exercise stable IDs, renamed and
+missing references, queued rename handling, duplicate computer/app rejection,
+Empty reservations, local app ambiguity, retained client movement, profile
+switching, supersession, explicit disconnects, controller restart, offline
+partial application, baseline restoration, clipboard capability gating, optional
+system-key capture, and muting only the owned client's audio. All existing
+stream, session, navigation, engine, bridge, editor, geometry and development
+helper suites also pass. A session restoration argument-order error found during
+integration is fixed and covered by a regression check. Lua scene layout changes
+apply directly in the compositor; rule-file persistence runs in the controller,
+avoiding recursive compositor IPC.
+
+| Live exercise | Result |
+| --- | --- |
+| Save/apply current desktop | Saved `desktop` using persistent layout and leaf identities. Applying it retained the existing Mac client. |
+| Directional swapping with a saved scene | Reproduced the A2 zone-ID regression, fixed assignment validation, and tested the actual keyboard swap handler down and back in the active quad layout. Both windows moved; focus, unrelated windows, client PID, host journal and saved scene contents stayed unchanged. Regression tests cover scene state, restart, and stale zone identities. |
+| Content picker movement | Moved the Mac to another quad zone through overlay IPC, then applied `desktop` to restore it. The same PID and host journal were retained. |
+| Empty and local app | On a temporary workspace, reserved an Empty zone and assigned its unique local terminal to another zone; the main desktop and Mac connection were unaffected. Restore removed the reservation and the temporary window was closed. |
+| Controller/config updates | Reconciled scene content and retained ready client ownership across service updates and Hyprland reloads. |
+| Profile switch | Switched the Mac between desktop and desktop-capture, with display restoration before relaunch, then reapplied the saved desktop scene. |
+| Statistics | The overlay shortcut displayed Moonlight's statistics over the actual stream; a second invocation hid them. |
+| Mac Command key | With desktop-capture and capture activated, physical Super+A selected the temporary document’s text and replacement typing replaced all of it. Merely focusing a newly opened client did not activate capture. |
+| Mac ordinary modifiers | Option+Left moved by a word in a temporary TextEdit document; a physical Shift key event produced uppercase input. |
+| Mac clipboard typing | Failed in a temporary document. Confirmed the installed Sunshine version's macOS Unicode input method is unimplemented. The CLI rejects the action and Content displays the reason. |
+| Host-headset audio | Process-specific muting and missing-output handling tested with controlled audio objects. Candidate meeting profiles configured; audible playback and a real call remain unverified. |
+
+Mac input checks used disposable local TextEdit documents, synthetic text, and
+conditional clipboard restoration. No Teams content or call was inspected or
+started. The temporary documents were removed. Automatic clipboard sharing is
+not implemented.
+
+The clipboard limitation is in the
+[tested Sunshine Mac implementation](https://github.com/LizardByte/Sunshine/blob/v2026.516.143833/src/platform/macos/input.cpp).
+[Moonlight's shortcut implementation](https://github.com/moonlight-stream/moonlight-qt/blob/v6.1.0/app/streaming/input/keyboard.cpp)
+sends that UTF-8 text path and drops GUI/Command keys when system-key capture is
+inactive. This is distinct from ordinary key input and from the client receiving
+a shortcut.
+
+A representative Teams call must still verify camera, microphone, host-headset
+or continuous playback, focus changes, and echo. Windows shortcut/clipboard and
+live audio-policy checks, the A1 hardware checks above, and a complete compositor
+restart remain outstanding. These limitations are not inferred from desktop
+video readiness or the presence of an audio stream.

@@ -392,7 +392,7 @@ class Recovery:
         self.deadline = now + max(30, len(self.desktop["windows"]) * 3 + 10)
         self.settled = None
         compositor.call("prepare", self.desktop)
-        self.warnings.extend(streams.restore(self.desktop.get("streams", [])))
+        self.warnings.extend(streams.restore(self.desktop.get("streams", []), self.desktop.get("scenes", [])))
 
     def progress(self):
         return {"matches": self.matches, "launched": sorted(self.launched)}

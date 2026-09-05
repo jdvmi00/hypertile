@@ -90,8 +90,10 @@ application rules and pins cannot fill them. Explicit disconnect releases them.
 `connect` returns an operation ID and desired state immediately after validation.
 It accepts work, which may subsequently fail; inspect `status` for the result.
 Repeated connects with the same profile and assignment reuse the operation or
-focus its ready window. A different assignment/profile requires disconnect
-first. Conflicting computers or zone owners are rejected.
+focus its ready window. Use the [Content picker or scene commands](SCENES.md) to move an assignment
+or `stream profile COMPUTER --profile NAME` to switch profiles with managed
+teardown. A different assignment/profile passed directly to `connect` still
+requires disconnect first. Conflicting computers or zone owners are rejected.
 
 **Super+Shift+Arrow** swaps a ready stream with the neighboring window, including
 another stream. This updates the reserved zone and saved source assignment while
@@ -116,15 +118,26 @@ termination code, quit) are retained, without request URLs or pairing material.
 
 Moonlight shortcuts include **Ctrl+Alt+Shift+Z** to release mouse capture,
 **Ctrl+Alt+Shift+Q** to disconnect, and **Ctrl+Alt+Shift+S** for statistics. System
-key capture is disabled for these desktop profiles. All launches use
+key capture defaults to `never` so Omarchy shortcuts remain local. A profile can
+set `system_keys: always` to forward Command/Windows keys while captured, or
+`fullscreen` to enable this only in fullscreen. Toggle capture to use local
+shortcuts again. Enter the stream with the pointer or use Toggle capture to
+activate capture; focus alone may not activate a newly opened client. A Mac desktop profile with `never` cannot send Command-key
+shortcuts through stock Moonlight. Set the computer’s `platform` to `macos`,
+`windows`, or `linux` to report platform limits even with external display
+management; BetterDisplay profiles also identify a Mac. All launches use
 `--no-quit-after`, so disconnecting leaves the host applications running.
 
 ## Profiles and lifetime
 
 - `audio: focus` mutes the client when its window loses focus (the default).
 - `audio: continuous` keeps client audio playing in the background.
-- `audio: host` also retains audio playback on the host. Moonlight can still
-  render local audio; choose/mute the local output separately for a host headset.
+- `audio: host` retains playback on the host and mutes only the owned Moonlight
+  process’s local PulseAudio/PipeWire-Pulse sink inputs using `pactl`. Missing
+  `pactl` or unrecognized outputs are reported by `audio_health`; absent audio
+  streams remain waiting-for-audio. New outputs are checked every five seconds,
+  so brief startup playback can precede muting. Audible output and microphone
+  routing still require a real call check.
 - `keep_awake: visible` sets a targeted Hyprland idle inhibitor while a ready
   source is on a visible workspace. Omarchy's idle service respects compositor
   inhibitors. `always` also uses Moonlight's stream-wide inhibition; `never`
@@ -132,6 +145,15 @@ key capture is disabled for these desktop profiles. All launches use
 - Video defaults are HEVC, 60 FPS, 60,000 Kbps, hardware decode, SDR and standard
   chroma. HDR, AV1, 4:4:4 and higher rates require host/client validation. The
   default aspect policy is fit; stretching is not supported.
+
+A `meeting-headset` profile can copy the desktop settings with `audio: host`
+and `keep_awake: always`. Use `audio: continuous` for a `meeting-audio` profile
+when listening locally. Keep the camera and microphone attached to the host;
+these profiles do not forward local devices or establish meeting readiness.
+
+The Content picker exposes statistics, capture toggle and explicit clipboard
+typing. Mac clipboard typing is unavailable with the tested stock Sunshine;
+see [scene input controls](SCENES.md) and [live validation](STREAMS-VALIDATION.md).
 
 ## Recovery
 

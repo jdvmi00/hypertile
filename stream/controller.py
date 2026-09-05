@@ -25,6 +25,8 @@ import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "session"))
 from service import Compositor, atomic_json, read_json
 from mac_display import same_setting
+from scenes import Manager
+from audio import host_headset
 
 CLASS = "com.moonlight_stream.Moonlight"
 TOKEN = "HYPERTILE_STREAM_TOKEN"
@@ -71,6 +73,7 @@ def configuration(path):
         identities.add(identity)
         require(isinstance(computer.get("title"), str) and 1 <= len(computer["title"]) <= 250, "title must be the final Moonlight window title")
         require(isinstance(computer.get("profiles"), dict) and computer["profiles"], "computer needs profiles")
+        require(computer.get("platform", "unknown") in ("macos", "windows", "linux", "unknown"), "invalid host platform")
         for profile_name, p in computer["profiles"].items():
             require(NAME.fullmatch(profile_name), "invalid profile ID")
             resolution(p.get("stream_resolution"))
@@ -79,6 +82,7 @@ def configuration(path):
             require(p.get("codec", "HEVC") in ("HEVC", "H.264", "AV1", "auto"), "invalid codec")
             require(p.get("audio", "focus") in ("focus", "continuous", "host"), "invalid audio policy")
             require(p.get("input", "absolute") in ("absolute", "relative"), "invalid input policy")
+            require(p.get("system_keys", "never") in ("never", "fullscreen", "always"), "invalid system key capture policy")
             require(p.get("keep_awake", "visible") in ("visible", "always", "never"), "invalid keep_awake policy")
             require(p.get("aspect", "fit") == "fit", "only aspect=fit is supported")
             require(p.get("decoder", "hardware") in ("hardware", "software", "auto"), "invalid decoder")
@@ -244,7 +248,7 @@ def stream_argv(computer, p):
     return ["moonlight", "stream", "--resolution", p["stream_resolution"], "--fps", str(p.get("fps", 60)),
             "--bitrate", str(p.get("bitrate", 60000)), "--display-mode", "windowed",
             "--absolute-mouse" if p.get("input", "absolute") == "absolute" else "--no-absolute-mouse",
-            "--capture-system-keys", "never", "--no-quit-after", "--no-game-optimization",
+            "--capture-system-keys", p.get("system_keys", "never"), "--no-quit-after", "--no-game-optimization",
             "--video-codec", p.get("codec", "HEVC"), "--video-decoder", p.get("decoder", "hardware"),
             "--keep-awake" if p.get("keep_awake") == "always" else "--no-keep-awake",
             "--mute-on-focus-loss" if p.get("audio", "focus") == "focus" else "--no-mute-on-focus-loss",
@@ -379,6 +383,7 @@ class Controller:
         self.running = True
         self.applied = {}
         self.inhibitors = {}
+        self.scenes = Manager(self, lambda: configuration(self.config))
         for record in self.records.values():
             record.pop("pid", None)  # Reconcile using the token and job's durable PID.
             if record.get("desired") and record.get("instance") != compositor.instance:
@@ -395,11 +400,14 @@ class Controller:
 
     def public(self, r):
         fields = ("computer", "profile", "generation", "operation", "desired", "observed", "assignment", "error",
-                  "attempts", "next_at", "pid", "window", "resolved", "journal", "evidence", "host_health")
+                  "attempts", "next_at", "pid", "window", "resolved", "journal", "evidence", "host_health", "audio_health")
         out = {k: r[k] for k in fields if k in r}
         out["version"] = 1
         out["requested"] = {k: v for k, v in r["settings"].items() if k in
-                            ("stream_resolution", "fps", "bitrate", "codec", "decoder", "hdr", "yuv444", "input", "audio", "keep_awake", "display")}
+                            ("stream_resolution", "fps", "bitrate", "codec", "decoder", "hdr", "yuv444", "input", "system_keys", "audio", "keep_awake", "display")}
+        mac = r["config"].get("platform") == "macos" or r["settings"].get("display", {}).get("adapter") == "betterdisplay"
+        out["clipboard"] = {"state": "unsupported" if mac else "unverified",
+                            "reason": "Stock Sunshine on macOS does not implement clipboard text input" if mac else None}
         out["next_actions"] = (["focus", "disconnect"] if r.get("window") else ["retry", "disconnect"]) if r["desired"] else ["connect"]
         if r.get("journal"):
             out["next_actions"] += ["restore", "release --keep-host-settings"]
@@ -408,6 +416,7 @@ class Controller:
     def command(self, request):
         if request.get("command") not in ("status", "stop"):
             self.finish_swap()
+        self.scenes.interrupted(request)
         if request.get("command") in ("connect", "disconnect", "restore", "release", "retry"):
             computer = request.get("computer")
             require(isinstance(computer, str) and NAME.fullmatch(computer), "invalid computer ID")
@@ -418,6 +427,8 @@ class Controller:
 
     def _command(self, request):
         action, computer = request["command"], request.get("computer")
+        if action == "scene":
+            return self.scenes.command(request)
         if action == "status":
             if computer:
                 require(computer in self.records, "computer has no managed session")
@@ -435,7 +446,10 @@ class Controller:
                 require(r and r["desired"] and r["phase"] == "watching", "stream is not ready to swap")
                 require(r.get("window") == {k: w[k] for k in ("address", "pid", "stable_id")},
                         "stream window identity changed")
-                require(r["assignment"] == {"workspace": plan["workspace"], "layout": plan["layout"], "zone": w["before"]},
+                assignment = r["assignment"]
+                require(all(assignment.get(k) == v for k, v in
+                            {"workspace": plan["workspace"], "layout": plan["layout"], "zone": w["before"]}.items())
+                        and (not assignment.get("zone_id") or assignment["zone_id"] == w.get("before_id")),
                         "stream assignment changed")
             self.state["swap"] = {"plan": plan, "instance": self.compositor.instance}
             self.persist()  # Durable before either reservation or local pin changes.
@@ -469,8 +483,20 @@ class Controller:
                         self.records[source["computer"]] = r
                         self.persist()
                         outcomes.append(self.public(r))
+            self.scenes.restore_refs(request.get("scenes", []))
             return {"sources": outcomes}
         r = self.records.get(computer)
+        if action in ("clipboard", "input-release", "stats"):
+            require(r and r["desired"] and r.get("window"), "stream has no ready window")
+            capability = self.public(r)["clipboard"]
+            require(action != "clipboard" or capability["state"] != "unsupported", capability["reason"])
+            self.compositor.call("stream_shortcut", {"computer": computer, "action": action})
+            return {"sent": action, "computer": computer}
+        if action == "profile":
+            require(r and r["desired"], "connect this computer before changing its profile")
+            return self.scenes.command({"action": "content", "workspace": r["assignment"]["workspace"],
+                                       "zone": r["assignment"]["zone"], "type": "stream", "computer": computer,
+                                       "profile": request["profile"]})
         if action == "connect":
             computers = configuration(self.config)
             require(computer in computers, "unknown computer; edit computers.json")
@@ -484,7 +510,7 @@ class Controller:
             require(ws, "assignment-invalid: workspace must already exist")
             assignment = {"workspace": workspace, "layout": ws["layout"], "zone": request["zone"]}
             if r and r["desired"]:
-                require(r["profile"] == profile and r["assignment"] == assignment, "computer already owned; disconnect before changing profile or assignment")
+                require(r["profile"] == profile and all(r["assignment"].get(k) == v for k, v in assignment.items()), "computer already owned; disconnect before changing profile or assignment")
                 if r.get("window"):
                     self.compositor.call("stream_focus", {"computer": computer})
                 return self.public(r)
@@ -492,7 +518,9 @@ class Controller:
             require(not r or not r.get("journal"), "restore-pending: restore or release existing host settings before connecting")
             for other in self.records.values():
                 require(not other["desired"] or other["assignment"] != assignment, "zone already reserved")
-            self.compositor.call("stream_check", {**assignment, "computer": computer})
+            checked = self.compositor.call("stream_check", {**assignment, "computer": computer})
+            if isinstance(checked, dict) and checked.get("zone_id"):
+                assignment["zone_id"] = checked["zone_id"]
             r = {"computer": computer, "profile": profile, "settings": c["profiles"][profile], "config": c,
                  "assignment": assignment, "generation": (r or {}).get("generation", 0) + 1,
                  "operation": uuid.uuid4().hex, "desired": True, "phase": "preflight", "observed": "preflight",
@@ -551,7 +579,12 @@ class Controller:
             if w.get("computer"):
                 r = self.records[w["computer"]]
                 r["assignment"]["zone"] = w["zone"]
+                if w.get("zone_id"):
+                    r["assignment"]["zone_id"] = w["zone_id"]
+                else:
+                    r["assignment"].pop("zone_id", None)
                 self.applied.pop(w["computer"], None)
+        self.scenes.swapped()
         self.state.pop("swap")
         self.persist()
 
@@ -638,7 +671,10 @@ class Controller:
         if r["computer"] not in known:
             self.applied.pop(r["computer"], None)
             self.inhibitors.pop(r["computer"], None)
-        self.compositor.call("stream_check", {**r["assignment"], "computer": r["computer"]})
+        checked = self.compositor.call("stream_check", {**r["assignment"], "computer": r["computer"]})
+        if isinstance(checked, dict) and checked.get("zone") != r["assignment"]["zone"]:
+            r["assignment"]["zone"] = checked["zone"]
+            self.applied.pop(r["computer"], None)
         if phase == "preflight":
             self.assign(r)
             # Don't compete with a manually launched view of this host.
@@ -672,6 +708,9 @@ class Controller:
                 self.assign(r, w)
                 r["window"] = {k: w[k] for k in ("address", "pid", "stable_id")}
                 r.update(phase="watching", observed="window-ready", error=None)
+                if r["settings"].get("audio") == "host" and now >= r.get("next_audio_check", 0):
+                    r["audio_health"] = host_headset(pid)
+                    r["next_audio_check"] = now + 5
                 if r["settings"].get("display", {}).get("adapter") == "betterdisplay" and now >= r.get("next_host_probe", 0):
                     r["next_host_probe"] = now + 30
                     host = self.host_factory(r["config"], r["settings"])
@@ -717,9 +756,12 @@ class Controller:
 
     def tick(self):
         self.finish_swap()
-        snap = self.compositor.snapshot()
         before = json.dumps(self.state, sort_keys=True)
+        self.scenes.tick()
+        snap = self.compositor.snapshot()
         for r in self.records.values():
+            if self.scenes.blocks(r["computer"]):
+                continue
             try:
                 self.step(r, snap)
             except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired) as error:
@@ -852,12 +894,28 @@ def main():
     p.add_argument("target")
     p.add_argument("target_stable_id", type=int)
     p.add_argument("--json", action="store_true")
-    for name in ("probe", "connect", "focus", "disconnect", "status", "retry", "restore", "release"):
+    p = commands.add_parser("scene", help="save and apply workspace scenes")
+    subs = p.add_subparsers(dest="action", required=True)
+    for action in ("list", "show", "save", "validate", "apply", "current", "restore", "cancel", "retry", "remove", "catalog", "content", "layout"):
+        child = subs.add_parser(action)
+        if action in ("show", "save", "apply", "remove", "layout"):
+            child.add_argument("name")
+        if action in ("validate", "save"):
+            child.add_argument("--file")
+        if action == "content":
+            child.add_argument("--zone", required=True)
+            child.add_argument("--type", choices=("local", "stream", "empty"), required=True)
+            child.add_argument("--computer")
+            child.add_argument("--profile")
+            child.add_argument("--app-class")
+        child.add_argument("--workspace")
+        child.add_argument("--json", action="store_true")
+    for name in ("probe", "connect", "focus", "disconnect", "status", "retry", "restore", "release", "profile", "clipboard", "input-release", "stats"):
         p = commands.add_parser(name)
         p.add_argument("computer", nargs="?" if name == "status" else None)
         p.add_argument("--json", action="store_true")
-        if name in ("probe", "connect"):
-            p.add_argument("--profile")
+        if name in ("probe", "connect", "profile"):
+            p.add_argument("--profile", required=name == "profile")
         if name == "connect":
             p.add_argument("--zone", required=True)
             p.add_argument("--workspace")
@@ -868,6 +926,10 @@ def main():
         args.windows = [{"address": args.address, "stable_id": args.stable_id},
                         {"address": args.target, "stable_id": args.target_stable_id}]
     try:
+        if args.command == "scene" and getattr(args, "file", None):
+            args.document = json.loads(sys.stdin.read() if args.file == "-" else Path(args.file).read_text())
+        if args.command == "scene" and args.action == "validate":
+            require(getattr(args, "document", None), "validate requires --file FILE (or - for stdin)")
         if args.command == "launch-job":
             launch_job(args.path)
             return

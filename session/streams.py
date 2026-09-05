@@ -32,6 +32,10 @@ def capture(desktop):
             windows.append(w)
     desktop["windows"] = windows
     desktop["streams"] = sorted(sources, key=lambda s: s["computer"])
+    desktop.pop("scene_content", None)  # Compositor addresses are not scene definitions.
+    desktop["scenes"] = [{"workspace": workspace, "document": r["document"]}
+                         for workspace, r in state.get("scenes", {}).items()
+                         if r.get("document") and r.get("phase") != "restored"]
     addresses = {w["address"] for w in windows}
     for ws in desktop["workspaces"]:
         ws["order"] = [a for a in ws.get("order", []) if a in addresses]
@@ -40,15 +44,15 @@ def capture(desktop):
     return desktop
 
 
-def restore(sources):
-    if not sources:
+def restore(sources, scenes=()):
+    if not sources and not scenes:
         return []
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}") / "hypertile-stream/control.sock"
     try:
         with socket.socket(socket.AF_UNIX) as client:
             client.settimeout(1)
             client.connect(str(runtime))
-            client.sendall(json.dumps({"command": "session-restore", "sources": sources}).encode() + b"\n")
+            client.sendall(json.dumps({"command": "session-restore", "sources": sources, "scenes": scenes}).encode() + b"\n")
             # Submission is optional for local recovery. Stream state owns retries,
             # offline assignments and disconnect tombstones independently.
         return []

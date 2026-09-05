@@ -10,7 +10,23 @@
 function clone(v) { return JSON.parse(JSON.stringify(v)) }
 
 // The options that belong to a zone rather than to the layout.
-var LEAF_KEYS = ["stack", "spacer", "never_split", "aspect", "scale"]
+var LEAF_KEYS = ["id", "stack", "spacer", "never_split", "aspect", "scale"]
+
+function newId() { return "z-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) }
+
+// Names and fill numbers are editable labels; scene references use these IDs.
+// A copy gets new identities. Splitting keeps the original half's identity.
+function identify(input, fresh) {
+  var spec = clone(input)
+  if (fresh || !spec.layout_id) spec.layout_id = newId()
+  function walk(node) {
+    var kids = childrenOf(node)
+    if (kids) { for (var i = 0; i < kids.length; i++) walk(kids[i]) }
+    else if (fresh || !node.id) node.id = newId()
+  }
+  walk(spec)
+  return spec
+}
 
 function copyLeafOptions(from, to) {
   for (var i = 0; i < LEAF_KEYS.length; i++) if (from[LEAF_KEYS[i]] !== undefined) to[LEAF_KEYS[i]] = from[LEAF_KEYS[i]]
@@ -132,7 +148,7 @@ function splitZone(input, name, kind) {
   if (parent && kindOf(parent) === kind) {
     var half = sizeOf(leaf) / 2
     setSize(leaf, kind, half)
-    var sibling = { name: newName }
+    var sibling = { name: newName, id: newId() }
     setSize(sibling, kind, half)
     childrenOf(parent).splice(hit.index + 1, 0, sibling)
   } else {
@@ -140,7 +156,7 @@ function splitZone(input, name, kind) {
     // Only per-zone options travel to the half; when the root is the leaf,
     // `leaf` is the whole spec and must not leak fill/gaps/rules into a zone.
     copyLeafOptions(leaf, first)
-    var second = { name: newName }
+    var second = { name: newName, id: newId() }
     if (parent) {
       var container = {}
       setSize(container, kindOf(parent), sizeOf(leaf))

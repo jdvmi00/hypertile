@@ -22,7 +22,7 @@ end
 local rules = {}
 package.loaded["hypertile"] = engine
 package.loaded["hypertile-bridge"] = {
-  rule_source = function(layout, workspace, spec)
+  rule_source = function(workspace, layout, spec)
     rules[#rules + 1] = { layout = layout, workspace = workspace, spec = spec }
     return "return true"
   end,
@@ -87,6 +87,7 @@ assert(#engine.registered == 1 and engine.registered[1] == "old", "only the miss
 assert(engine.live.test.spec.name == "live", "existing layout keeps its current definition")
 assert(engine.state.test.sizes.s == 1, "saved sizes restored")
 assert(rules[1].spec.name == "live" and rules[2].spec.name == "old" and rules[3].spec == nil, "rules use the live spec when there is one")
+assert(rules[1].workspace == "1" and rules[1].layout == "lua:test" and rules[3].workspace == "3" and rules[3].layout == "dwindle", "restore passes workspace and layout in the bridge API order")
 
 -- snapshot prunes cached orders for workspaces that no longer exist.
 engine.live.test.orders["1"] = { "a", "b", "c", "d" }
