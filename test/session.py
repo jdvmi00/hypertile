@@ -244,6 +244,58 @@ class SessionTests(unittest.TestCase):
             recovery.tick(4)
             self.assertEqual(launch.call_args[0][0], ["omarchy-launch-webapp", "https://x.com/"])
 
+    def test_self_restoring_apps_launch_together_and_missing_recipes_do_not_wait_for_the_deadline(self):
+        saved = record(window("1", "a", "chrome"), window("2", "b", "cursor"), window("3", "Home / X", "chrome-x.com__-Default"))
+        for w in saved["desktop"]["windows"][:2]:
+            w["launch"] = {"argv": [w["class"]], "per_window": False}
+        saved["desktop"]["windows"][2]["launch"] = None
+        comp = FakeCompositor(record()["desktop"])
+        recovery = Recovery(saved, comp, Launchers(), 0, lambda value: None)
+        with patch("service.subprocess.Popen") as launch:
+            self.assertEqual(recovery.tick(0.5), "restoring")
+            self.assertEqual(launch.call_count, 0)  # grace period
+            self.assertEqual(recovery.tick(1), "restoring")
+            self.assertEqual([c[0][0] for c in launch.call_args_list], [["chrome"], ["cursor"]])
+            comp.desktop["windows"] = [window("4", "a", "chrome"), window("5", "b", "cursor")]
+            self.assertEqual(recovery.tick(2), "restoring")
+            self.assertEqual(recovery.tick(4), "partial")  # settled: the rest has no recipe
+            self.assertLess(4, recovery.deadline)
+        report = recovery.report()
+        self.assertEqual(report["matched"], 2)
+        self.assertEqual(report["unmatched"], [{"class": "chrome-x.com__-Default", "title": "Home / X", "reason": "no launch recipe"}])
+
+    def test_terminal_recipes_read_threaded_children_and_replay_only_listed_jobs(self):
+        from service import Launchers as RealLaunchers
+        proc = self.root / "proc"
+        def process(pid, argv, cwd, threads=(), children="", tpgid=None):
+            base = proc / str(pid)
+            tids = threads or (pid,)
+            for tid in tids:
+                (base / "task" / str(tid)).mkdir(parents=True)
+                (base / "task" / str(tid) / "children").write_text(children if tid == tids[-1] else "")
+            (base / "cmdline").write_bytes("\0".join(argv).encode() + b"\0")
+            (base / "cwd").symlink_to(cwd)
+            (base / "stat").write_text(f"{pid} ({argv[0]} x) S 1 {pid} {pid} 0 {tpgid or pid} 0 0\n")
+        process(100, ["ghostty"], "/home", threads=(100, 101, 102), children="200")
+        process(200, ["/usr/bin/bash", "--posix"], "/home/me/project", tpgid=300)
+        process(300, ["herdr", "--session", "work"], "/home/me/project")
+        process(110, ["foot"], "/home", children="210")
+        process(210, ["bash"], "/tmp/build", tpgid=310)
+        process(310, ["make", "all"], "/tmp/build")
+        with patch.dict(os.environ, {"XDG_DATA_HOME": str(self.root), "XDG_DATA_DIRS": str(self.root)}):
+            plain = RealLaunchers({}, proc=proc)
+            replaying = RealLaunchers({"replay": ["herdr"]}, proc=proc)
+            making = RealLaunchers({"replay": ["make"]}, proc=proc)
+            with self.assertRaises(ValueError):
+                RealLaunchers({"replay": "herdr"}, proc=proc)
+        ghostty = dict(window("1", "~", "com.mitchellh.ghostty"), pid=100)
+        self.assertEqual(plain.recipe(ghostty)["argv"], ["ghostty", "--working-directory=/home/me/project"])
+        self.assertEqual(replaying.recipe(ghostty)["argv"],
+                         ["ghostty", "--working-directory=/home/me/project", "-e", "herdr", "--session", "work"])
+        foot = dict(window("2", "make", "foot"), pid=110)
+        self.assertEqual(replaying.recipe(foot)["argv"], ["foot", "--working-directory=/tmp/build"])
+        self.assertEqual(making.recipe(foot)["argv"], ["foot", "--working-directory=/tmp/build", "make", "all"])
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -29,8 +29,12 @@ hypertile-ctl session shutdown
 ```
 
 `restore` starts asynchronous recovery; use `status` for its outcome. The
-service first allows normal autostart applications to appear, then launches
-missing supported apps. It never closes unrelated windows. An incomplete
+service gives autostart applications one second to appear, then launches
+missing supported apps: applications that restore their own windows start
+together, while per-window launches (terminals, web apps) go one at a time so
+each new window is attributed correctly. Windows that nothing can bring back
+(no recipe, or a failed launch) do not delay placement, ordering and focus;
+`status` names the reason for each. It never closes unrelated windows. An incomplete
 restore enters `partial` mode and stops automatic checkpointing, so a
 missing app cannot destroy the source session. A desktop notification reports
 the incomplete restore, and the guarded logout, reboot and shutdown commands
@@ -79,11 +83,19 @@ single shell child can save that shell's directory. A shared terminal server
 with several shell children has no reliable per-window directory mapping;
 it opens the default directory unless an explicit recipe is provided.
 
+A terminal comes back as a plain shell. Commands running inside it are not
+replayed, since that would rerun builds and scripts, with one opt-in
+exception: the `replay` list names commands that are safe to start again,
+typically a TUI that re-attaches to its own server. When the terminal's single
+shell has such a command as its foreground job, the recipe starts the terminal
+running that command, with its arguments, in the command's directory.
+
 Configure applications in `~/.config/hypertile/session.json`:
 
 ```json
 {
   "enabled": true,
+  "replay": ["herdr"],
   "apps": {
     "my-terminal": {
       "argv": ["my-terminal", "--working-directory", "/home/me/project"],
@@ -97,7 +109,9 @@ Configure applications in `~/.config/hypertile/session.json`:
 }
 ```
 
-Keys are exact initial window classes (falling back to the current class).
+`replay` holds command names (the executable's basename); the whole argument
+list of the running job is replayed. `apps` keys are exact initial window
+classes (falling back to the current class).
 `argv` is an argument array, executed without a shell. `per_window` defaults
 to false. The snapshot retains the recipe used at capture time; an explicit
 current configuration overrides it, and a window the snapshot had no recipe

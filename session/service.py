@@ -182,8 +182,16 @@ class Compositor:
 
 class Launchers:
     """Explicit recipes first; desktop entry identity second. Never replay cmdline."""
-    def __init__(self, config):
+    def __init__(self, config, proc=Path("/proc")):
         self.apps = config.get("apps", {})
+        # Terminal foreground commands the user has declared safe to run again
+        # (for example a TUI that re-attaches to its own server). Anything else
+        # comes back as a plain shell: replaying arbitrary commands would rerun
+        # builds and scripts.
+        self.replay = config.get("replay", [])
+        if not isinstance(self.replay, list) or not all(isinstance(r, str) for r in self.replay):
+            raise ValueError("replay must be an array of command names")
+        self.proc = proc
         self.entries = {}
         directories = [Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")]
         directories += [Path(p) for p in (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")]
@@ -238,28 +246,66 @@ class Launchers:
         webapp = self.webapp(window)
         if webapp:
             return webapp
-        terminals = {"com.mitchellh.ghostty": ["ghostty", "--working-directory="],
-                     "alacritty": ["alacritty", "--working-directory"],
-                     "kitty": ["kitty", "--directory"], "foot": ["foot", "--working-directory="]}
+        # executable, working-directory option, and how a command follows
+        # (an -e flag, or positional arguments).
+        terminals = {"com.mitchellh.ghostty": ["ghostty", "--working-directory=", "-e"],
+                     "alacritty": ["alacritty", "--working-directory", "-e"],
+                     "kitty": ["kitty", "--directory", None], "foot": ["foot", "--working-directory=", None]}
         if cls.casefold() in terminals:
             # A single shell child gives an unambiguous terminal cwd. Shared
             # terminal servers with several children need explicit recipes.
-            cwd = None
-            try:
-                children = Path(f"/proc/{window['pid']}/task/{window['pid']}/children").read_text().split()
-                if len(children) == 1:
-                    cwd = os.readlink(f"/proc/{children[0]}/cwd")
-            except OSError:
-                pass
-            executable, option = terminals[cls.casefold()]
+            executable, option, flag = terminals[cls.casefold()]
+            cwd, command = None, None
+            shell = self.single_shell(window["pid"])
+            if shell:
+                cwd = self.cwd(shell)
+                job = self.foreground(shell)
+                if job and os.path.basename(job["argv"][0]) in self.replay:
+                    command, cwd = job["argv"], job["cwd"] or cwd
             argv = [executable]
             if cwd:
                 argv += [option + cwd] if option.endswith("=") else [option, cwd]
+            if command:
+                argv += ([flag] if flag else []) + command
             return {"argv": argv, "per_window": True}
         candidates = set(self.entries.get(cls.casefold(), []))
         if len(candidates) == 1:
             return {"argv": ["gio", "launch", candidates.pop()], "per_window": False}
         return None
+
+    def single_shell(self, pid):
+        """The terminal's only child, or None. Multi-threaded terminals fork the
+        shell from a worker thread, so every task's children count."""
+        children = []
+        try:
+            for task in (self.proc / str(pid) / "task").iterdir():
+                children += (task / "children").read_text().split()
+        except OSError:
+            return None
+        return children[0] if len(children) == 1 else None
+
+    def cwd(self, pid):
+        try:
+            return os.readlink(self.proc / str(pid) / "cwd")
+        except OSError:
+            return None
+
+    def foreground(self, shell):
+        """argv and cwd of the shell's foreground job, or None when it is idle."""
+        try:
+            stat = (self.proc / str(shell) / "stat").read_text()
+            # Fields after the parenthesised comm: state ppid pgrp session tty_nr tpgid ...
+            tpgid = stat[stat.rindex(")") + 2:].split()[5]
+            if int(tpgid) <= 0 or tpgid == str(shell):
+                return None
+            argv = (self.proc / tpgid / "cmdline").read_bytes().decode().split("\0")
+        except (OSError, ValueError, IndexError, UnicodeError):
+            return None
+        if argv and argv[-1] == "":
+            argv.pop()
+        if not argv or not argv[0]:
+            return None
+        return {"argv": argv, "cwd": self.cwd(tpgid)}
 
     def webapp(self, window):
         """Chromium-family app windows (--app=URL) carry their URL in the class:
@@ -338,7 +384,8 @@ class Recovery:
         self.persist = persist
         self.errors = []
         self.warnings = []
-        self.next_launch = now + 3  # Let normal autostart/session-aware apps settle.
+        self.hopeless = {}  # saved address -> why no launch can help
+        self.next_launch = now + 1  # Let autostart/session-aware apps appear first.
         self.deadline = now + max(30, len(self.desktop["windows"]) * 3 + 10)
         self.settled = None
         compositor.call("prepare", self.desktop)
@@ -378,11 +425,13 @@ class Recovery:
                 self.compositor.call("place", {"saved": saved, "address": self.matches[old], "layout": layouts.get(saved["workspace"])})
                 self.placed.add(old)
         pending = [w for w in self.desktop["windows"] if w["address"] not in self.matches]
-        if not pending:
+        # Windows nothing can bring back (no recipe, or a launch that failed)
+        # do not hold up placement, ordering and focus until the deadline.
+        if all(w["address"] in self.hopeless for w in pending):
             self.settled = self.settled or now
             if now - self.settled >= 2:
                 self.finish()
-                return "complete"
+                return "complete" if not pending else "partial"
         else:
             self.settled = None
         if now >= self.deadline:
@@ -399,6 +448,7 @@ class Recovery:
                 else:
                     recipe = saved.get("launch") or self.launchers.recipe(saved)
                 if not recipe:
+                    self.hopeless[saved["address"]] = "no launch recipe"
                     continue
                 peers = [w for w in current["windows"] if (w["initial_class"] or w["class"]) == cls]
                 expected = sum((w["initial_class"] or w["class"]) == cls for w in self.desktop["windows"])
@@ -415,12 +465,17 @@ class Recovery:
                     child = subprocess.Popen(recipe["argv"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                              stderr=subprocess.DEVNULL, start_new_session=True)
                     self.children.append(child)
-                    if recipe.get("per_window"):
-                        self.outstanding = (saved["address"], cls, alive, now + 5)
                 except OSError as error:
                     self.errors.append(f"{cls}: {error}")
-                self.next_launch = now + 2
-                break
+                    self.hopeless[saved["address"]] = "launch failed"
+                    continue
+                # Only a per-window launch serializes: its new window is
+                # attributed by class to the most recent launch. Applications
+                # that restore their own windows start together.
+                if recipe.get("per_window"):
+                    self.outstanding = (saved["address"], cls, alive, now + 5)
+                    self.next_launch = now + 1
+                    break
         return "restoring"
 
     def finish(self):
@@ -435,7 +490,8 @@ class Recovery:
         if any(not w["layout"].startswith("lua:") for w in self.desktop["workspaces"]):
             limitations.append("Built-in layout trees are not reconstructed")
         return {"matched": len(self.matches), "total": len(self.desktop["windows"]),
-                "unmatched": [{"class": w["class"], "title": w["title"]} for w in self.desktop["windows"] if w["address"] not in self.matches],
+                "unmatched": [{"class": w["class"], "title": w["title"], "reason": self.hopeless.get(w["address"], "no matching window")}
+                              for w in self.desktop["windows"] if w["address"] not in self.matches],
                 "errors": self.errors, "limitations": limitations}
 
 
