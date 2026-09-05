@@ -154,15 +154,6 @@ Item {
     width: parent.width - zone.pad * 2
     spacing: Style.spacing.sm
 
-    Chip {
-      visible: zone.source !== null || zone.overlay.contentMode
-      text: zone.overlay.contentLabel(zone.modelData.name)
-      foreground: zone.fg
-      fontFamily: zone.overlay.fontFamily
-      fontSize: zone.overlay.uiFontSmall
-      strong: zone.source !== null && zone.source.type === "stream"
-    }
-
     Row {
       spacing: Style.spacing.sm
 
@@ -182,12 +173,23 @@ Item {
         }
       }
       Chip {
-        visible: zone.editing
+        visible: zone.editing || zone.overlay.contentMode
         text: zone.modelData.name
         bold: true
         foreground: zone.fg
         fontFamily: zone.overlay.fontFamily
         fontSize: zone.overlay.uiFontSmall
+        anchors.verticalCenter: parent.verticalCenter
+      }
+      // What the zone holds when it is not simply local windows: a remote
+      // desktop (accent), an app, or nothing.
+      Chip {
+        visible: zone.source !== null
+        text: zone.overlay.contentChip(zone.modelData.name)
+        foreground: zone.fg
+        fontFamily: zone.overlay.fontFamily
+        fontSize: zone.overlay.uiFontSmall
+        strong: zone.source !== null && zone.source.type === "stream"
         anchors.verticalCenter: parent.verticalCenter
       }
     }
@@ -241,7 +243,7 @@ Item {
 
   // Quick actions on the selected zone.
   Row {
-    visible: zone.isSelected && !zone.overlay.numbering && zone.roomy && !zone.peek
+    visible: zone.isSelected && zone.editing && !zone.overlay.numbering && zone.roomy && !zone.peek
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     anchors.margins: zone.pad

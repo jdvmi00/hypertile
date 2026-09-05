@@ -1,12 +1,30 @@
 // Presentation helpers shared by the overlay and its tests. No side effects.
+
+// One short phrase for a stream's observed state or a scene's phase. The
+// empty string means there is nothing to say (no scene, no state).
+var STATUS = {
+  ready: "Ready", restored: "Previous arrangement restored", partial: "Some content needs attention",
+  stopping: "Finishing previous connections…", layout: "Applying layout…", connecting: "Connecting…",
+  preflight: "Checking host…", preparing: "Preparing display…", "preparing-display": "Preparing display…",
+  "window-ready": "Connected", "startup-window": "Starting…", reconnecting: "Reconnecting…",
+  disconnected: "Disconnected", restoring: "Restoring display…", "restore-pending": "Display restoration pending",
+  "needs-attention": "Needs attention", degraded: "Connection needs attention", pending: "Pending",
+  idle: "Not connected", "waiting-workspace": "Waiting for the workspace", "restore-builtin": "Restoring…"
+}
+
 function status(value) {
-  var labels = { none: "No active scene", ready: "Ready", restored: "Previous workspace restored",
-    partial: "Some content needs attention", stopping: "Finishing previous connections", layout: "Applying layout",
-    connecting: "Connecting", preflight: "Checking host", preparing: "Preparing display", "preparing-display": "Preparing display",
-    "window-ready": "Window ready", "startup-window": "Starting window", reconnecting: "Reconnecting",
-    disconnected: "Disconnected", restoring: "Restoring display", "restore-pending": "Display restoration pending",
-    "needs-attention": "Needs attention", degraded: "Connection needs attention", pending: "Pending" }
-  return labels[value] || value || "Local windows"
+  if (!value || value === "none") return ""
+  return STATUS[value] || value
+}
+
+// States that want the user's attention (drawn in the urgent color).
+function troubled(value) {
+  return ["partial", "needs-attention", "restore-pending", "degraded", "disconnected"].indexOf(value) !== -1
+}
+
+// States in which a stream is on its way to a window.
+function inProgress(value) {
+  return ["connecting", "preflight", "preparing", "preparing-display", "startup-window", "reconnecting", "restoring", "stopping", "layout", "pending"].indexOf(value) !== -1
 }
 
 function audio(value) {
@@ -15,6 +33,23 @@ function audio(value) {
     "Audio plays while this desktop is focused"
 }
 
+function audioShort(value) {
+  return value === "continuous" ? "audio continues" : value === "host" ? "host audio" : "audio while focused"
+}
+
+// What sets a profile apart from the defaults, for the picker rows.
+function traits(profile) {
+  var out = []
+  if (!profile) return ""
+  if (profile.audio === "continuous") out.push("audio continues")
+  else if (profile.audio === "host") out.push("host audio")
+  if (profile.input === "relative") out.push("captured pointer")
+  if (profile.system_keys === "always") out.push("system keys")
+  return out.join(" · ")
+}
+
+// The content assigned to `zone` on `workspace`: a live stream first, then
+// the scene's record. Null means the zone holds local windows by fill order.
 function source(catalog, workspace, zone, active) {
   if (!active || !catalog) return null
   var streams = catalog.streams || []
@@ -36,11 +71,64 @@ function source(catalog, workspace, zone, active) {
   return null
 }
 
+// What the zone holds, as a name: "Local windows", "Empty", an app class,
+// or "computer · profile".
 function label(source) {
   if (!source) return "Local windows"
   if (source.type === "empty") return "Empty"
   if (source.type === "local") return source.app_class || "Local windows"
-  return source.computer + " · " + status(source.status)
+  return source.computer + (source.profile ? " · " + source.profile : "")
+}
+
+// The zone card's chip: the name, plus the state while a stream is not
+// simply connected.
+function chip(source) {
+  if (!source) return ""
+  if (source.type !== "stream") return label(source)
+  var s = status(source.status)
+  return source.computer + (s !== "" && source.status !== "window-ready" ? " · " + s : "")
+}
+
+// The state of a zone's content in a few words, and whether it is a problem.
+function state(source) {
+  if (!source) return { text: "", urgent: false }
+  if (source.type === "empty") return { text: "", urgent: false }
+  if (source.type === "local") return source.status === "needs-attention"
+    ? { text: "Pending", urgent: true } : { text: "", urgent: false }
+  var s = source.status
+  return { text: status(s) || "Pending", urgent: troubled(s) }
+}
+
+// A sentence under the zone's title.
+function detail(source) {
+  if (!source) return "Windows open here in fill order"
+  if (source.type === "empty") return "Nothing opens here; the zone stays empty"
+  if (source.type === "local") return source.status === "needs-attention"
+    ? (source.error || "No matching window on this workspace yet")
+    : "One matching window is pinned here"
+  var bits = [status(source.status) || "Pending"]
+  var requested = source.runtime && source.runtime.requested ? source.runtime.requested : {}
+  if (source.status === "window-ready") bits.push(audioShort(requested.audio))
+  return bits.join(" · ")
+}
+
+// The header for the workspace's scene: what it is called, what state it
+// is in, and whether the saved definition is behind.
+function sceneTitle(scene) {
+  if (!scene || !scene.phase || scene.phase === "none" || scene.phase === "restored") return "No scene"
+  return (scene.document && scene.document.name) || "Unsaved scene"
+}
+
+function sceneModified(scene) {
+  return !!(scene && scene.document && scene.document.name && scene.modified && scene.phase !== "restored")
+}
+
+function sceneMeta(scene, layout, workspace) {
+  var bits = []
+  if (layout) bits.push(layout + (workspace ? " on workspace " + workspace : ""))
+  var s = scene ? status(scene.phase) : ""
+  if (s !== "") bits.push(s)
+  return bits.join("  ·  ")
 }
 
 function performance(report) {

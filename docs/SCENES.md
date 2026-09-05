@@ -8,11 +8,25 @@ configure and pair computers.
 
 ## Overlay
 
-Open **Super+Alt+L**, then choose **Scenes & content** in the rail. Select a zone
-by clicking it or using Tab/arrows. Choose Local windows, Empty, a configured
-computer/profile, or an open local app. Choosing a computer already on this
-workspace moves its assignment. Choosing another profile reconnects that
-computer after restoring the old profile's managed display settings.
+Open **Super+Alt+L** and switch the rail to its **Scenes** tab. The header
+names the workspace's scene (or *No scene*) with its state; **Save scene…**
+stores the current layout and content under a name, and **Restore previous**
+puts back what the workspace had before the scene. **Saved scenes** lists every
+scene with **Apply**; the applied one reads *Applied*, and ✕ deletes a saved
+definition after a confirmation (nothing on the workspace changes).
+
+**Content** lists the zones in fill order with what each one holds: local
+windows by fill order, *Empty*, one app, or a computer and profile with its
+state. Click a row or a zone on the screen, or move with Tab and the arrows.
+The **Zone** section shows the selected zone; for a remote desktop it offers
+Focus, Disconnect and Reconnect (Retry and Restore display when they apply),
+and **More controls** holds capture toggling, clipboard typing where supported,
+Moonlight statistics, focusing a local window, the Performance panel and the
+raw status. **Change to** puts something else in the zone: Local windows,
+Empty, a computer's profile (its non-default traits are shown beside it), or an
+open app. Choosing a computer already on this workspace moves its assignment.
+Choosing another profile reconnects that computer after restoring the old
+profile's managed display settings.
 
 Local app assignments use one matching tiled window on that workspace. Open the
 app and Retry if none exists. If several match, resolve the ambiguity first;
@@ -20,23 +34,28 @@ Hypertile does not guess, launch another copy, or move a window from elsewhere.
 Unassigned zones continue to use the layout's normal fill and application rules.
 At least one fill/cycle zone must remain available for local windows.
 
-Enter a name and **Save current scene**. Click a saved name to apply it. Changes
-and source swaps mark the current scene modified; saved definitions change only
-when explicitly saved. **Restore previous** returns to the layout and content
-from before the first scene application in this sequence. A later scene replaces
-pending work from the earlier one; compatible ready streams retain their client
-process. Failed sources remain visible while local content can finish applying.
+Changes and source swaps mark the current scene modified; saved definitions
+change only when explicitly saved (**Save** writes a named scene back). Restore
+previous returns to the layout and content from before the first scene
+application in this sequence. A later scene replaces pending work from the
+earlier one; compatible ready streams retain their client process. Failed
+sources remain visible while local content can finish applying.
 
-While content is assigned, browsing layouts does not move the live windows.
-**Start scene with this layout** deliberately replaces the current assignments
-with local content on the selected layout. Layout editing takes effect on Save.
-Deleted referenced zones require choosing replacements; they are not reassigned
-by their position in the layout.
+Browsing under the Layouts tab moves the live windows, including connected
+remote desktops. Scene assignments stay on the committed layout while the
+other layout is previewed. Closing the overlay or returning to Scenes restores
+that layout without reconnecting streams or changing saved scenes. An abandoned
+preview expires after ten seconds without its overlay heartbeat; restarting the
+controller also restores it. Session recovery retains its last committed
+checkpoint while a preview is active. Using another layout there asks first:
+the assignments are replaced with local content on the chosen layout (streams
+disconnect, local apps stay open). Layout editing takes effect on Save. Deleted
+referenced zones require choosing replacements; they are not reassigned by
+their position in the layout.
 
-The stream controls offer Focus, Disconnect, Reconnect, Return locally, Retry, display restoration,
-Statistics, Toggle capture, and explicit clipboard typing where supported.
-Ordinary scene changes do not take focus. Focus, clipboard, statistics, and capture controls
-are explicit interactions with the selected remote desktop.
+Ordinary scene changes do not take focus. Focus, clipboard, statistics, and
+capture controls are explicit interactions with the selected remote desktop and
+close the overlay.
 
 ## CLI
 

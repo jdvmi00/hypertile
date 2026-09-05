@@ -87,6 +87,8 @@ for f in "$src"/session/*.py; do install -m 0644 "$f" "$session_data/$(basename 
 stream_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream"
 mkdir -p "$stream_data"
 for f in "$src"/stream/*.py; do install -m 0644 "$f" "$stream_data/$(basename "$f")"; done
+mkdir -p "$stream_data/windows"
+for f in "$src"/stream/windows/*.ps1 "$src"/stream/windows/*.cs; do install -m 0644 "$f" "$stream_data/windows/$(basename "$f")"; done
 
 for f in "$src"/layouts/*.lua; do
   name="$(basename "$f")"

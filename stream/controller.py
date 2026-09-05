@@ -28,6 +28,8 @@ from mac_display import same_setting
 from scenes import Manager
 from audio import host_headset
 from quality import Tracker, VideoStats
+from browse import Browser
+import windows_display
 
 CLASS = "com.moonlight_stream.Moonlight"
 TOKEN = "HYPERTILE_STREAM_TOKEN"
@@ -90,7 +92,13 @@ def configuration(path):
             for flag in ("hdr", "yuv444"):
                 require(type(p.get(flag, False)) is bool, "invalid " + flag)
             display = p.get("display", {"adapter": "external"})
-            require(display.get("adapter") in ("external", "betterdisplay"), "unknown display adapter")
+            require(display.get("adapter") in ("external", "betterdisplay", "windows"), "unknown display adapter")
+            if display["adapter"] == "windows":
+                require(computer.get("platform") == "windows", "Windows display adapter requires platform=windows")
+                require(windows_display.ALIAS.fullmatch(computer.get("ssh", {}).get("alias", "")), "Windows adapter requires an approved ssh.alias")
+                device = display.get("device_id", "")
+                require(isinstance(device, str) and 1 <= len(device) <= 512 and device.startswith("\\\\?\\DISPLAY#")
+                        and all(ord(c) >= 32 for c in device), "Windows adapter requires a persistent display device_id")
             if display["adapter"] == "betterdisplay":
                 require(UUID.fullmatch(display.get("uuid", "")), "display requires a persistent UUID")
                 mode = display.get("mode", {})
@@ -126,6 +134,8 @@ class Host:
         self.display = profile.get("display", {"adapter": "external"})
 
     def remote(self, operation, **values):
+        if self.display["adapter"] == "windows":
+            return windows_display.remote(self.computer, self.display, operation, **values)
         ssh = self.computer["ssh"]
         argv = ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", "ConnectTimeout=5"]
         if ssh.get("control_path"):
@@ -173,6 +183,9 @@ class Host:
         if self.display["adapter"] == "external":
             return {**info, "restoration": "externally-managed", "display": "externally-managed"}
         observed = self.remote("probe")
+        if self.display["adapter"] == "windows":
+            require(not observed.get("error"), observed.get("error", "Windows display helper error"))
+            return {**info, "display": observed, "restoration": "managed"}
         require(any(same_setting("mode", self.display["mode"], m) for m in observed["modes"]),
                 "display-mode-unavailable: requested mode is not advertised")
         require(not self.display.get("require_ac", False) or observed["ac_power"], "power-required: connect the Mac to AC")
@@ -185,6 +198,8 @@ class Host:
 def prepare(record, host, persist):
     if host.display["adapter"] == "external":
         return
+    if host.display["adapter"] == "windows":
+        return windows_display.prepare(record, host, persist)
     observed = host.probe(pairing=False)
     desired = {"mode": host.display["mode"], "output": observed["identity"]["displayID"]}
     journal = record.setdefault("journal", {})
@@ -218,6 +233,8 @@ def prepare(record, host, persist):
 
 
 def restore(record, host, persist):
+    if host.display["adapter"] == "windows":
+        return windows_display.restore(record, host, persist)
     journal = record.get("journal", {})
     if not journal:
         return True
@@ -394,6 +411,7 @@ class Controller:
         self.inhibitors = {}
         self.scenes = Manager(self, lambda: configuration(self.config))
         self.quality = Tracker(self)
+        self.browser = Browser(self)
         for record in self.records.values():
             record.pop("pid", None)  # Reconcile using the token and job's durable PID.
             if record.get("desired") and record.get("instance") != compositor.instance:
@@ -426,6 +444,7 @@ class Controller:
         return out
 
     def command(self, request):
+        self.browser.before_command(request)
         if request.get("command") not in ("status", "stop"):
             self.finish_swap()
         self.scenes.interrupted(request)
@@ -675,6 +694,9 @@ class Controller:
             return
         if not r["desired"]:
             self.release_zone(r)
+            if (phase == "idle" and r.get("journal", {}).get("windows")
+                    and now >= r.get("next_restore_check", 0)):
+                r["phase"] = "restoring"
             if phase == "stopping":
                 if pid:
                     self.processes.stop(r, force=now - r["stopping_at"] > 5)
@@ -683,9 +705,12 @@ class Controller:
             if r["phase"] == "restoring":
                 try:
                     done = restore(r, self.host_factory(r["config"], r["settings"]), self.persist)
+                    r["next_restore_check"] = now + 5
                     r.update(phase="idle", observed="disconnected" if done else "restore-pending",
-                             error=None if done else "restore-conflict: manual changes preserved")
+                             error=None if done else ((r.get("resolved", {}).get("display", {}).get("error") or "physical-display-restoration-pending: open the lid or attach a monitor")
+                                                      if r.get("journal", {}).get("windows") else "restore-conflict: manual changes preserved"))
                 except (OSError, ValueError, subprocess.TimeoutExpired) as error:
+                    r["next_restore_check"] = now + 10
                     r.update(phase="idle", observed="restore-pending", error=str(error))
             return
         if phase == "reconnect-stop":
@@ -712,12 +737,19 @@ class Controller:
             elif now > r["waiting_until"]:
                 raise ValueError("assignment-invalid: workspace did not return during session recovery")
             return
+        if phase == "attention" and r.get("journal", {}).get("windows"):
+            if now >= r.get("next_restore_check", 0):
+                r["next_restore_check"] = now + 10
+                done = restore(r, self.host_factory(r["config"], r["settings"]), self.persist)
+                r["observed"] = "needs-attention" if done else "restore-pending"
+            return  # Finishing recovery never restarts a failed stream.
         if phase == "failed-restore":
             if pid:
                 r.setdefault("stopping_at", now)
                 self.processes.stop(r, force=now - r["stopping_at"] > 5)
                 return
             done = restore(r, self.host_factory(r["config"], r["settings"]), self.persist)
+            r["next_restore_check"] = now + 5
             r.update(phase="attention", observed="needs-attention" if done else "restore-pending")
             return
         # Re-establish reservations after a compositor reload, even when offline.
@@ -766,6 +798,16 @@ class Controller:
                 if r["settings"].get("audio") == "host" and now >= r.get("next_audio_check", 0):
                     r["audio_health"] = host_headset(pid)
                     r["next_audio_check"] = now + 5
+                if r["settings"].get("display", {}).get("adapter") == "windows" and now >= r.get("next_host_probe", 0):
+                    r["next_host_probe"] = now + 15
+                    try:
+                        health = self.host_factory(r["config"], r["settings"]).remote("status")
+                    except (ValueError, subprocess.TimeoutExpired) as error:
+                        r["host_health"] = {"state": "unknown", "error": str(error)}
+                    else:
+                        require(not health.get("error"), health.get("error", "Windows display helper error"))
+                        require(health.get("phase") in ("preparing", "streaming"), "display-restored: reconnect the Windows stream")
+                        r["host_health"] = {"state": "checked", "at": now}
                 if r["settings"].get("display", {}).get("adapter") == "betterdisplay" and now >= r.get("next_host_probe", 0):
                     r["next_host_probe"] = now + 30
                     host = self.host_factory(r["config"], r["settings"])
@@ -811,6 +853,7 @@ class Controller:
             self.assign(r)
 
     def tick(self):
+        self.browser.tick()
         self.finish_swap()
         before = json.dumps(self.state, sort_keys=True)
         self.quality.harvest()
@@ -818,7 +861,7 @@ class Controller:
         self.scenes.tick()
         snap = self.compositor.snapshot()
         for r in self.records.values():
-            if self.scenes.blocks(r["computer"]):
+            if r["assignment"]["workspace"] in self.browser.active or self.scenes.blocks(r["computer"]):
                 continue
             phase, started = r["phase"], self.quality.clock()
             try:
@@ -964,10 +1007,12 @@ def main():
     p.add_argument("--json", action="store_true")
     p = commands.add_parser("scene", help="save and apply workspace scenes")
     subs = p.add_subparsers(dest="action", required=True)
-    for action in ("list", "show", "save", "validate", "apply", "current", "restore", "cancel", "retry", "remove", "catalog", "content", "layout"):
+    for action in ("list", "show", "save", "validate", "apply", "current", "restore", "cancel", "retry", "remove", "catalog", "content", "layout", "browse", "browse-end"):
         child = subs.add_parser(action)
-        if action in ("show", "save", "apply", "remove", "layout"):
+        if action in ("show", "save", "apply", "remove", "layout", "browse"):
             child.add_argument("name")
+        if action in ("browse", "browse-end", "catalog"):
+            child.add_argument("--browse-token", required=action != "catalog")
         if action in ("validate", "save"):
             child.add_argument("--file")
         if action == "content":

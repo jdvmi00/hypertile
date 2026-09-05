@@ -144,7 +144,12 @@ rm -f "$bin/hypertile-stream" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/st
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/mac_display.py" \
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/scenes.py" \
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/audio.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/quality.py"
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/quality.py" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/browse.py"
+rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/windows_display.py"
+for f in Guard.ps1 Policy.ps1 Display.cs Test.ps1 Install.ps1; do
+  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/windows/$f"
+done
 echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then

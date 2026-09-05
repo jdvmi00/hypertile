@@ -373,15 +373,16 @@ Remote desktops can be assigned to named zones with `hypertile-ctl stream`.
 Use `SUPER+SHIFT+Arrow` to swap a ready stream with a neighboring window; its
 zone reservation and saved assignment move with it.
 
-The overlay’s **Scenes & content** view assigns computers/profiles, local apps,
-and Empty to zones. Save and restore workspace scenes with `hypertile-ctl scene`.
+The overlay’s **Scenes** tab shows what each zone holds and assigns
+computers/profiles, local apps, and Empty to zones. Save and restore workspace
+scenes there or with `hypertile-ctl scene`.
 See [scenes and content](docs/SCENES.md) for the UI, CLI, and stable zone references.
 See [remote desktop setup and recovery](docs/STREAMS.md) for computer profiles,
 the Mac display adapter, and the Windows externally managed profile.
 
 [Performance reports](docs/STREAM-QUALITY.md) measure reconnect timing, retain
 Moonlight decoder summaries, and record readability at each view size. Use
-Reconnect and Return locally from the Content picker.
+Reconnect from the Scenes tab's zone controls.
 
 ## License
 

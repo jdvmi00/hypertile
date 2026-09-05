@@ -6,6 +6,13 @@ on:
   pull_request:
 
 jobs:
+  windows-display-policy:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Windows PowerShell display policy and journal
+        shell: powershell
+        run: .\stream\windows\Test.ps1 -PolicyOnly
   test:
     runs-on: ubuntu-latest
     container: archlinux:latest
@@ -27,11 +34,13 @@ jobs:
       - name: Session recovery
         run: python3 test/session.py && lua test/session.lua
       - name: Remote streams
-        run: python3 test/stream.py && lua test/stream.lua
+        run: python3 test/stream.py && python3 test/windows_display.py && lua test/stream.lua
       - name: Scenes and content
         run: python3 test/scenes.py && lua test/scenes.lua && node test/content.js
       - name: Stream quality and reconnect
         run: python3 test/quality.py && lua test/quality.lua
+      - name: Managed layout browsing
+        run: python3 test/browse.py && node test/browse.js
       - name: Overlay geometry
         run: node test/geometry.js
       - name: Overlay editor

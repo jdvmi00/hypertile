@@ -1,8 +1,9 @@
 # Stream quality and interaction
 
-The Content picker's **Performance** panel reports connection timing, completed
-Moonlight decoder statistics, and explicit readability assessments. Reconnect
-and Return locally are available beside the existing stream controls.
+The **Performance** panel (Scenes tab, selected zone, More controls) reports
+connection timing, completed Moonlight decoder statistics, and explicit
+readability assessments. Reconnect sits beside the zone's stream controls and
+Focus a local window under More controls.
 
 ```bash
 hypertile-ctl stream quality macbook --json

@@ -175,3 +175,54 @@ No client fork or patch was needed. Physical pointer-edge behavior, relative
 capture, Windows quality, sustained workloads, sleep/network recovery and call
 hardware still need their separate checks. No Teams content or call was read
 or started during this validation.
+
+## Layout browsing with assigned content
+
+Fixed and validated on 2026-09-05. Layouts browsing now moves the actual windows
+on a workspace with scene assignments or a connected stream. The controller
+holds the original layout while a temporary preview is active, so reconciliation
+does not mistake the preview for a deleted stream zone. Closing the overlay or
+returning to Scenes restores the committed layout; saved source references and
+host settings are unchanged.
+
+Eight Python tests cover preview/cancel, late requests, heartbeat expiry,
+controller restart, superseding scenes, disconnect, checkpoint protection and
+restoration failures. JavaScript tests exercise the overlay's actual managed and
+ordinary browsing routes, serialization and teardown. Existing suites pass.
+
+Live checks on the active quad layout moved both local windows and the Mac view,
+kept a preview alive through heartbeats, returned through the Scenes tab, and
+rapidly selected layouts before immediately closing. The exact initial window
+positions returned. Focus, stream PID, assignment, operation, profile, journal,
+saved scenes and workspace rule files were retained. Restarting the controller
+during a live preview also restored the original layout before cleanup, retaining
+the same Mac client process.
+
+## Windows display recovery
+
+Implemented and installed on the work laptop on 2026-09-05. The Windows console
+helper owns display topology, with Sunshine's display automation disabled. The
+desktop and meeting profiles use the managed Windows adapter. See
+[Windows display recovery](WINDOWS-DISPLAY-RECOVERY.md) for setup and operation.
+
+| Live exercise | Result |
+| --- | --- |
+| Connect and disconnect | The dedicated virtual display was the only active output during streaming at 2560×1600. Disconnect restored the built-in panel at 1920×1200, disabled the virtual output and cleared the local recovery journal. The user confirmed the panel lit. |
+| Delayed cancelled preparation | Replaying a cancelled preparation was rejected with `operation-cancelled`; the physical display stayed active. |
+| Recovery without the controller | Paused the Linux controller and terminated its Moonlight client. The laptop helper restored the internal panel without receiving a restore request. The Linux journal still contained the original preparation until the controller resumed and reconciled it. |
+| Closed lid, then undock | Started from the Dell-only desktop with the lid closed. While streaming, the user unplugged the dock. Disconnect left recovery pending because Windows exposed no physical display. Opening the lid automatically restored the built-in panel at 1920×1200, disabled the virtual display and cleared the journal. The user confirmed the screen came back. |
+
+Eight Python tests cover ownership, acknowledgement loss, verified restoration,
+transport identity, and continued recovery after disconnect or failure. Eighteen
+checks on Windows PowerShell 5.1 cover display selection, Sunshine connection
+events and atomic journal replacement; the native display wrapper compiled and
+its read-only console inventory succeeded. Existing stream, scene, quality,
+placement and development checks pass.
+
+The connection parser was checked against this laptop's Sunshine build
+2026.516.143833. It counts connection events separately from stream-worker slots,
+so an old disconnected worker does not prevent a subsequent recovery. Unknown
+activity blocks restoration. Normal window-close handling is covered by the
+controller tests; the live offline test exercised client termination. Pre-login,
+lock-screen, sleep/wake, reboot and a physical network outage still require
+separate validation.

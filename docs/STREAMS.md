@@ -65,9 +65,11 @@ choose `input: relative` and validate captured-pointer behavior; use
 Ctrl+Alt+Shift+Z to release capture. `input: absolute` is the default. This is a
 host/client compatibility limit, not a reason to silently select another display.
 
-Use `display.adapter: external` for Windows or any host whose display settings
+Use `display.adapter: external` for any host whose display settings
 are managed elsewhere. Hypertile reports this explicitly and changes no host
-settings. Preparation and restoration are available only with the Mac adapter.
+settings. The `betterdisplay` Mac adapter and the `windows` console helper provide
+managed preparation and restoration. See [Windows display recovery](WINDOWS-DISPLAY-RECOVERY.md)
+for installation, offline recovery, and dock/lid behavior.
 
 ## Use a named zone
 
@@ -90,7 +92,7 @@ application rules and pins cannot fill them. Explicit disconnect releases them.
 `connect` returns an operation ID and desired state immediately after validation.
 It accepts work, which may subsequently fail; inspect `status` for the result.
 Repeated connects with the same profile and assignment reuse the operation or
-focus its ready window. Use the [Content picker or scene commands](SCENES.md) to move an assignment
+focus its ready window. Use the [Scenes tab or scene commands](SCENES.md) to move an assignment
 or `stream profile COMPUTER --profile NAME` to switch profiles with managed
 teardown. A different assignment/profile passed directly to `connect` still
 requires disconnect first. Conflicting computers or zone owners are rejected.
@@ -151,8 +153,8 @@ and `keep_awake: always`. Use `audio: continuous` for a `meeting-audio` profile
 when listening locally. Keep the camera and microphone attached to the host;
 these profiles do not forward local devices or establish meeting readiness.
 
-The Content picker exposes statistics, capture toggle and explicit clipboard
-typing. Mac clipboard typing is unavailable with the tested stock Sunshine;
+The Scenes tab's zone controls expose statistics, capture toggle and explicit
+clipboard typing. Mac clipboard typing is unavailable with the tested stock Sunshine;
 see [scene input controls](SCENES.md) and [live validation](STREAMS-VALIDATION.md).
 
 ## Performance and reconnecting
@@ -160,8 +162,8 @@ see [scene input controls](SCENES.md) and [live validation](STREAMS-VALIDATION.m
 Use `stream reconnect COMPUTER` to restart a ready local view while retaining
 its zone, profile and host restoration journal. `stream measure COMPUTER
 --seconds 30` collects the completed decoder summary by reconnecting after the
-requested interval. The Content picker's Performance panel and `stream quality
-COMPUTER --json` show the results. `stream local COMPUTER` returns focus to a
+requested interval. The Scenes tab's Performance panel (under the zone's More
+controls) and `stream quality COMPUTER --json` show the results. `stream local COMPUTER` returns focus to a
 local window on the same workspace. See [quality and interaction](STREAM-QUALITY.md)
 for measurement scope, cancellation and capability limits.
 

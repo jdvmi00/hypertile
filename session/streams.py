@@ -13,6 +13,8 @@ def capture(desktop):
         return desktop
     if state.get("version") != 1:
         raise ValueError("unsupported stream state version; session capture paused")
+    if state.get("browse", {}).get("active"):
+        raise ValueError("layout preview is active; retaining the last committed session checkpoint")
     sources, tokens = [], set()
     for r in state["computers"].values():
         if r.get("token"):

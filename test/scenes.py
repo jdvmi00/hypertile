@@ -168,6 +168,38 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(self.ctl.records["laptop"]["assignment"]["zone"], "left")
         self.assertEqual(self.proc.alive["laptop"], pid)
 
+    def test_content_change_keeps_scene_name_until_saved_back(self):
+        self.ready()
+        self.command("content", type="empty", zone="left")
+        self.tick(6)
+        scene = self.command("current")
+        self.assertEqual(scene["document"]["name"], "work")
+        self.assertTrue(scene["modified"])
+        self.assertEqual(scene["document"]["sources"]["z-left"]["type"], "empty")
+        saved = json.loads((self.root / "scenes/work.json").read_text())
+        self.assertNotIn("z-left", saved["sources"])
+        self.assertFalse(self.command("save", name="work")["document"]["sources"]["z-left"] is None)
+        scene = self.command("current")
+        self.assertFalse(scene["modified"])
+        self.assertEqual(json.loads((self.root / "scenes/work.json").read_text())["sources"]["z-left"]["type"], "empty")
+        self.assertFalse(self.command("apply", name="work")["modified"])
+
+    def test_saving_a_restored_arrangement_makes_it_the_applied_scene(self):
+        self.ready()
+        self.command("restore")
+        self.tick(8)
+        self.assertEqual(self.command("current")["phase"], "restored")
+        self.assertEqual(self.command("save", name="again")["document"]["name"], "again")
+        scene = self.command("current")
+        self.assertEqual((scene["phase"], scene["document"]["name"], scene["modified"]), ("ready", "again", False))
+        self.tick(4)
+        self.assertEqual(self.command("current")["phase"], "ready")
+        self.assertEqual(self.proc.count["laptop"], 1)
+        self.command("content", type="empty", zone="left")
+        self.tick(6)
+        scene = self.command("current")
+        self.assertEqual((scene["document"]["name"], scene["modified"]), ("again", True))
+
     def test_profile_switch_and_disconnect_cancel_replacement(self):
         self.ready()
         self.ctl.command({"command": "profile", "computer": "laptop", "profile": "meeting"})

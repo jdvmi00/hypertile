@@ -185,7 +185,22 @@ class Manager:
         doc = {"version": 1, "layout": entry["name"], "sources": bindings}
         if spec.get("layout_id"):
             doc["layout_id"] = spec["layout_id"]
+        # A change to a named scene keeps the name: the scene is then modified
+        # (Save writes it back) rather than a new unsaved one.
+        if active and active.get("phase") not in ("waiting-workspace", "restored") and active.get("document") \
+                and active["document"].get("name") and active["document"].get("layout_id") == spec.get("layout_id"):
+            doc["name"] = active["document"]["name"]
         return doc
+
+    def modified(self, document):
+        """Whether the document differs from its saved definition (unnamed: always)."""
+        if not document.get("name"):
+            return True
+        try:
+            saved, _ = self.resolve(self.load(document["name"]))
+        except (ValueError, KeyError, TypeError):
+            return True
+        return saved["sources"] != document["sources"] or saved.get("layout_id") != document.get("layout_id")
 
     def public(self, record):
         if not record:
@@ -228,7 +243,7 @@ class Manager:
                                     for w in snap["windows"] if w["workspace"] == workspace], "instance": self.ctl.compositor.instance}
         record = {"workspace": workspace, "document": document, "spec": spec, "baseline": baseline,
                   "generation": (old or {}).get("generation", 0) + 1, "operation": uuid.uuid4().hex,
-                  "phase": "stopping", "launched": [], "suppressed": [], "restoring": restoring, "modified": not bool(document.get("name"))}
+                  "phase": "stopping", "launched": [], "suppressed": [], "restoring": restoring, "modified": self.modified(document)}
         record["retired_pins"] = copy.deepcopy((old or {}).get("retired_pins", []) + (old or {}).get("pins", []))
         self.records[workspace] = record
         self.ctl.persist()
@@ -283,6 +298,8 @@ class Manager:
 
     def command(self, request):
         action = request.get("action", "current")
+        if action in ("browse", "browse-end"):
+            return self.ctl.browser.command(request)
         if action == "list":
             entries = []
             for path in sorted(self.directory.glob("*.json")):
@@ -305,6 +322,7 @@ class Manager:
         if action == "current":
             return self.public(self.records.get(workspace))
         if action == "catalog":
+            self.ctl.browser.heartbeat(workspace, request.get("browse_token"))
             computers = self.computers()
             return {"version": 1, "current": self.public(self.records.get(workspace)),
                     "scenes": self.command({"action": "list"})["scenes"],
@@ -325,6 +343,10 @@ class Manager:
             if active and active["document"]["sources"] == doc["sources"] and active["document"]["layout_id"] == doc["layout_id"]:
                 active["document"] = copy.deepcopy(doc)
                 active["modified"] = False
+                if active["phase"] == "restored":
+                    # The restored arrangement is now this named scene, applied.
+                    active.update(phase="ready", restoring=False)
+                    active.pop("error", None)
                 self.ctl.persist()
             return {"saved": doc["name"], "document": doc}
         if action == "apply":
@@ -395,6 +417,8 @@ class Manager:
 
     def tick(self):
         for record in self.records.values():
+            if record["workspace"] in self.ctl.browser.active:
+                continue
             try:
                 self.step(record)
             except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired) as error:

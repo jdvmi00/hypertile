@@ -57,7 +57,8 @@ def groups():
         "lua": sorted(ROOT.glob("hypertile*.lua")),
         "cli": [ROOT / "bin/hypertile-ctl"],
         "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "bin").glob("hypertile-stream")),
-                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "stream").glob("*.py"))],
+                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "stream").glob("*.py")),
+                    *sorted((ROOT / "stream/windows").glob("*.ps1")), *sorted((ROOT / "stream/windows").glob("*.cs"))],
         "shell": [ROOT / "manifest.json", *sorted(p for p in (ROOT / "plugin").rglob("*") if p.is_file())],
     }
 
@@ -93,7 +94,8 @@ def validate(sources):
     lua = sources["lua"] + sources["cli"] + sorted((ROOT / "layouts").glob("*.lua"))
     run("lua", "-", *lua, input="for _, path in ipairs(arg) do assert(loadfile(path)) end\n")
     for path in sources["session"] + [ROOT / "dev"]:
-        compile(path.read_bytes(), str(path), "exec")
+        if path.suffix not in (".ps1", ".cs"):
+            compile(path.read_bytes(), str(path), "exec")
     run("omarchy", "plugin", "validate", ROOT)
     qmlformat = shutil.which("qmlformat") or "/usr/lib/qt6/bin/qmlformat"
     if Path(qmlformat).is_file():
