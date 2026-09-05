@@ -241,6 +241,16 @@ end
 function M.assign(compiled, targets, state)
   local pins = state and state.pins or {}
   local reserved = state and state.reserved or {}
+  -- A local window exchanged with a reserved source takes one whole zone.
+  -- Ordinary pins retain their existing stacking behavior. Only live swap
+  -- pins exclude ordinary fill; overflow may still use these local zones.
+  local occupied = {}
+  for _, target in ipairs(targets) do
+    local key = window_key(target.window)
+    if key and state and state.exclusive_pins and state.exclusive_pins[key] and pins[key] then
+      occupied[pins[key]] = true
+    end
+  end
   local slot_of = {}
   local count = {}
   for _, name in ipairs(compiled.leaves) do
@@ -253,7 +263,7 @@ function M.assign(compiled, targets, state)
   end
 
   local function has_room(name)
-    if reserved[name] then return false end
+    if reserved[name] or occupied[name] then return false end
     if compiled.leaf_opts[name].never_split then
       return count[name] < 1
     end
@@ -554,11 +564,13 @@ function M.handle_msg(compiled, state, msg, active_window)
       return "no active window"
     end
     state.pins[key] = slot
+    if state.exclusive_pins then state.exclusive_pins[key] = nil end
     return true
   elseif cmd == "unpin" then
     local key = window_key(active_window)
     if key then
       state.pins[key] = nil
+      if state.exclusive_pins then state.exclusive_pins[key] = nil end
     end
     return true
   elseif cmd == "size" or cmd == "grow" then
@@ -574,6 +586,7 @@ function M.handle_msg(compiled, state, msg, active_window)
     return true
   elseif cmd == "reset" then
     state.pins = {}
+    state.exclusive_pins = {}
     state.sizes = {}
     return true
   elseif cmd == "relayout" then

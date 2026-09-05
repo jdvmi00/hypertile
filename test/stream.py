@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -66,6 +67,9 @@ class Compositor:
                         "workspaces": [{"selector": "1", "layout": "lua:quad", "visible": False}]}
         self.calls = []
         self.invalid = False
+        self.swap_plan = None
+        self.swap_error = None
+        self.swap_timeout = False
 
     def snapshot(self):
         return copy.deepcopy(self.desktop)
@@ -75,9 +79,20 @@ class Compositor:
         if method == "stream_check" and self.invalid:
             raise ValueError("assignment-invalid: zone missing")
         if method == "stream_assign":
-            self.desktop["streams"] = [copy.deepcopy(args)]
+            self.desktop["streams"] = [r for r in self.desktop["streams"] if r["computer"] != args["computer"]] + [copy.deepcopy(args)]
         if method == "stream_release":
-            self.desktop["streams"] = []
+            self.desktop["streams"] = [r for r in self.desktop["streams"] if r["computer"] != args["computer"]]
+        if method == "stream_swap_plan":
+            return copy.deepcopy(self.swap_plan)
+        if method in ("stream_swap_apply", "stream_swap_cancel"):
+            if method == "stream_swap_apply" and self.swap_error:
+                raise RuntimeError(self.swap_error)
+            for w in args["windows"]:
+                for source in self.desktop["streams"]:
+                    if source["computer"] == w.get("computer"):
+                        source["zone"] = w["zone"] if method == "stream_swap_apply" else w["before"]
+            if method == "stream_swap_apply" and self.swap_timeout:
+                raise subprocess.TimeoutExpired("injected lost apply reply", 5)
         return True
 
 
@@ -199,6 +214,97 @@ class StreamTests(unittest.TestCase):
         self.assertTrue(r["desired"])
         self.assertTrue(self.comp.desktop["streams"])
         self.assertEqual(self.proc.count, 0)
+
+    def ready_swap(self):
+        self.connect()
+        self.tick(3)
+        self.comp.desktop["windows"] = [{"address": "a", "pid": 123, "stable_id": 1, "class": s.CLASS,
+                                         "title": "Laptop - Moonlight", "workspace": "1"}]
+        self.tick()
+        self.comp.swap_plan = {"workspace": "1", "layout": "lua:quad", "windows": [
+            {"computer": "laptop", "address": "a", "pid": 123, "stable_id": 1, "before": "right", "zone": "left"},
+            {"address": "b", "pid": 456, "stable_id": 2, "before": "left", "zone": "right"}]}
+        return {"command": "swap", "windows": [{"address": "a", "stable_id": 1}, {"address": "b", "stable_id": 2}]}
+
+    def test_swap_persists_assignment_without_relaunch_or_host_changes(self):
+        request = self.ready_swap()
+        original = copy.deepcopy(self.ctl.records["laptop"])
+        result = self.ctl.command(request)
+        self.assertTrue(result["swapped"])
+        self.ctl = self.controller()
+        self.tick(3)
+        current = self.ctl.records["laptop"]
+        self.assertEqual(current["assignment"]["zone"], "left")
+        for field in ("generation", "token", "operation", "journal", "window", "settings"):
+            self.assertEqual(current.get(field), original.get(field), field)
+        self.assertEqual(self.proc.count, 1)
+        self.assertEqual(self.host.calls, [])
+        self.assertNotIn("swap", self.ctl.state)
+        self.assertFalse(any(m == "stream_focus" for m, _ in self.comp.calls))
+
+    def test_swap_lost_reply_replays_absolute_assignments_after_restart(self):
+        request = self.ready_swap()
+        self.comp.swap_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.ctl.command(request)
+        disk = json.loads((self.root / "state.json").read_text())
+        self.assertIn("swap", disk)
+        self.assertEqual(disk["computers"]["laptop"]["assignment"]["zone"], "right")
+        self.assertEqual(self.comp.desktop["streams"][0]["zone"], "left")
+        self.comp.swap_timeout = False
+        self.ctl = self.controller()
+        self.tick(2)
+        self.assertEqual(self.ctl.records["laptop"]["assignment"]["zone"], "left")
+        self.assertEqual(self.proc.count, 1)
+
+    def test_failed_swap_rolls_back_without_stopping_stream(self):
+        request = self.ready_swap()
+        self.comp.swap_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.ctl.command(request)
+        self.comp.swap_timeout = False
+        self.comp.swap_error = "swap unavailable: target has closed"
+        with self.assertRaisesRegex(RuntimeError, "swap unavailable"):
+            self.ctl.finish_swap()
+        self.tick(2)
+        self.assertNotIn("swap", self.ctl.state)
+        self.assertEqual(self.ctl.records["laptop"]["assignment"]["zone"], "right")
+        self.assertEqual(self.comp.desktop["streams"][0]["zone"], "right")
+        self.assertEqual(self.proc.count, 1)
+        self.assertEqual(self.proc.alive, 123)
+
+    def test_swap_rejects_stale_owner_before_journaling(self):
+        request = self.ready_swap()
+        self.comp.swap_plan["windows"][0]["stable_id"] = 999
+        with self.assertRaisesRegex(ValueError, "identity changed"):
+            self.ctl.command(request)
+        self.assertNotIn("swap", self.ctl.state)
+        self.assertFalse(any(m == "stream_swap_apply" for m, _ in self.comp.calls))
+
+    def test_two_stream_swap_updates_both_saved_assignments(self):
+        request = self.ready_swap()
+        other = copy.deepcopy(self.ctl.records["laptop"])
+        other.update(computer="other", window={"address": "b", "pid": 456, "stable_id": 2})
+        other["assignment"]["zone"] = "left"
+        self.ctl.records["other"] = other
+        self.comp.swap_plan["windows"][1]["computer"] = "other"
+        self.ctl.command(request)
+        disk = json.loads((self.root / "state.json").read_text())["computers"]
+        self.assertEqual(disk["laptop"]["assignment"]["zone"], "left")
+        self.assertEqual(disk["other"]["assignment"]["zone"], "right")
+
+    def test_pending_swap_cannot_replay_addresses_into_new_compositor(self):
+        request = self.ready_swap()
+        self.comp.swap_timeout = True
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.ctl.command(request)
+        self.comp.calls.clear()
+        self.comp.instance = "two"
+        self.ctl = self.controller()
+        self.ctl.finish_swap()
+        self.assertNotIn("swap", self.ctl.state)
+        self.assertEqual(self.ctl.records["laptop"]["assignment"]["zone"], "right")
+        self.assertFalse(any(m == "stream_swap_apply" for m, _ in self.comp.calls))
 
     def test_pairing_failure_is_not_retried(self):
         self.host.error = "pairing-required"

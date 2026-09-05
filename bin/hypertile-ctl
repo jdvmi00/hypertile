@@ -66,7 +66,7 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
   windows [--json]           open windows (class, title, workspace)
   computers [--json]         configured remote computers and pairing references
   stream <command> [...]    probe, connect, focus, disconnect, status, retry,
-                             restore, release; see docs/STREAMS.md
+                             restore, release, swap; see docs/STREAMS.md
   session <command> [name]   status, save <name>, restore [name], freeze, resume,
                              stop, logout, reboot, shutdown; see docs/SESSIONS.md
   default [name|BUILTINS] [--no-reload]

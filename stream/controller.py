@@ -406,6 +406,8 @@ class Controller:
         return out
 
     def command(self, request):
+        if request.get("command") not in ("status", "stop"):
+            self.finish_swap()
         if request.get("command") in ("connect", "disconnect", "restore", "release", "retry"):
             computer = request.get("computer")
             require(isinstance(computer, str) and NAME.fullmatch(computer), "invalid computer ID")
@@ -424,6 +426,21 @@ class Controller:
         if action == "stop":
             self.running = False  # Restart preserves ownership and the running views.
             return {"stopped": True}
+        if action == "swap":
+            plan = self.compositor.call("stream_swap_plan", {"windows": request["windows"]})
+            sources = [w for w in plan["windows"] if w.get("computer")]
+            require(sources, "swap requires a managed stream window")
+            for w in sources:
+                r = self.records.get(w["computer"])
+                require(r and r["desired"] and r["phase"] == "watching", "stream is not ready to swap")
+                require(r.get("window") == {k: w[k] for k in ("address", "pid", "stable_id")},
+                        "stream window identity changed")
+                require(r["assignment"] == {"workspace": plan["workspace"], "layout": plan["layout"], "zone": w["before"]},
+                        "stream assignment changed")
+            self.state["swap"] = {"plan": plan, "instance": self.compositor.instance}
+            self.persist()  # Durable before either reservation or local pin changes.
+            self.finish_swap()
+            return {"swapped": True, "computers": [self.public(self.records[w["computer"]]) for w in sources]}
         if action == "session-restore":
             outcomes = []
             for source in request.get("sources", []):
@@ -508,6 +525,35 @@ class Controller:
             raise ValueError("unknown stream command")
         self.persist()
         return self.public(r)
+
+    def finish_swap(self):
+        pending = self.state.get("swap")
+        if not pending:
+            return
+        plan = pending["plan"]
+        if pending["instance"] != self.compositor.instance:
+            # Window references cannot be replayed into a new compositor.
+            self.state.pop("swap")
+            self.persist()
+            return
+        try:
+            self.compositor.call("stream_swap_apply", plan)
+        except RuntimeError as error:
+            if "swap unavailable:" in str(error):
+                self.compositor.call("stream_swap_cancel", plan)
+                self.state.pop("swap")
+                self.applied.clear()
+                self.persist()
+            raise
+        # Assignment edits do not change the launch generation/token, profile,
+        # PID or host restoration journal. An IPC retry applies absolute zones.
+        for w in plan["windows"]:
+            if w.get("computer"):
+                r = self.records[w["computer"]]
+                r["assignment"]["zone"] = w["zone"]
+                self.applied.pop(w["computer"], None)
+        self.state.pop("swap")
+        self.persist()
 
     def assign(self, r, window=None):
         args = {**r["assignment"], "computer": r["computer"], "profile": r["profile"], "title": r["config"]["title"]}
@@ -670,6 +716,7 @@ class Controller:
             self.assign(r)
 
     def tick(self):
+        self.finish_swap()
         snap = self.compositor.snapshot()
         before = json.dumps(self.state, sort_keys=True)
         for r in self.records.values():
@@ -799,6 +846,12 @@ def main():
         p.add_argument("--json", action="store_true")
     p = commands.add_parser("launch-job", help=argparse.SUPPRESS)
     p.add_argument("path", type=Path)
+    p = commands.add_parser("swap", help="exchange two ready windows; normally invoked by Super+Shift+Arrow")
+    p.add_argument("address")
+    p.add_argument("stable_id", type=int)
+    p.add_argument("target")
+    p.add_argument("target_stable_id", type=int)
+    p.add_argument("--json", action="store_true")
     for name in ("probe", "connect", "focus", "disconnect", "status", "retry", "restore", "release"):
         p = commands.add_parser(name)
         p.add_argument("computer", nargs="?" if name == "status" else None)
@@ -811,6 +864,9 @@ def main():
         if name == "release":
             p.add_argument("--keep-host-settings", action="store_true")
     args = parser.parse_args()
+    if args.command == "swap":
+        args.windows = [{"address": args.address, "stable_id": args.stable_id},
+                        {"address": args.target, "stable_id": args.target_stable_id}]
     try:
         if args.command == "launch-job":
             launch_job(args.path)
@@ -855,6 +911,8 @@ def main():
             print(json.dumps(result, indent=2))
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:
         print("hypertile-stream: " + str(error), file=sys.stderr)
+        if args.command == "swap" and shutil.which("notify-send"):
+            subprocess.run(["notify-send", "Hypertile swap", str(error)], check=False)
         return 1
     return 0
 

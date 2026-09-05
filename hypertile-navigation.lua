@@ -49,7 +49,9 @@ local function navigate(direction, swap)
   local target = M.neighbor(active, hl.get_windows({ workspace = active.workspace, floating = false }), direction)
   if target then
     if swap then
-      hl.dispatch(hl.dsp.window.swap({ target = "address:" .. target.address }))
+      if not require("hypr.hypertile-session").swap(active, target) then
+        hl.dispatch(hl.dsp.window.swap({ target = "address:" .. target.address }))
+      end
     else
       hl.dispatch(hl.dsp.focus({ window = "address:" .. target.address }))
     end

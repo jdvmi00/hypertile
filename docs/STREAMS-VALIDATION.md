@@ -6,14 +6,19 @@ acceptance matrix is not implied by the automated tests.
 
 ## Automated checks
 
-- 30 Python stream tests: configuration and paired identity, serialized launch
+- 36 Python stream tests: configuration and paired identity, serialized launch
   cancellation, repeated requests, process ownership, restart reconciliation,
   delayed workspace creation, retained unresolved sources, offline local session
   recovery, bounded retries, close/EOF ordering, display rollback and conflicts,
-  nominal refresh rounding, host-health handling and private log extraction.
+  nominal refresh rounding, host-health handling and private log extraction;
+  source swap persistence, lost-reply recovery, cancellation, stale identities,
+  two-source exchanges and rejection of old-compositor window references.
 - Lua stream adapter checks: reservations, overflow, collapsed empty zones,
   workspace isolation, final-window identity, targeted placement without focus,
-  temporary window rules and release.
+  temporary window rules and release; source/local and source/source swaps,
+  subsequent local swaps, uncapped fill, overflow and stale-target rejection.
+- Directional navigation checks include routing managed swaps through the source
+  controller while retaining native swaps for ordinary unpinned local windows.
 - Existing tests: 14 Python session tests, 3 development-helper tests, Lua session
   adapter, 136 engine checks, 132 bridge/CLI checks, 32 geometry checks and 110
   editor checks.
@@ -35,6 +40,8 @@ acceptance matrix is not implied by the automated tests.
 | Normal window close | Both hosts disconnected and released their reservations. Mac host-mode restoration completed and cleared its journal. |
 | Existing Mac launcher | Updated to call the managed controller; used to reconnect the final Mac session. |
 | Pointer scaling | With HiDPI off, a measured local pointer offset mapped to the expected Mac coordinates. |
+| Source swap | In the active quad layout, the Mac and local terminal exchanged zones and swapped back through the directional shortcut handler. The reservation and saved source assignment followed the Mac; all other window positions and focus remained unchanged. |
+| Restart after swap | Restarting the controller while the Mac was in its new zone retained that assignment and Moonlight PID. Swapping back restored the original arrangement. No host-mode or journal change. |
 
 The tested client is Moonlight Qt 6.1.0. The Mac runs Sunshine
 2026.516.143833 and BetterDisplay 4.3.4. Its physical Dell display is connected

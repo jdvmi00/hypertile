@@ -93,6 +93,14 @@ Repeated connects with the same profile and assignment reuse the operation or
 focus its ready window. A different assignment/profile requires disconnect
 first. Conflicting computers or zone owners are rejected.
 
+**Super+Shift+Arrow** swaps a ready stream with the neighboring window, including
+another stream. This updates the reserved zone and saved source assignment while
+keeping the same connection, profile and host restoration journal. A local window
+exchanged with a stream takes the vacated zone and can be swapped again normally.
+Swaps currently require one window in each participating zone; a stacked target,
+changed layout, or closed window produces a notification without restarting the
+stream. The same shortcut continues to handle ordinary local windows.
+
 Launch rules keep startup windows on the requested workspace without initial
 focus or fullscreen activation. Placement targets the final window and never
 focuses it; `focus` and repeating a completed `connect` are explicit focus actions.

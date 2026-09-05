@@ -26,9 +26,18 @@ hl = {
   dispatch = function(args) dispatched = args end,
 }
 package.loaded["hypr.hypertile"] = { live = { test = {} } }
+local routed
+package.loaded["hypr.hypertile-session"] = { swap = function(first, second)
+  if routed then routed.first, routed.second = first, second; return true end
+  return false
+end }
 a.workspace.tiled_layout = "lua:test"
 nav.swap("l")
 assert(dispatched.target == "address:left", "swap by address")
+dispatched, routed = nil, {}
+nav.swap("l")
+assert(routed.first == a and routed.second == left and not dispatched, "managed swap bypasses native reorder")
+routed = nil
 dispatched = nil
 nav.swap("u")
 assert(dispatched == nil, "no neighbor does nothing")

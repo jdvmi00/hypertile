@@ -75,4 +75,77 @@ assert(not ok, "reused address/pid is not enough to identify a window")
 session.stream_release({ computer = "laptop" })
 assert(not engine.state.test.reservations["1"].remote, "release clears the reservation")
 assert(rules["hypertile-stream-laptop"].enabled == false, "release disables the temporary host rule")
+
+-- Real engine assignment with an uncapped fill sequence: swapping must not
+-- stack an unrelated local window into the newly freed source zone.
+spec = { columns = { { name = "one" }, { name = "two" }, { name = "three" }, { name = "four" } },
+  fill = { "one", "two", "three", "four" }, empty = "keep", single = "slot" }
+engine.provider("test", spec)
+windows = {}
+for i, address in ipairs({ "a", "b", "c", "d" }) do
+  windows[i] = { address = address, pid = i, stable_id = i, mapped = true, workspace = ws,
+    class = (i == 1 or i == 4) and "com.moonlight_stream.Moonlight" or "terminal",
+    title = address .. " - Moonlight", fullscreen = 0 }
+end
+local function assign_source(id, i, zone)
+  local w = windows[i]
+  session.stream_assign({ computer = id, profile = "desktop", workspace = "1", layout = "lua:test", zone = zone,
+    address = w.address, pid = w.pid, stable_id = w.stable_id, title = w.title, placed = true })
+end
+assign_source("laptop", 1, "two")
+assign_source("second", 4, "four")
+engine.live.test.orders["1"] = { "a", "b", "c", "d" }
+local function positions()
+  local targets = {}
+  for _, w in ipairs(windows) do targets[#targets + 1] = { window = w } end
+  local s = engine.state.test
+  local buckets = engine.assign(engine.live.test.compiled, targets,
+    { pins = s.pins, exclusive_pins = s.exclusive_pins, reserved = s.reservations["1"] })
+  local result = {}
+  for zone, bucket in pairs(buckets) do
+    for _, t in ipairs(bucket) do result[t.window.address] = zone end
+  end
+  return result
+end
+local function plan(a, b) return session.stream_swap_plan({ windows = { windows[a], windows[b] } }) end
+local before = positions()
+assert(before.a == "two" and before.b == "one" and before.c == "three" and before.d == "four")
+local exchange = plan(1, 2)
+calls = {}
+session.stream_swap_apply(exchange)
+session.stream_swap_apply(exchange) -- lost reply: absolute replay, no toggle
+local after = positions()
+assert(after.a == "one" and after.b == "two" and after.c == "three" and after.d == "four",
+  "source/local swap preserves unrelated windows and handles uncapped fill")
+windows[5] = { address = "extra", pid = 5, stable_id = 5, workspace = ws, mapped = true }
+assert(positions().extra ~= "one" and positions().extra ~= "four", "new local windows avoid both source reservations")
+windows[5] = nil
+for _, call in ipairs(calls) do assert(call.kind == "resize", "swap only refreshes layout; never focuses, moves, or restarts") end
+session.stream_swap_apply(plan(2, 3))
+after = positions()
+assert(after.b == "three" and after.c == "two" and after.a == "one", "displaced local windows remain swappable")
+exchange = plan(1, 4)
+session.stream_swap_apply(exchange)
+after = positions()
+assert(after.a == "four" and after.d == "one", "two source reservations exchange atomically")
+session.stream_swap_cancel(exchange)
+after = positions()
+assert(after.a == "one" and after.d == "four", "cancel restores both sides of an uncertain exchange")
+exchange = plan(1, 2)
+windows[2].stable_id = 99
+ok = pcall(session.stream_swap_apply, exchange)
+assert(not ok and positions().a == "one", "stale target rejects the whole swap before changing reservations")
+windows[2].stable_id = 2
+windows[2].fullscreen = 2
+ok = pcall(session.stream_swap_apply, exchange)
+assert(not ok and positions().a == "one", "fullscreen change rejects the whole swap")
+windows[2].fullscreen = 0
+session.stream_swap_apply(exchange)
+session.stream_swap_cancel(exchange)
+assert(positions().b == "three" and engine.state.test.exclusive_pins.b, "cancel restores the previous local swap pin")
+-- A swapped local pin survives session placement and is still releasable.
+session.place({ address = "b", layout = "lua:test", saved = { workspace = "1", pin = "three", pin_exclusive = true } })
+assert(engine.state.test.exclusive_pins.b)
+engine.handle_msg(engine.live.test.compiled, engine.state.test, "unpin", windows[2])
+assert(not engine.state.test.exclusive_pins.b and not engine.state.test.pins.b)
 print("stream placement: all checks passed")

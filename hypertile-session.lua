@@ -57,6 +57,7 @@ function M.snapshot()
         at = win.at, size = win.size, floating = win.floating, pinned = win.pinned,
         fullscreen = win.fullscreen, fullscreen_client = win.fullscreen_client,
         pin = live and live.state.pins[win.address], grouped = win.group ~= nil,
+        pin_exclusive = live and live.state.exclusive_pins and live.state.exclusive_pins[win.address] or nil,
         stream = source,
       }
     end
@@ -126,6 +127,171 @@ local function refresh_workspace(ws)
       break
     end
   end
+end
+
+local function source_for(win)
+  for _, s in pairs(streams) do
+    if s.address == win.address and s.pid == win.pid and s.stable_id == win.stable_id then return s end
+  end
+end
+
+local function swap_windows(request)
+  local found = {}
+  for i, ref in ipairs(request.windows) do
+    for _, w in ipairs(hl.get_windows()) do
+      if w.address == ref.address and w.stable_id == ref.stable_id then found[i] = w end
+    end
+    local w = found[i]
+    assert(w and w.mapped and w.workspace and not w.floating and not w.hidden and (w.fullscreen or 0) == 0,
+      "swap unavailable: window closed, moved or became fullscreen")
+  end
+  assert(#found == 2 and found[1].address ~= found[2].address, "swap needs two different windows")
+  local ws = found[1].workspace
+  assert(ws.id == found[2].workspace.id, "swap unavailable: windows must share a workspace")
+  local live = engine.live[ws.tiled_layout:match("^lua:(.+)$")]
+  assert(live, "swap unavailable: workspace must use Hypertile")
+  return found, ws, live
+end
+
+-- Resolve actual engine assignments, including rules, pins and reservations.
+-- This runs before the controller journals the request; it changes nothing.
+function M.stream_swap_plan(request)
+  local windows, ws, live = swap_windows(request)
+  local by_address, targets = {}, {}
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and w.workspace and w.workspace.id == ws.id and not w.floating then by_address[w.address] = w end
+  end
+  for _, address in ipairs(live.orders[tostring(ws.id)] or {}) do
+    if by_address[address] then targets[#targets + 1] = { window = by_address[address] }; by_address[address] = nil end
+  end
+  assert(next(by_address) == nil, "swap unavailable: waiting for layout order")
+  local buckets = engine.assign(live.compiled, targets, {
+    pins = live.state.pins, exclusive_pins = live.state.exclusive_pins,
+    reserved = (live.state.reservations or {})[tostring(ws.id)],
+  })
+  local plan = { workspace = selector(ws), layout = ws.tiled_layout, windows = json.array() }
+  for i, w in ipairs(windows) do
+    local zone
+    for name, bucket in pairs(buckets) do
+      for _, t in ipairs(bucket) do
+        if t.window.address == w.address then
+          assert(#bucket == 1, "swap unavailable: use a zone containing one window")
+          zone = name
+        end
+      end
+    end
+    assert(zone, "swap unavailable: window has no zone")
+    local s = source_for(w)
+    plan.windows[i] = { address = w.address, stable_id = w.stable_id, pid = w.pid,
+      computer = s and s.computer, before = zone, pin = live.state.pins[w.address],
+      exclusive = live.state.exclusive_pins and live.state.exclusive_pins[w.address] or nil }
+  end
+  assert(plan.windows[1].before ~= plan.windows[2].before, "swap unavailable: windows share a zone")
+  for i, ref in ipairs(plan.windows) do ref.zone = plan.windows[3 - i].before end
+  return plan
+end
+
+-- Absolute assignments make retry after a lost IPC reply safe. Validate the
+-- entire exchange before changing either reservation; never focus or relaunch.
+function M.stream_swap_apply(plan)
+  local windows, ws, live = swap_windows(plan)
+  assert(selector(ws) == plan.workspace and ws.tiled_layout == plan.layout, "swap unavailable: layout changed")
+  local owners = {}
+  for i, w in ipairs(windows) do
+    local ref = plan.windows[i]
+    assert(w.pid == ref.pid, "swap unavailable: window identity changed")
+    assert(live.compiled.leaf_set[ref.zone] and not live.compiled.leaf_opts[ref.zone].spacer,
+      "swap unavailable: zone changed")
+    local s = source_for(w)
+    assert((s and s.computer) == ref.computer, "swap unavailable: source ownership changed")
+    if s then
+      assert(s.workspace == plan.workspace and s.layout == plan.layout and (s.zone == ref.before or s.zone == ref.zone),
+        "swap unavailable: source assignment changed")
+      owners[s.computer] = true
+    else
+      local pin = live.state.pins[w.address]
+      assert(pin == ref.pin or pin == ref.zone, "swap unavailable: local pin changed")
+    end
+  end
+  for _, s in pairs(streams) do
+    if s.workspace == plan.workspace and not owners[s.computer] then
+      for _, ref in ipairs(plan.windows) do assert(s.zone ~= ref.zone, "swap unavailable: zone already owned") end
+    end
+  end
+  local zones = {}
+  for _, s in pairs(streams) do
+    if s.workspace == plan.workspace and not owners[s.computer] then zones[s.zone] = true end
+  end
+  for _, ref in ipairs(plan.windows) do if ref.computer then zones[ref.zone] = true end end
+  local available = false
+  for _, zone in ipairs(live.compiled.cycle) do if not zones[zone] then available = true end end
+  assert(available, "swap unavailable: leave one fill zone for local windows")
+  live.state.exclusive_pins = live.state.exclusive_pins or {}
+  local slots = (live.state.reservations or {})[tostring(ws.id)] or {}
+  for _, ref in ipairs(plan.windows) do if ref.computer then slots[streams[ref.computer].zone] = nil end end
+  for _, ref in ipairs(plan.windows) do
+    live.state.pins[ref.address] = ref.zone
+    live.state.exclusive_pins[ref.address] = not ref.computer or nil
+    if ref.computer then
+      streams[ref.computer].zone = ref.zone
+      slots[ref.zone] = ref.address
+    end
+  end
+  refresh_workspace(ws)
+  return true
+end
+
+-- A target may disappear between planning and applying. Undo only values
+-- still owned by this exchange, including an apply whose reply was lost.
+function M.stream_swap_cancel(plan)
+  local live = engine.live[plan.layout:match("^lua:(.+)$")]
+  if not live then return true end
+  local windows = {}
+  for _, w in ipairs(hl.get_windows()) do windows[w.address] = w end
+  local restored = {}
+  for _, ref in ipairs(plan.windows) do
+    local s = ref.computer and streams[ref.computer]
+    if s and s.address == ref.address and s.stable_id == ref.stable_id and s.pid == ref.pid
+      and s.workspace == plan.workspace and s.layout == plan.layout and (s.zone == ref.zone or s.zone == ref.before) then
+      local slots = live.state.reservations[tostring(s.workspace_id)]
+      slots[s.zone] = nil
+      restored[#restored + 1] = { source = s, ref = ref, slots = slots }
+    elseif not ref.computer then
+      local w = windows[ref.address]
+      if w and w.stable_id == ref.stable_id and w.pid == ref.pid and live.state.pins[ref.address] == ref.zone then
+        live.state.pins[ref.address] = ref.pin
+        if live.state.exclusive_pins then live.state.exclusive_pins[ref.address] = ref.exclusive end
+      end
+    end
+  end
+  for _, item in ipairs(restored) do
+    item.source.zone = item.ref.before
+    item.slots[item.ref.before] = item.ref.address
+    live.state.pins[item.ref.address] = item.ref.before
+  end
+  for _, ws in ipairs(hl.get_workspaces()) do if selector(ws) == plan.workspace then refresh_workspace(ws) end end
+  return true
+end
+
+function M.swap(active, target)
+  local live = engine.live[active.workspace.tiled_layout:match("^lua:(.+)$")]
+  local managed = source_for(active) or source_for(target)
+  if not managed and not live.state.pins[active.address] and not live.state.pins[target.address] then return false end
+  if managed then
+    -- The external controller persists intent. Do not wait for its IPC from
+    -- the compositor thread: it queries us while handling this command.
+    local function quote(v) return "'" .. tostring(v):gsub("'", "'\\''") .. "'" end
+    hl.exec_cmd("hypertile-stream swap " .. quote(active.address) .. " " .. quote(active.stable_id)
+      .. " " .. quote(target.address) .. " " .. quote(target.stable_id))
+  else
+    local request = { windows = { active, target } }
+    local ok, err = pcall(function() M.stream_swap_apply(M.stream_swap_plan(request)) end)
+    if not ok then
+      local function quote(v) return "'" .. tostring(v):gsub("'", "'\\''") .. "'" end
+      hl.exec_cmd("notify-send 'Hypertile swap' " .. quote(err))
+    end
+  end
+  return true
 end
 
 function M.stream_release(request)
@@ -263,10 +429,18 @@ function M.place(request)
     dispatch(hl.dsp.window.move, { window = window, x = saved.at.x, y = saved.at.y })
     dispatch(hl.dsp.window.pin, { window = window, action = saved.pinned and "on" or "off" })
   end
-  for _, live in pairs(engine.live) do live.state.pins[address] = nil end
+  for _, live in pairs(engine.live) do
+    live.state.pins[address] = nil
+    if live.state.exclusive_pins then live.state.exclusive_pins[address] = nil end
+  end
   if saved.pin and request.layout then
     local name = request.layout:match("^lua:(.+)$")
-    if name and engine.state[name] then engine.state[name].pins[address] = saved.pin end
+    if name and engine.state[name] then
+      local state = engine.state[name]
+      state.pins[address] = saved.pin
+      state.exclusive_pins = state.exclusive_pins or {}
+      state.exclusive_pins[address] = saved.pin_exclusive or nil
+    end
   end
   return true
 end
