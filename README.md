@@ -379,6 +379,10 @@ See [scenes and content](docs/SCENES.md) for the UI, CLI, and stable zone refere
 See [remote desktop setup and recovery](docs/STREAMS.md) for computer profiles,
 the Mac display adapter, and the Windows externally managed profile.
 
+[Performance reports](docs/STREAM-QUALITY.md) measure reconnect timing, retain
+Moonlight decoder summaries, and record readability at each view size. Use
+Reconnect and Return locally from the Content picker.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).

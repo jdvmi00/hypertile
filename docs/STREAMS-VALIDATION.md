@@ -73,7 +73,8 @@ Two compatibility issues changed the implementation:
 - Relative-input HiDPI behavior, Windows modifier/clipboard behavior, audible
   audio routing, Teams camera/microphone use and virtual displays. Mac modifier
   and clipboard results are recorded below.
-- End-to-end latency, dropped-frame and sustained presentation measurements.
+- End-to-end latency and sustained presentation measurements. A3's short Mac
+  decoder summaries below provide limited frame-loss evidence.
   `window-ready` and decoder initialization deliberately do not claim verified
   frame presentation.
 
@@ -132,3 +133,45 @@ or continuous playback, focus changes, and echo. Windows shortcut/clipboard and
 live audio-policy checks, the A1 hardware checks above, and a complete compositor
 restart remain outstanding. These limitations are not inferred from desktop
 video readiness or the presence of an audio stream.
+
+## A3 interaction and quality
+
+Implemented and installed locally on 2026-09-04. See
+[STREAM-QUALITY.md](STREAM-QUALITY.md) for collection semantics and controls.
+
+Automated coverage adds 14 Python quality/reconnect tests, Lua identity/focus
+checks and JavaScript metric formatting checks. They cover typed summary
+parsing, truncated/invalid output, unsupported versions, monotonic timing,
+bounded history, exact profile/size matching, idempotent reconnect, cancellation,
+controller restart, late logger output, compositor recovery identity, scheduled
+collection and unchanged retry backoff. Existing stream, scene, session,
+navigation, engine, bridge, geometry, editor and development checks pass.
+
+| Live exercise | Result |
+| --- | --- |
+| Baseline reconnect | 17.56 s from accepted request to the final window being placed, using one-second transition polling. |
+| Faster transition polling | Two repeats at 200 ms polling took 13.72 s and 13.79 s. Assignment, profile and original host restoration journal were retained. |
+| Scheduled collection | A 30-second collection survived a controller update and completed; a second 10-second collection also completed. Each briefly reconnected only the local view. |
+| Decoder summaries | Average decode 0.11 ms in both summaries; rendered 59.97 and 59.93 FPS. Network frame loss 0.27% and 0.51%; jitter loss 0% and 0.03%. RTT 3 ms in both. |
+| Return locally | Focused the stream, then returned to the same local terminal with input capture released. |
+| Readability | Synthetic text in a disposable Mac TextEdit document, Menlo 14 point, was legible in the current 2218×1246 tile. Recorded as readable for this profile and size; the document was removed and the previous Mac app restored. |
+| Performance UI | Expanded the panel on the live Mac source and checked metric labels, wrapping, collection controls and readability choices; no QML errors. |
+| Swap regression after installation | Swapped the focused local window and Mac right and back through the actual directional handler. Focus, other windows, client PID, profile and host journal were unchanged. Restored the scene's unmodified state with identical saved bytes. |
+
+The approximately 3.8-second improvement is a small local comparison, not a
+statistical guarantee or a network-recovery measurement. In the first faster
+run, stages reached preflight at 0.52 s, preparing at 1.61 s, launch at 2.20 s,
+connecting at 2.47 s and window-ready at 13.72 s. Paired identity, power and
+display checks still ran; most remaining startup time was in Moonlight.
+
+The decoder summaries cover activity since their decoder segment began, not
+just the scheduled 10/30-second wait. Queue delay was 0.01 ms; rendering was
+1.37/1.34 ms. The tested host did not supply host-processing latency. Pure
+encoding and end-to-end latency remain unavailable. The second frame-loss
+result suggests comparing bitrate under the same workload; it does not justify
+an automatic change or a new preset.
+
+No client fork or patch was needed. Physical pointer-edge behavior, relative
+capture, Windows quality, sustained workloads, sleep/network recovery and call
+hardware still need their separate checks. No Teams content or call was read
+or started during this validation.

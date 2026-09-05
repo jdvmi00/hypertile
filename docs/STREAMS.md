@@ -155,6 +155,16 @@ The Content picker exposes statistics, capture toggle and explicit clipboard
 typing. Mac clipboard typing is unavailable with the tested stock Sunshine;
 see [scene input controls](SCENES.md) and [live validation](STREAMS-VALIDATION.md).
 
+## Performance and reconnecting
+
+Use `stream reconnect COMPUTER` to restart a ready local view while retaining
+its zone, profile and host restoration journal. `stream measure COMPUTER
+--seconds 30` collects the completed decoder summary by reconnecting after the
+requested interval. The Content picker's Performance panel and `stream quality
+COMPUTER --json` show the results. `stream local COMPUTER` returns focus to a
+local window on the same workspace. See [quality and interaction](STREAM-QUALITY.md)
+for measurement scope, cancellation and capability limits.
+
 ## Recovery
 
 Before host writes, Hypertile durably records every original/intended value in

@@ -33,7 +33,7 @@ with local content on the selected layout. Layout editing takes effect on Save.
 Deleted referenced zones require choosing replacements; they are not reassigned
 by their position in the layout.
 
-The stream controls offer Focus, Disconnect, Retry, display restoration,
+The stream controls offer Focus, Disconnect, Reconnect, Return locally, Retry, display restoration,
 Statistics, Toggle capture, and explicit clipboard typing where supported.
 Ordinary scene changes do not take focus. Focus, clipboard, statistics, and capture controls
 are explicit interactions with the selected remote desktop.
@@ -142,3 +142,7 @@ reconcile content.
 Meeting profiles and system-key capture are described in [STREAMS.md](STREAMS.md).
 The [validation record](STREAMS-VALIDATION.md) distinguishes automated recovery
 checks, live desktop checks, and hardware/call features still unverified.
+
+The [Performance panel](STREAM-QUALITY.md) adds measured reconnect timing,
+completed decoder statistics and readability assessments. Scheduled collection
+uses the same stream controller and is cancelled by superseding scene work.

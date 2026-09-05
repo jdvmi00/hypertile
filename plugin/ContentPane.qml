@@ -11,6 +11,9 @@ Column {
   readonly property var source: overlay.contentFor(overlay.selected)
   readonly property var runtime: source && source.runtime ? source.runtime : ({})
   property bool details: false
+  readonly property bool performance: overlay.performanceOpen
+  readonly property var quality: pane.runtime.quality || ({})
+  readonly property var measurement: (pane.quality.current || {}).measurement || ({})
   spacing: Style.spacing.lg
 
   component Caption: Text {
@@ -101,6 +104,8 @@ Column {
         spacing: Style.spacing.sm
         Action { text: "Focus"; enabled: !overlay.busy && !!pane.runtime.window; onClicked: overlay.streamAction("focus", pane.source.computer, true) }
         Action { text: "Disconnect"; onClicked: overlay.streamAction("disconnect", pane.source.computer) }
+        Action { text: "Reconnect"; enabled: !overlay.busy && !!pane.runtime.window && pane.runtime.observed === "window-ready"; onClicked: overlay.streamAction("reconnect", pane.source.computer) }
+        Action { text: "Return locally"; enabled: !overlay.busy && !!pane.runtime.window; onClicked: overlay.streamAction("local", pane.source.computer, true) }
         Action { text: "Retry"; visible: !pane.runtime.window && pane.runtime.desired === true; onClicked: overlay.streamAction("retry", pane.source.computer) }
         Action { text: "Restore display"; visible: !!pane.runtime.journal && pane.runtime.desired !== true; onClicked: overlay.streamAction("restore", pane.source.computer) }
       }
@@ -116,6 +121,35 @@ Column {
       Small { visible: !!(pane.runtime.clipboard || {}).reason; text: (pane.runtime.clipboard || {}).reason || "" }
       Small { text: (pane.runtime.requested || {}).system_keys === "always" ? "System keys go to this computer while captured. Toggle capture to use local shortcuts." : "System keys stay local. Command/Windows shortcuts require a keyboard-capture profile." }
       Small { text: "Ctrl+Alt+Shift+Z toggles capture. Camera, microphone and meeting playback need a separate call check." }
+      Action { text: pane.performance ? "Hide performance" : "Performance"; onClicked: overlay.performanceOpen = !overlay.performanceOpen }
+      Column {
+        visible: pane.performance
+        width: parent.width
+        spacing: Style.spacing.sm
+        Small { text: Content.performance(pane.quality) }
+        Action {
+          text: pane.measurement.status === "recording" ? "Collecting · reconnect scheduled" : "Collect stats in 30s"
+          enabled: !overlay.busy && !!pane.runtime.window && !!(pane.quality.current || {}).quality_parser && pane.measurement.status !== "recording"
+          onClicked: overlay.streamAction("measure", pane.source.computer)
+        }
+        Small { text: "Collecting briefly reconnects this view to obtain Moonlight’s decoder summary. It includes activity since the decoder started. Host apps stay open." }
+        Small { visible: !!pane.quality.collection_reason; text: pane.quality.collection_reason || "" }
+        Caption { text: "How does text look at this size?" }
+        Flow {
+          width: parent.width
+          spacing: Style.spacing.sm
+          Repeater {
+            model: [{label: "Readable", value: "readable"}, {label: "Too small", value: "too-small"}, {label: "Blurry", value: "blurry"}]
+            Action {
+              required property var modelData
+              text: modelData.label
+              enabled: !overlay.busy && !!pane.runtime.window
+              onClicked: overlay.rateReadability(pane.source.computer, modelData.value)
+            }
+          }
+        }
+        Small { text: "Encoding-only and end-to-end latency are unavailable. Timing measures when the window is ready, not its first frame." }
+      }
       Action { text: pane.details ? "Hide details" : "Details"; onClicked: pane.details = !pane.details }
       Small { visible: pane.details; text: JSON.stringify(pane.runtime, null, 2) }
     }

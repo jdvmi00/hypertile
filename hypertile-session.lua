@@ -8,6 +8,7 @@ local json = require(prefix .. "hypertile-json")
 local M = {}
 local streams = {}
 local scene_content = {}
+local last_local = {}
 
 local function selector(ws)
   if ws.special then return ws.name end
@@ -17,6 +18,10 @@ end
 
 function M.snapshot()
   local out = { windows = json.array(), workspaces = json.array(), layouts = {}, monitors = json.array() }
+  local focused = hl.get_active_window()
+  if focused and focused.workspace and focused.class ~= "com.moonlight_stream.Moonlight" then
+    last_local[selector(focused.workspace)] = { address = focused.address, pid = focused.pid, stable_id = focused.stable_id }
+  end
   out.streams = json.array()
   out.scene_content = scene_content
   for _, source in pairs(streams) do out.streams[#out.streams + 1] = source end
@@ -511,6 +516,41 @@ function M.stream_focus(request)
     end
   end
   error("stream window has closed")
+end
+
+function M.stream_close(request)
+  local s = assert(streams[request.computer], "stream is not assigned")
+  for _, w in ipairs(hl.get_windows()) do
+    if w.address == s.address and w.pid == s.pid and w.stable_id == s.stable_id then
+      dispatch(hl.dsp.window.close, { window = "address:" .. w.address })
+      return true
+    end
+  end
+  return false -- Already closed; the controller still checks its owned process.
+end
+
+function M.stream_local(request)
+  local s = assert(streams[request.computer], "stream is not assigned")
+  local active = hl.get_active_window()
+  if not active or active.address ~= s.address or active.pid ~= s.pid or active.stable_id ~= s.stable_id then
+    return { released = false, reason = "The selected stream is not focused" }
+  end
+  local previous = last_local[s.workspace]
+  local target
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and not w.hidden and w.workspace and selector(w.workspace) == s.workspace
+      and w.class ~= "com.moonlight_stream.Moonlight" then
+      target = target or w
+      if previous and w.address == previous.address and w.pid == previous.pid and w.stable_id == previous.stable_id then
+        target = w
+        break
+      end
+    end
+  end
+  if not target then return { released = false, reason = "Open a local window or use Toggle capture" } end
+  hl.dispatch(hl.dsp.release_input_capture())
+  dispatch(hl.dsp.focus, { window = "address:" .. target.address })
+  return { released = true, focused_local = true }
 end
 
 function M.stream_launch(request)

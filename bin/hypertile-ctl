@@ -68,7 +68,8 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
   scene <command> [...]     list, save, apply, current, restore, retry, content;
                              see docs/SCENES.md
   stream <command> [...]    probe, connect, focus, disconnect, status, retry,
-                             restore, release, swap; see docs/STREAMS.md
+                             restore, release, swap, reconnect, local, quality,
+                             measure, readability; see docs/STREAMS.md
   session <command> [name]   status, save <name>, restore [name], freeze, resume,
                              stop, logout, reboot, shutdown; see docs/SESSIONS.md
   default [name|BUILTINS] [--no-reload]

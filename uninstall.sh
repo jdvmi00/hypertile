@@ -143,7 +143,8 @@ rm -f "$bin/hypertile-session" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/s
 rm -f "$bin/hypertile-stream" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/controller.py" \
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/mac_display.py" \
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/scenes.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/audio.py"
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/audio.py" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/quality.py"
 echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then

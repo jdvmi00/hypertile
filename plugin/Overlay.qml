@@ -49,6 +49,7 @@ Item {
   property var windows: []         // hypertile-ctl windows --json .windows
   property string defaultLayout: ""
   property bool contentMode: false
+  property bool performanceOpen: false
   property var contentCatalog: null
   readonly property bool managedContent: {
     if (!contentCatalog) return false
@@ -222,6 +223,10 @@ Item {
       Quickshell.execDetached([ctl, "stream", action, computer])
       dismiss()
     } else runCtl(["stream", action, computer, "--json"], "Updating " + computer + "…", "Request accepted")
+  }
+
+  function rateReadability(computer, value) {
+    runCtl(["stream", "readability", computer, value, "--json"], "Saving assessment…", "Readability recorded for this profile and view size")
   }
 
   // ------------------------------------------------------------ preferences
@@ -1406,6 +1411,7 @@ Item {
     function peek(on: bool): void { root.peeking = on }
     function refresh(): void { root.refresh() }
     function content(on: bool): void { root.showContent(on) }
+    function performance(on: bool): void { root.showContent(true); root.performanceOpen = on }
     function assign(kind: string, computer: string, profile: string): void { root.assignContent(kind, computer, profile) }
     function scene(action: string, name: string): void { root.sceneAction(action, name) }
     function viewed(): string { return root.viewed ? root.viewed.name : "" }
@@ -1456,7 +1462,8 @@ Item {
         undo: root.undoStack.length, status: root.statusText, error: root.errorText,
         workspaces: root.workspaces.length, windows: root.windows.length, defaultLayout: root.defaultLayout,
         committed: root.committedLayout, live: root.liveLayout, dockLeft: root.dockLeft, showKeys: root.showKeys,
-        area: root.area, contentMode: root.contentMode, scene: root.contentCatalog ? root.contentCatalog.current : null })
+        area: root.area, contentMode: root.contentMode, performanceOpen: root.performanceOpen,
+        scene: root.contentCatalog ? root.contentCatalog.current : null })
     }
   }
 }

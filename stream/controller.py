@@ -27,6 +27,7 @@ from service import Compositor, atomic_json, read_json
 from mac_display import same_setting
 from scenes import Manager
 from audio import host_headset
+from quality import Tracker, VideoStats
 
 CLASS = "com.moonlight_stream.Moonlight"
 TOKEN = "HYPERTILE_STREAM_TOKEN"
@@ -322,11 +323,19 @@ def launch_job(path):
         os.close(write_fd)
         supported = job.get("client_version", "").startswith("6.1.")
         evidence = {"parser": "moonlight-qt-6.1" if supported else "unsupported-version", "video_ready": "unverified"}
+        stats = VideoStats()
+        if supported:
+            evidence["quality_parser"] = 1
+        atomic_json(path.with_suffix(".events"), evidence)
         with os.fdopen(read_fd, errors="replace") as pipe:
             for line in pipe:
                 event = log_event(line) if supported else None
+                metrics = stats.feed(line) if supported else None
+                if metrics:
+                    evidence.update(performance=metrics, performance_at=time.time())
                 if event:
                     evidence.update(event)
+                if event or metrics:
                     atomic_json(path.with_suffix(".events"), evidence)
         evidence["closed"] = True
         atomic_json(path.with_suffix(".events"), evidence)
@@ -384,6 +393,7 @@ class Controller:
         self.applied = {}
         self.inhibitors = {}
         self.scenes = Manager(self, lambda: configuration(self.config))
+        self.quality = Tracker(self)
         for record in self.records.values():
             record.pop("pid", None)  # Reconcile using the token and job's durable PID.
             if record.get("desired") and record.get("instance") != compositor.instance:
@@ -392,6 +402,7 @@ class Controller:
                 record["phase"] = "restart-stop"
                 record["observed"] = "reconnecting"
                 record["instance"] = compositor.instance
+                self.quality.begin(record, "compositor-recovery")
             record["next_at"] = 0
         self.persist()
 
@@ -408,6 +419,7 @@ class Controller:
         mac = r["config"].get("platform") == "macos" or r["settings"].get("display", {}).get("adapter") == "betterdisplay"
         out["clipboard"] = {"state": "unsupported" if mac else "unverified",
                             "reason": "Stock Sunshine on macOS does not implement clipboard text input" if mac else None}
+        out["quality"] = self.quality.report(r)
         out["next_actions"] = (["focus", "disconnect"] if r.get("window") else ["retry", "disconnect"]) if r["desired"] else ["connect"]
         if r.get("journal"):
             out["next_actions"] += ["restore", "release --keep-host-settings"]
@@ -417,7 +429,7 @@ class Controller:
         if request.get("command") not in ("status", "stop"):
             self.finish_swap()
         self.scenes.interrupted(request)
-        if request.get("command") in ("connect", "disconnect", "restore", "release", "retry"):
+        if request.get("command") in ("connect", "disconnect", "restore", "release", "retry", "reconnect"):
             computer = request.get("computer")
             require(isinstance(computer, str) and NAME.fullmatch(computer), "invalid computer ID")
             with (self.root / (computer + ".gate")).open("a") as gate:
@@ -486,6 +498,19 @@ class Controller:
             self.scenes.restore_refs(request.get("scenes", []))
             return {"sources": outcomes}
         r = self.records.get(computer)
+        if action in ("quality", "measure", "readability"):
+            require(r, "computer has no managed session")
+            if action == "measure":
+                require(r["desired"] and r["phase"] == "watching", "Measure while the stream window is ready")
+                self.quality.measure(r, request.get("seconds", 30))
+            if action == "readability":
+                self.quality.assess(r, request["value"])
+            if action != "quality":
+                self.persist()
+            return self.quality.report(r)
+        if action == "local":
+            require(r and r["desired"] and r.get("window"), "stream has no ready window")
+            return self.compositor.call("stream_local", {"computer": computer})
         if action in ("clipboard", "input-release", "stats"):
             require(r and r["desired"] and r.get("window"), "stream has no ready window")
             capability = self.public(r)["clipboard"]
@@ -526,6 +551,16 @@ class Controller:
                  "operation": uuid.uuid4().hex, "desired": True, "phase": "preflight", "observed": "preflight",
                  "attempts": 0, "next_at": 0, "instance": self.compositor.instance}
             self.records[computer] = r
+            self.quality.begin(r, "connect")
+        elif action == "reconnect":
+            require(r and r["desired"], "use connect for a disconnected computer")
+            if r.get("reconnecting"):
+                return self.public(r)
+            require(r["phase"] == "watching" and self.processes.pid(r), "stream is not ready; use retry after it stops")
+            r.update(phase="reconnect-stop", observed="reconnecting", next_at=0, reconnecting=True,
+                     stopping_at=self.now(), close_requested=False, error=None,
+                     generation=r["generation"] + 1, operation=uuid.uuid4().hex)
+            self.quality.begin(r, request.get("reason", "reconnect"))
         elif action in ("disconnect", "restore", "release"):
             require(r, "computer has no managed session")
             if action == "release":
@@ -534,6 +569,7 @@ class Controller:
                 r["journal"] = {}
                 r["observed"], r["phase"], r["error"] = "disconnected", "idle", None
             else:
+                r.pop("reconnecting", None)
                 r.update(desired=False, generation=r["generation"] + 1, operation=uuid.uuid4().hex,
                          phase="stopping", observed="restoring", next_at=0, stopping_at=self.now(), error=None)
         elif action == "focus":
@@ -549,6 +585,8 @@ class Controller:
                 r["settings"] = computers[computer]["profiles"][r["profile"]]
             r.update(phase="preflight", observed="preflight", next_at=0, attempts=0, error=None,
                      token=None, generation=r["generation"] + 1, operation=uuid.uuid4().hex)
+            r.pop("reconnecting", None)
+            self.quality.begin(r, "retry")
         else:
             raise ValueError("unknown stream command")
         self.persist()
@@ -626,7 +664,7 @@ class Controller:
         evidence = self.processes.events(r)
         # SDL's explicit quit can precede logger EOF (a helper may retain the
         # pipe). Don't turn a normal close into launch uncertainty in that gap.
-        if r["desired"] and not pid and evidence.get("quit") and "terminated" not in evidence:
+        if r["desired"] and phase != "reconnect-stop" and not pid and evidence.get("quit") and "terminated" not in evidence:
             self.command({"command": "disconnect", "computer": r["computer"]})
             phase = r["phase"]
         if phase == "restart-stop":
@@ -649,6 +687,22 @@ class Controller:
                              error=None if done else "restore-conflict: manual changes preserved")
                 except (OSError, ValueError, subprocess.TimeoutExpired) as error:
                     r.update(phase="idle", observed="restore-pending", error=str(error))
+            return
+        if phase == "reconnect-stop":
+            if pid:
+                if not r.get("close_requested"):
+                    # Persist first: a repeated close after a lost reply is harmless.
+                    r["close_requested"] = True
+                    self.persist()
+                    self.compositor.call("stream_close", {"computer": r["computer"]})
+                elif now - r["stopping_at"] > 5:
+                    self.processes.stop(r, force=now - r["stopping_at"] > 8)
+                return
+            if not evidence.get("closed") and now - r["stopping_at"] < 8:
+                return  # Give the logger time to publish its final decoder summary.
+            r.pop("window", None)
+            r.update(token=None, phase="preflight", observed="reconnecting", next_at=0)
+            self.assign(r)  # Keep the zone reserved while the client restarts.
             return
         if phase == "unresolved":
             return
@@ -708,6 +762,7 @@ class Controller:
                 self.assign(r, w)
                 r["window"] = {k: w[k] for k in ("address", "pid", "stable_id")}
                 r.update(phase="watching", observed="window-ready", error=None)
+                r.pop("reconnecting", None)
                 if r["settings"].get("audio") == "host" and now >= r.get("next_audio_check", 0):
                     r["audio_health"] = host_headset(pid)
                     r["next_audio_check"] = now + 5
@@ -741,6 +796,7 @@ class Controller:
                 code = evidence.get("terminated")
                 if code == -100 and r.get("attempts", 0) < 3:
                     r["token"] = None
+                    self.quality.begin(r, "network-recovery")
                     self.failure(r, ValueError("host-unreachable: Moonlight connection lost"))
                 elif evidence.get("quit") and code is None:
                     self.command({"command": "disconnect", "computer": r["computer"]})
@@ -757,11 +813,14 @@ class Controller:
     def tick(self):
         self.finish_swap()
         before = json.dumps(self.state, sort_keys=True)
+        self.quality.harvest()
+        self.quality.due()
         self.scenes.tick()
         snap = self.compositor.snapshot()
         for r in self.records.values():
             if self.scenes.blocks(r["computer"]):
                 continue
+            phase, started = r["phase"], self.quality.clock()
             try:
                 self.step(r, snap)
             except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired) as error:
@@ -776,6 +835,8 @@ class Controller:
                     r.update(phase="idle", observed="restore-pending", error=str(error))
                 else:
                     self.failure(r, error)
+            finally:
+                self.quality.observe(r, phase, started, snap)
         if before != json.dumps(self.state, sort_keys=True):
             self.persist()
         self.keep_awake(snap)
@@ -792,6 +853,13 @@ class Controller:
             if self.inhibitors.get(r["computer"]) != value:
                 self.compositor.call("stream_inhibit", {"computer": r["computer"], "enabled": needed})
                 self.inhibitors[r["computer"]] = value
+
+    def tick_interval(self):
+        # Observe transitions promptly; keep retry backoff and steady polling.
+        moving = {"preflight", "preparing", "launch", "connecting", "reconnect-stop",
+                  "stopping", "restoring", "restart-stop", "failed-restore"}
+        return .2 if any(r["phase"] in moving and r.get("next_at", 0) <= self.now()
+                         for r in self.records.values()) else 1
 
 
 def request(runtime, payload, timeout=55):
@@ -850,7 +918,7 @@ def daemon(root, runtime, config):
             try:
                 next_tick = 0
                 while controller.running:
-                    if select.select([server], [], [], .2)[0]:
+                    if select.select([server], [], [], min(.2, max(0, next_tick - time.monotonic())))[0]:
                         with server.accept()[0] as client:
                             client.settimeout(2)
                             try:
@@ -873,7 +941,7 @@ def daemon(root, runtime, config):
                         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
                             # A compositor outage must not erase sources or launch duplicates.
                             controller.applied.clear()
-                        next_tick = time.monotonic() + 1
+                        next_tick = time.monotonic() + controller.tick_interval()
             finally:
                 path.unlink(missing_ok=True)
 
@@ -910,7 +978,7 @@ def main():
             child.add_argument("--app-class")
         child.add_argument("--workspace")
         child.add_argument("--json", action="store_true")
-    for name in ("probe", "connect", "focus", "disconnect", "status", "retry", "restore", "release", "profile", "clipboard", "input-release", "stats"):
+    for name in ("probe", "connect", "focus", "disconnect", "status", "retry", "restore", "release", "profile", "clipboard", "input-release", "stats", "local", "reconnect", "quality", "measure", "readability"):
         p = commands.add_parser(name)
         p.add_argument("computer", nargs="?" if name == "status" else None)
         p.add_argument("--json", action="store_true")
@@ -921,6 +989,10 @@ def main():
             p.add_argument("--workspace")
         if name == "release":
             p.add_argument("--keep-host-settings", action="store_true")
+        if name == "measure":
+            p.add_argument("--seconds", type=int, default=30)
+        if name == "readability":
+            p.add_argument("value", choices=("readable", "too-small", "blurry"))
     args = parser.parse_args()
     if args.command == "swap":
         args.windows = [{"address": args.address, "stable_id": args.stable_id},
