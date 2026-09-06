@@ -38,8 +38,18 @@ function label(source) {
   if (!source) return "Local windows"
   if (source.type === "empty") return "Empty"
   if (source.type === "local") return source.app_class || "Local windows"
-  if (source.type === "app") return source.app_name || source.desktop_id
+  if (source.type === "app") return displayName(source.app_name || source.desktop_id)
   return "Unknown source"
+}
+
+// Remote Desktops installs one launcher per computer, named "X (Remote
+// Desktop)"; the picker groups them apart and drops the suffix.
+function isRemoteDesktop(app) {
+  return !!app && (String(app.desktop_id || "").indexOf("remote-desktops-") === 0 || !!app.app_title)
+}
+
+function displayName(name) {
+  return String(name || "").replace(/\s*\(Remote Desktop\)\s*$/, "")
 }
 
 // The zone card's chip shows its assigned content.
@@ -74,9 +84,10 @@ function detail(source) {
 }
 
 // The header for the workspace's scene: what it is called, what state it
-// is in, and whether the saved definition is behind.
-function sceneTitle(scene) {
-  if (!scene || !scene.phase || scene.phase === "none" || scene.phase === "restored") return "No scene"
+// is in, and whether the saved definition is behind. Without a scene the
+// header is about the workspace itself.
+function sceneTitle(scene, workspace) {
+  if (!scene || !scene.phase || scene.phase === "none" || scene.phase === "restored") return workspace ? "Workspace " + workspace : "No scene"
   return (scene.document && scene.document.name) || "Unsaved scene"
 }
 
@@ -84,10 +95,106 @@ function sceneModified(scene) {
   return !!(scene && scene.document && scene.document.name && scene.modified && scene.phase !== "restored")
 }
 
+// How far the scene has come: "2 of 3 placed" while apps are placed, then
+// the phase in words.
+function sceneProgress(scene) {
+  var phase = scene ? scene.phase : ""
+  var sources = (scene && scene.sources) || []
+  var n = 0, placed = 0, trouble = 0
+  for (var i = 0; i < sources.length; i++) {
+    var s = sources[i]
+    if (s.type !== "app" && !(s.type === "local" && s.app_class)) continue
+    n++
+    if (s.status === "ready") placed++
+    else if (troubled(s.status) || s.error) trouble++
+  }
+  if (n > 0 && ["connecting", "partial", "ready"].indexOf(phase) !== -1) {
+    var t = placed + " of " + n + " placed"
+    if (trouble > 0) t += "  ·  " + trouble + (trouble === 1 ? " needs attention" : " need attention")
+    return t
+  }
+  return status(phase)
+}
+
 function sceneMeta(scene, layout, workspace) {
   var bits = []
-  if (layout) bits.push(layout + (workspace ? " on workspace " + workspace : ""))
-  var s = scene ? status(scene.phase) : ""
-  if (s !== "") bits.push(s)
+  if (layout) bits.push(layout)
+  var active = !!(scene && scene.phase && scene.phase !== "none" && scene.phase !== "restored")
+  if (!active) {
+    if (scene && scene.phase === "restored") bits.push(status("restored"))
+    else if (layout) bits.push("local windows in every zone")
+    return bits.join("  ·  ")
+  }
+  if (workspace) bits.push("workspace " + workspace)
+  var p = sceneProgress(scene)
+  if (p !== "") bits.push(p)
   return bits.join("  ·  ")
+}
+
+// The apps a scene places, by name, and a short form for a card's meta
+// line: "Chrome, Cursor +2".
+function appNames(sources) {
+  var out = []
+  for (var i = 0; i < (sources || []).length; i++) {
+    var s = sources[i]
+    if (s.type === "app") out.push(displayName(s.app_name || s.desktop_id))
+    else if (s.type === "local" && s.app_class) out.push(s.app_class)
+  }
+  return out
+}
+
+function summary(names, max) {
+  max = max || 2
+  if (names.length <= max) return names.join(", ")
+  return names.slice(0, max).join(", ") + " +" + (names.length - max)
+}
+
+// Case-insensitive substring match of a search query against any field.
+function matches(query, fields) {
+  var q = String(query || "").trim().toLowerCase()
+  if (q === "") return true
+  for (var i = 0; i < fields.length; i++) if (String(fields[i] || "").toLowerCase().indexOf(q) !== -1) return true
+  return false
+}
+
+// The windows open on a workspace, one entry per class: the one title
+// when there is one window, else how many there are.
+function openApps(windows, workspace) {
+  var by = {}, out = []
+  for (var i = 0; i < (windows || []).length; i++) {
+    var w = windows[i]
+    if (String(w.workspace) !== String(workspace) || !w.class) continue
+    if (!by[w.class]) { by[w.class] = { app_class: w.class, count: 0, title: "" }; out.push(by[w.class]) }
+    by[w.class].count++
+    by[w.class].title = w.title || ""
+  }
+  out.sort(function(a, b) { return a.app_class < b.app_class ? -1 : a.app_class > b.app_class ? 1 : 0 })
+  return out
+}
+
+// Where a zone sits, in words: "Top left", "Right", "Full screen". A word
+// is used only when it tells zones apart, so a column that fills the
+// height is just "Left". Zones whose words would collide get "" and are
+// shown by their layout name instead.
+function positionLabel(zone, area) {
+  var tol = Math.max(2, Math.min(area.w, area.h) * 0.02)
+  var left = zone.x <= area.x + tol, right = zone.x + zone.w >= area.x + area.w - tol
+  var top = zone.y <= area.y + tol, bottom = zone.y + zone.h >= area.y + area.h - tol
+  var h = (left && right) ? "" : left ? "left" : right ? "right" : "center"
+  var v = (top && bottom) ? "" : top ? "top" : bottom ? "bottom" : "middle"
+  var words = (v + " " + h).trim()
+  if (words === "") return "Full screen"
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+function positionLabels(zones, area) {
+  var labels = {}, counts = {}
+  if (!area) return labels
+  for (var i = 0; i < zones.length; i++) {
+    var l = positionLabel(zones[i], area)
+    labels[zones[i].name] = l
+    counts[l] = (counts[l] || 0) + 1
+  }
+  for (var name in labels) if (counts[labels[name]] > 1) labels[name] = ""
+  return labels
 }

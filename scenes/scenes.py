@@ -258,7 +258,10 @@ class Manager:
             for path in sorted(self.directory.glob("*.json")):
                 try:
                     doc, _ = self.resolve(json.loads(path.read_text()))
-                    entries.append({"name": path.stem, "layout": doc["layout"], "valid": True})
+                    # What the scene places, for the overlay's scene cards.
+                    sources = [{k: v for k, v in s.items() if k in ("zone", "type", "desktop_id", "app_name", "app_class")}
+                               for s in doc["sources"].values()]
+                    entries.append({"name": path.stem, "layout": doc["layout"], "valid": True, "sources": sources})
                 except (ValueError, KeyError, TypeError) as error:
                     entries.append({"name": path.stem, "valid": False, "error": str(error)})
             return {"version": 1, "scenes": entries}

@@ -17,6 +17,15 @@ Card {
   id: rail
   property real maxHeight: 100000
   readonly property string nameText: nameField.text
+  // The Scenes tab's picker: what is typed into its search, and the keys
+  // that drive it from the overlay and its IPC.
+  readonly property string searchText: contentPane.query
+  readonly property int matchCount: contentPane.matchCount
+  function focusSearch() { contentPane.focusSearch() }
+  function setSearch(text) { contentPane.setQuery(text) }
+  function typeSearch(text) { contentPane.typeSearch(text) }
+  function pickMatch() { contentPane.pickMatch() }
+  function hoverMatch(index) { contentPane.hoverMatch(index) }
 
   // Put the cursor in the layout-name field, preloaded with `initial`.
   function focusName(initial) {
@@ -63,7 +72,7 @@ Card {
   readonly property var keyHints: {
     if (overlay.naming || overlay.namingScene) return [["Enter", "save"], ["Esc", "cancel"]]
     if (overlay.renaming) return [["Enter", "rename"], ["Esc", "cancel"]]
-    if (overlay.contentMode) return [["click / ← → ↑ ↓", "select zone"], ["Tab", "next zone"], ["Enter / Esc", "close"], ["r", "refresh"], ["?", "hide keys"]]
+    if (overlay.contentMode) return [["click / ← → ↑ ↓", "select zone"], ["Tab", "next zone"], ["1 – 9", "zone by number"], ["type", "search apps"], ["↑ ↓", "pick a match"], ["Enter", "assign the match, else close"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
     if (overlay.numbering) return [["click", "next in order"], ["click again", "stack"], ["Backspace", "undo"], ["Enter", "done"]]
     if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w", "save"], ["Esc", "leave"], ["?", "hide keys"]]
     return [["← →", "browse (the windows follow)"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
@@ -490,7 +499,7 @@ Card {
           width: parent.width
           textFormat: Text.PlainText
           text: overlay.editing ? overlay.draftName
-            : overlay.contentMode ? ((overlay.catalogFailed || overlay.contentCatalog === null) ? "Scenes" : Content.sceneTitle(rail.scene))
+            : overlay.contentMode ? ((overlay.catalogFailed || overlay.contentCatalog === null) ? "Scenes" : Content.sceneTitle(rail.scene, overlay.workspaceId))
             : (overlay.viewed ? overlay.viewed.name : "No layouts")
           color: rail.accent
           font.family: rail.family
@@ -531,7 +540,7 @@ Card {
           Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.confirmingDelete; text: "Delete"; accent: Color.urgent; tooltipText: overlay.viewedIsDefault ? "The default layout cannot be deleted; make another the default first" : "Delete this layout's file (d)"; enabled: overlay.viewed !== null && !overlay.viewedIsDefault && !overlay.busy; onClicked: { overlay.choosingNew = false; overlay.confirmingDelete = true } }
           // the Scenes tab
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.sceneNamed; text: "Save"; tooltipText: rail.sceneModified ? "Save the changes to " + rail.scene.document.name : "Saved"; enabled: rail.sceneModified && !overlay.busy; onClicked: overlay.saveScene(rail.scene.document.name) }
-          Action { visible: rail.scenesTab && !overlay.namingScene && rail.contentReady; text: rail.sceneNamed ? "Save as…" : "Save scene…"; tooltipText: "Save this workspace's layout and content under a name"; enabled: !overlay.busy; onClicked: overlay.startSceneSave() }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.contentReady; text: rail.sceneNamed ? "Save as…" : "Save as scene…"; tooltipText: "Save this workspace's layout and content under a name"; enabled: !overlay.busy; onClicked: overlay.startSceneSave() }
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && rail.scene.can_restore === true && ["restored", "none"].indexOf(rail.scene.phase) === -1; text: "Restore previous"; tooltipText: "Put back the layout and content the workspace had before the scene"; enabled: !overlay.busy; onClicked: overlay.sceneAction("restore") }
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: "Retry"; tooltipText: "Check the pending content again"; enabled: !overlay.busy; onClicked: overlay.sceneAction("retry") }
           // naming a scene
@@ -604,7 +613,7 @@ Card {
       }
 
       // ---- The Scenes tab: saved scenes, what each zone holds, the selected zone.
-      ContentPane { visible: rail.scenesTab; width: column.width; overlay: rail.overlay }
+      ContentPane { id: contentPane; visible: rail.scenesTab; width: column.width; overlay: rail.overlay }
 
       // ---- Edit mode: unsaved changes.
       Prompt {

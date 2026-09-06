@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Scenes tab redesign. The header names the workspace until a scene is
+  applied, then the scene with how many apps are placed. Saved scenes are
+  cards like the layout list, with the apps drawn in their zones; the row
+  applies. One zone list replaces CONTENT, ZONE and CHANGE TO; the picker
+  under the selected zone filters as you type, shows app icons, and groups
+  open windows (with titles), remote desktops, and installed apps. Zone
+  cards show what they hold with icon, name, and state, plus Change… and
+  Clear; a card that needs attention is outlined and offers Retry. Digits
+  select zones by fill number, hovering a match previews it in the card, and
+  zones are listed by position ("Top left"). The catalog lists each app's
+  icon and each saved scene's sources, and skips placeholder window classes.
+
 - Remote connections now belong to Remote Desktops. Remove Hypertile's legacy
   controller, host adapters, display scripts, and remote controls. Scenes and
   session recovery use ordinary installed apps; pinned swaps remain generic.
