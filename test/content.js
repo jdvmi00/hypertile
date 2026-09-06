@@ -90,3 +90,8 @@ assert.strictEqual(controls.reconnect, "")
 assert.strictEqual(controls.restore, true)
 assert.strictEqual(C.streamControls({desired: true, observed: "connecting"}).retry, false)
 assert.strictEqual(C.streamControls({desired: true, observed: "needs-attention"}).retry, true)
+
+assert.equal(C.label({ type: "app", desktop_id: "remote-desktops-macbook.desktop", app_name: "MacBook" }), "MacBook")
+assert.equal(C.state({ type: "app", status: "moved" }).text, "Moved")
+assert.match(C.detail({ type: "app", status: "moved" }), /Moved by you/)
+assert.match(C.detail({ type: "app", status: "closed" }), /Closed by you/)

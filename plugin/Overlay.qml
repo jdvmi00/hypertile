@@ -270,6 +270,14 @@ Item {
     runCtl(args, "Putting " + what + " in " + selected + "…", "")
   }
 
+  function assignApp(app) {
+    if (!selected || !viewedIsActive) { errorText = "Select a zone in the current layout"; return }
+    var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", "app",
+      "--desktop-id", app.desktop_id, "--app-class", app.app_class, "--json"]
+    if (app.app_title) args.push("--app-title", app.app_title)
+    runCtl(args, "Opening " + app.name + " in " + selected + "…", "")
+  }
+
   // Focus-taking actions close the overlay (it holds the keyboard).
   function streamAction(action, computer, closeOverlay) {
     if (closeOverlay) {

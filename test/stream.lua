@@ -58,7 +58,7 @@ session.stream_assign(source)
 assert(engine.state.test.reservations["1"].remote == "a")
 for _, call in ipairs(calls) do
   assert(call.kind ~= "focus", "placement never steals focus")
-  if call.kind == "move" then assert(call.silent == true and call.window == "address:a") end
+  if call.kind == "move" then assert(call.follow == false and call.window == "address:a") end
 end
 calls = {}
 source.placed = true

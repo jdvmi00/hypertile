@@ -37,7 +37,7 @@ everything else in place, and is the one to run again after every update:
 - the engine and bridge into `~/.config/hypr/`, and the two shipped layouts
   into `~/.config/hypr/layouts/` (a layout that already exists is left alone)
 - `hypertile-ctl` into `~/.local/bin/`
-- the session recovery service, started by the layout loader
+- the session recovery and independent Scenes services, started by the layout loader
 - a `require("hypr.hypertile-layouts")` line in `hyprland.lua`
 - the bar widget after the workspaces (skipped when it is already on the bar)
 - a **Layouts** entry in the `SUPER+SPACE` menu (`--no-menu` skips it)
@@ -369,20 +369,16 @@ installing: `HYPERTILE_SRC=$PWD bin/hypertile-ctl list`.
 
 ## Remote desktops
 
-Remote desktops can be assigned to named zones with `hypertile-ctl stream`.
-Use `SUPER+SHIFT+Arrow` to swap a ready stream with a neighboring window; its
-zone reservation and saved assignment move with it.
+Scenes can launch or reuse installed apps in named zones, including each
+computer's Remote Desktops launcher. Placement happens once; subsequent window
+moves and closes stay under your control. The independent Scenes service does
+not own remote connections or host display settings.
 
-The overlay’s **Scenes** tab shows what each zone holds and assigns
-computers/profiles, local apps, and Empty to zones. Save and restore workspace
-scenes there or with `hypertile-ctl scene`.
-See [scenes and content](docs/SCENES.md) for the UI, CLI, and stable zone references.
-See [remote desktop setup and recovery](docs/STREAMS.md) for computer profiles,
-the Mac display adapter, and the Windows externally managed profile.
-
-[Performance reports](docs/STREAM-QUALITY.md) measure reconnect timing, retain
-Moonlight decoder summaries, and record readability at each view size. Use
-Reconnect from the Scenes tab's zone controls.
+Use the overlay’s **Scenes** tab or `hypertile-ctl scene` to assign apps, local
+windows, or Empty, then save the arrangement. See [scenes and content](docs/SCENES.md)
+for setup, migration from legacy stream sources, and recovery behavior.
+The [legacy stream tools](docs/STREAMS.md) remain available to restore existing
+host journals while migrating to Remote Desktops.
 
 ## License
 

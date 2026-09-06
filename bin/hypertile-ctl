@@ -449,12 +449,12 @@ end
 local argv = { ... }
 local cmd = table.remove(argv, 1)
 if cmd == "stream" or cmd == "computers" or cmd == "scene" then
-  local command = src and src ~= "" and (src .. "/bin/hypertile-stream")
-    or ((os.getenv("HOME") or "") .. "/.local/bin/hypertile-stream")
+  local entry = cmd == "scene" and "hypertile-scenes" or "hypertile-stream"
+  local command = src and src ~= "" and (src .. "/bin/" .. entry)
+    or ((os.getenv("HOME") or "") .. "/.local/bin/" .. entry)
   local words = { command }
   if cmd == "computers" then words[#words + 1] = "computers" end
   if cmd == "scene" then
-    words[#words + 1] = "scene"
     if #argv == 0 then argv[1] = "current" end
   end
   if cmd == "stream" and #argv == 0 then argv[1] = "status" end
