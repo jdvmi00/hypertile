@@ -61,12 +61,13 @@ local session = require("hypertile-session")
 
 -- Order restoration: saved order o1..o4 maps to live c, a, d, b.
 local snapshot = {
-  workspaces = { { selector = "1", layout = "lua:test", order = { "o1", "o2", "o3", "o4" }, monitor = "DP-1", visible = true } },
+  workspaces = { { selector = "1", layout = "lua:test", order = { "o1", "o2", "o3", "o4" }, monitor = "DP-1", visible = true, navigation_keep = true } },
   windows = {}, layouts = {}, active = nil, workspace = "1",
 }
 local result = session.finish({ snapshot = snapshot, matches = { o1 = "c", o2 = "a", o3 = "d", o4 = "b" } })
 assert(table.concat(order, ",") == "c,a,d,b", "order restored without relying on recalculation: " .. table.concat(order, ","))
 assert(#result.warnings == 0, "no warnings")
+assert(engine.live.test.state.navigation_keep["1"], "explicit slot geometry restored")
 local swaps = 0
 for _, args in ipairs(dispatched) do if args.kind == "swap" then swaps = swaps + 1 end end
 assert(swaps <= 3, "at most n-1 swaps")
@@ -91,8 +92,12 @@ assert(rules[1].workspace == "1" and rules[1].layout == "lua:test" and rules[3].
 
 -- snapshot prunes cached orders for workspaces that no longer exist.
 engine.live.test.orders["1"] = { "a", "b", "c", "d" }
+engine.live.test.boxes = {["7"] = {}}
+engine.live.test.state.navigation_keep["7"] = true
 local snap = session.snapshot()
 assert(engine.live.test.orders["7"] == nil and engine.live.test.orders["1"], "stale workspace order pruned")
 assert(#snap.workspaces == 1 and table.concat(snap.workspaces[1].order, ",") == "a,b,c,d", "snapshot order follows the engine cache")
+assert(snap.workspaces[1].navigation_keep, "snapshot preserves explicit slot geometry")
+assert(not engine.live.test.boxes["7"] and not engine.live.test.state.navigation_keep["7"], "stale navigation state pruned")
 
 print("session adapter: all checks passed")
