@@ -149,3 +149,15 @@ engine.handle_msg(collapsed.compiled, collapsed.state, "reset", app)
 recalculate()
 assert(app.size.x == 1000, "reset restores collapse policy")
 print("collapsed-slot navigation: all checks passed")
+
+provider = engine.provider("stacked", {columns={{name="a"}, {name="b"}},
+  fill={"a", "a", "b"}, empty="keep", single="slot"})
+ws.tiled_layout = "lua:stacked"
+apps = {app, other}
+recalculate()
+dispatched = nil
+nav.swap("d")
+assert(dispatched and dispatched.target == "address:other", "retain swaps within a stack")
+nav.swap("r")
+assert(zone(app) == "b" and zone(other) == "a", "move out of a stack into an empty slot")
+print("stack navigation: all checks passed")

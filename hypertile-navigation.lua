@@ -50,6 +50,14 @@ local function navigate(direction, swap)
     local session = require("hypr.hypertile-session")
     local source, slots = session.navigation_slots(active)
     if source then
+      -- Retain movement within a stacked slot before leaving that slot.
+      local stacked = M.neighbor(active, source.windows, direction)
+      if stacked then
+        if not session.swap(active, stacked) then
+          hl.dispatch(hl.dsp.window.swap({ target = "address:" .. stacked.address }))
+        end
+        return
+      end
       local destination = M.neighbor(source, slots, direction)
       if not destination then return end
       if #destination.windows == 0 then
