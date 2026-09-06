@@ -57,6 +57,15 @@ function M.snapshot()
       for id, s in pairs(streams) do
         if s.address == win.address and s.pid == win.pid and s.stable_id == win.stable_id then source = id end
       end
+      local scene_app
+      for workspace, scene in pairs(scene_content) do
+        if workspace == selector(win.workspace) then
+          for _, ref in pairs(scene.app_placements or {}) do
+            if ref.address == win.address and ref.pid == win.pid and ref.stable_id == win.stable_id
+              and live and live.state.pins[win.address] == ref.zone then scene_app = true end
+          end
+        end
+      end
       out.windows[#out.windows + 1] = {
         address = win.address, stable_id = win.stable_id, pid = win.pid, class = win.class, title = win.title,
         initial_class = win.initial_class, initial_title = win.initial_title,
@@ -65,7 +74,7 @@ function M.snapshot()
         fullscreen = win.fullscreen, fullscreen_client = win.fullscreen_client,
         pin = live and live.state.pins[win.address], grouped = win.group ~= nil,
         pin_exclusive = live and live.state.exclusive_pins and live.state.exclusive_pins[win.address] or nil,
-        stream = source,
+        stream = source, scene_app = scene_app,
       }
     end
   end
@@ -161,7 +170,8 @@ function M.scene_clear(request)
     if live.state.scene_empty then live.state.scene_empty[tostring(old.workspace_id)] = nil end
     for _, p in ipairs(old.pins or {}) do
       local w = windows[p.address]
-      if w and w.stable_id == p.stable_id and w.pid == p.pid and live.state.pins[p.address] == p.zone then
+      if w and w.stable_id == p.stable_id and w.pid == p.pid and w.workspace
+        and selector(w.workspace) == request.workspace and live.state.pins[p.address] == p.zone then
         live.state.pins[p.address] = p.before
         if live.state.exclusive_pins then live.state.exclusive_pins[p.address] = p.exclusive end
       end
@@ -173,9 +183,18 @@ function M.scene_clear(request)
 end
 
 function M.scene_content_apply(request)
+  local previous = scene_content[request.workspace]
+  if request.operation and previous and previous.operation == request.operation then return previous end
   local ws, live
   for _, w in ipairs(hl.get_workspaces()) do
     if selector(w) == request.workspace and w.tiled_layout == request.layout then ws = w end
+  end
+  if not ws and request.allow_missing_workspace and request.operation then
+    for _, w in ipairs(hl.get_workspaces()) do
+      assert(selector(w) ~= request.workspace, "scene workspace layout changed")
+    end
+    assert(request.workspace:match("^[1-9][0-9]*$"), "invalid scene workspace")
+    ws = { id = tonumber(request.workspace) }
   end
   assert(ws, "scene workspace or layout changed")
   live = engine.live[request.layout:match("^lua:(.+)$")]
@@ -195,7 +214,8 @@ function M.scene_content_apply(request)
   live.state.scene_empty = live.state.scene_empty or {}
   live.state.scene_empty[tostring(ws.id)] = empty
   live.state.exclusive_pins = live.state.exclusive_pins or {}
-  local record = { workspace_id = ws.id, layout = request.layout, pins = json.array(), results = json.array() }
+  local record = { workspace_id = ws.id, layout = request.layout, operation = request.operation,
+    app_placements = {}, pins = json.array(), results = json.array() }
   scene_content[request.workspace] = record
   for _, source in ipairs(request.sources) do
     if source.type == "local" and source.app_class then
@@ -217,6 +237,49 @@ function M.scene_content_apply(request)
   end
   refresh_workspace(ws)
   return { results = record.results, pins = record.pins }
+end
+
+-- Called once per scene operation, with a live identity rather than a class
+-- dispatcher. Validation and placement happen together on the compositor thread.
+function M.scene_app_place(request)
+  local record = assert(scene_content[request.workspace], "Scene was superseded")
+  assert(request.operation and record.operation == request.operation, "Scene was superseded")
+  assert(record.layout == request.layout, "Scene layout changed")
+  local live = assert(engine.live[request.layout:match("^lua:(.+)$")], "Scene layout is unavailable")
+  request.zone = live.compiled.zone_ids[request.zone_id]
+  assert(request.zone and not live.compiled.leaf_opts[request.zone].spacer, "Scene zone is unavailable")
+  local ws
+  for _, candidate in ipairs(hl.get_workspaces()) do
+    if selector(candidate) == request.workspace then
+      assert(candidate.tiled_layout == request.layout, "Scene workspace layout changed")
+      ws = candidate
+    end
+  end
+  local previous = record.app_placements[request.zone_id]
+  if previous then return previous end
+  local matches = {}
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and w.workspace and w.class == request.app_class
+      and (not request.app_title or w.title == request.app_title) then matches[#matches + 1] = w end
+  end
+  assert(#matches == 1, "App window match changed or is ambiguous")
+  local w = matches[1]
+  assert(w.address == request.address and w.stable_id == request.stable_id and w.pid == request.pid,
+    "App window identity changed")
+  for _, source in pairs(streams) do
+    assert(source.address ~= w.address or source.stable_id ~= w.stable_id or source.pid ~= w.pid,
+      "Disconnect the legacy Hypertile stream before assigning this app")
+  end
+  local pin = { address = w.address, stable_id = w.stable_id, pid = w.pid, zone = request.zone,
+    before = live.state.pins[w.address], exclusive = (live.state.exclusive_pins or {})[w.address] }
+  -- Mark consumed before dispatching. A lost IPC reply or later manual move
+  -- must not turn the next call into a second placement.
+  record.app_placements[request.zone_id] = pin
+  record.pins[#record.pins + 1] = pin
+  M.place({ address = w.address, layout = request.layout,
+    saved = { workspace = request.workspace, pin = request.zone, pin_exclusive = true, floating = false } })
+  if ws then refresh_workspace(ws) end
+  return pin
 end
 
 function M.scene_restore_pins(request)
@@ -610,7 +673,7 @@ function M.place(request)
   local saved, address = request.saved, request.address
   local window = "address:" .. address
   dispatch(hl.dsp.window.fullscreen_state, { window = window, internal = 0, client = 0, action = "set" })
-  dispatch(hl.dsp.window.move, { window = window, workspace = saved.workspace, silent = true })
+  dispatch(hl.dsp.window.move, { window = window, workspace = saved.workspace, follow = false })
   dispatch(hl.dsp.window.float, { window = window, action = saved.floating and "on" or "off" })
   if saved.floating then
     dispatch(hl.dsp.window.resize, { window = window, x = saved.size.x, y = saved.size.y })

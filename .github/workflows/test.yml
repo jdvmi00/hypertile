@@ -41,7 +41,7 @@ jobs:
       - name: Remote streams
         run: python3 test/stream.py && python3 test/windows_display.py && lua test/stream.lua
       - name: Scenes and content
-        run: python3 test/scenes.py && lua test/scenes.lua && node test/content.js
+        run: python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && node test/content.js
       - name: Stream quality and reconnect
         run: python3 test/quality.py && lua test/quality.lua
       - name: Managed layout browsing

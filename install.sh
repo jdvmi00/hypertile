@@ -68,6 +68,32 @@ for tool in lua jq python3; do
 done
 [[ -e "$hypr/hyprland.lua" ]] || { echo "install.sh: $hypr/hyprland.lua not found; is this an Omarchy 4 (Lua config) system?" >&2; exit 1; }
 
+# Retire old in-memory scene code before installing the independent writer.
+# Keep active legacy connection recovery running until the owner migrates it.
+python3 - "$bin" <<'PY_SERVICES'
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+bin_dir = Path(sys.argv[1])
+env = dict(os.environ)
+env.pop("HYPERTILE_SRC", None)
+legacy = bin_dir / "hypertile-stream"
+if legacy.exists():
+    status = subprocess.run([str(legacy), "status", "--json"], env=env, capture_output=True, text=True, timeout=5)
+    if status.returncode == 0:
+        if any(r.get("desired") or r.get("journal") for r in json.loads(status.stdout).get("computers", [])):
+            sys.exit("install.sh: disconnect/restore legacy Hypertile streams before installing this update")
+        subprocess.run([str(legacy), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
+for name in ("hypertile-scenes", "hypertile-session"):
+    entry = bin_dir / name
+    if entry.exists():
+        status = subprocess.run([str(entry), "status"], env=env, capture_output=True, timeout=5)
+        if status.returncode == 0:
+            subprocess.run([str(entry), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
+PY_SERVICES
+
 mkdir -p "$hypr/layouts" "$bin" "$state"
 
 # One backup per edited config file, overwritten on each edit.
@@ -81,6 +107,7 @@ done
 install -m 0755 "$src/bin/hypertile-ctl" "$bin/hypertile-ctl"
 install -m 0755 "$src/bin/hypertile-session" "$bin/hypertile-session"
 install -m 0755 "$src/bin/hypertile-stream" "$bin/hypertile-stream"
+install -m 0755 "$src/bin/hypertile-scenes" "$bin/hypertile-scenes"
 session_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session"
 mkdir -p "$session_data"
 for f in "$src"/session/*.py; do install -m 0644 "$f" "$session_data/$(basename "$f")"; done

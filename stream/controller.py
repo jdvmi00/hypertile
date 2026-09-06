@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import re
-import select
 import shlex
 import shutil
 import signal
@@ -29,6 +28,7 @@ from scenes import Manager
 from audio import host_headset
 from quality import Tracker, VideoStats
 from browse import Browser
+from ipc import request, daemon
 import windows_display
 
 CLASS = "com.moonlight_stream.Moonlight"
@@ -464,7 +464,7 @@ class Processes:
 
 
 class Controller:
-    def __init__(self, root, config, compositor, processes=None, host_factory=Host, now=time.time):
+    def __init__(self, root, config, compositor, processes=None, host_factory=Host, now=time.time, manage_scenes=True):
         self.root, self.config, self.compositor = root, config, compositor
         self.processes = processes or Processes(root, compositor)
         self.host_factory, self.now = host_factory, now
@@ -475,6 +475,7 @@ class Controller:
         self.applied = {}
         self.inhibitors = {}
         self.scenes = Manager(self, lambda: configuration(self.config))
+        self.manage_scenes = manage_scenes
         self.quality = Tracker(self)
         self.browser = Browser(self)
         for record in self.records.values():
@@ -509,10 +510,12 @@ class Controller:
         return out
 
     def command(self, request):
-        self.browser.before_command(request)
+        if self.manage_scenes:
+            self.browser.before_command(request)
         if request.get("command") not in ("status", "stop"):
             self.finish_swap()
-        self.scenes.interrupted(request)
+        if self.manage_scenes:
+            self.scenes.interrupted(request)
         if request.get("command") in ("connect", "disconnect", "restore", "release", "retry", "reconnect"):
             computer = request.get("computer")
             require(isinstance(computer, str) and NAME.fullmatch(computer), "invalid computer ID")
@@ -524,6 +527,7 @@ class Controller:
     def _command(self, request):
         action, computer = request["command"], request.get("computer")
         if action == "scene":
+            require(self.manage_scenes, "Use hypertile-ctl scene; Scenes has its own service")
             return self.scenes.command(request)
         if action == "status":
             if computer:
@@ -579,7 +583,8 @@ class Controller:
                         self.records[source["computer"]] = r
                         self.persist()
                         outcomes.append(self.public(r))
-            self.scenes.restore_refs(request.get("scenes", []))
+            if self.manage_scenes:
+                self.scenes.restore_refs(request.get("scenes", []))
             return {"sources": outcomes}
         r = self.records.get(computer)
         if action in ("quality", "measure", "readability"):
@@ -602,6 +607,7 @@ class Controller:
             self.compositor.call("stream_shortcut", {"computer": computer, "action": action})
             return {"sent": action, "computer": computer}
         if action == "profile":
+            require(self.manage_scenes, "Disconnect, then connect with --profile to change a legacy stream profile")
             require(r and r["desired"], "connect this computer before changing its profile")
             return self.scenes.command({"action": "content", "workspace": r["assignment"]["workspace"],
                                        "zone": r["assignment"]["zone"], "type": "stream", "computer": computer,
@@ -711,7 +717,8 @@ class Controller:
                 else:
                     r["assignment"].pop("zone_id", None)
                 self.applied.pop(w["computer"], None)
-        self.scenes.swapped()
+        if self.manage_scenes:
+            self.scenes.swapped()
         self.state.pop("swap")
         self.persist()
 
@@ -942,15 +949,17 @@ class Controller:
             self.assign(r)
 
     def tick(self):
-        self.browser.tick()
+        if self.manage_scenes:
+            self.browser.tick()
         self.finish_swap()
         before = json.dumps(self.state, sort_keys=True)
         self.quality.harvest()
         self.quality.due()
-        self.scenes.tick()
+        if self.manage_scenes:
+            self.scenes.tick()
         snap = self.compositor.snapshot()
         for r in self.records.values():
-            if r["assignment"]["workspace"] in self.browser.active or self.scenes.blocks(r["computer"]):
+            if self.manage_scenes and (r["assignment"]["workspace"] in self.browser.active or self.scenes.blocks(r["computer"])):
                 continue
             phase, started = r["phase"], self.quality.clock()
             try:
@@ -994,91 +1003,11 @@ class Controller:
                          for r in self.records.values()) else 1
 
 
-def request(runtime, payload, timeout=55):
-    with socket.socket(socket.AF_UNIX) as client:
-        client.settimeout(timeout)
-        client.connect(str(runtime / "control.sock"))
-        client.sendall(json.dumps(payload).encode() + b"\n")
-        data = bytearray()
-        while not data.endswith(b"\n") and len(data) < 2_000_000:
-            part = client.recv(65536)
-            if not part:
-                break
-            data.extend(part)
-        result = json.loads(data)
-        require(result.get("ok"), result.get("error", "controller request failed"))
-        return result["result"]
-
-
-def daemon(root, runtime, config):
-    root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    runtime.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(root, 0o700)
-    os.chmod(runtime, 0o700)
-    with (root / "writer.lock").open("w") as lock:
-        instance = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE")
-        require(instance, "start the controller inside the Hyprland session")
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            previous = request(runtime, {"command": "status"})
-            if previous.get("instance") == instance:
-                return
-            alive = subprocess.run(["hyprctl", "-i", previous["instance"], "version"],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
-            require(alive.returncode != 0, "stream controller belongs to another running compositor")
-            request(runtime, {"command": "stop"})
-            for _ in range(50):
-                try:
-                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                    break
-                except BlockingIOError:
-                    time.sleep(.1)
-            else:
-                raise ValueError("previous stream controller has not stopped")
-        controller = Controller(root, config, Compositor(instance, runtime))
-        def stop(*_):
-            controller.running = False
-        signal.signal(signal.SIGTERM, stop)
-        signal.signal(signal.SIGINT, stop)
-        path = runtime / "control.sock"
-        path.unlink(missing_ok=True)
-        with socket.socket(socket.AF_UNIX) as server:
-            server.bind(str(path))
-            os.chmod(path, 0o600)
-            server.listen(16)
-            try:
-                next_tick = 0
-                while controller.running:
-                    if select.select([server], [], [], min(.2, max(0, next_tick - time.monotonic())))[0]:
-                        with server.accept()[0] as client:
-                            client.settimeout(2)
-                            try:
-                                data = bytearray()
-                                while not data.endswith(b"\n") and len(data) < 65536:
-                                    part = client.recv(8192)
-                                    if not part:
-                                        break
-                                    data.extend(part)
-                                result = {"ok": True, "result": controller.command(json.loads(data))}
-                            except Exception as error:
-                                result = {"ok": False, "error": str(error)}
-                            try:
-                                client.sendall(json.dumps(result).encode() + b"\n")
-                            except OSError:
-                                pass  # Intent remains durable if the CLI disconnects.
-                    if time.monotonic() >= next_tick:
-                        try:
-                            controller.tick()
-                        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
-                            # A compositor outage must not erase sources or launch duplicates.
-                            controller.applied.clear()
-                        next_tick = time.monotonic() + controller.tick_interval()
-            finally:
-                path.unlink(missing_ok=True)
-
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] == "scene":
+        from scene_service import main as scene_main
+        return scene_main(sys.argv[2:])
     os.umask(0o077)
     root, runtime, config = paths()
     parser = argparse.ArgumentParser(description="Manage paired remote desktops in Hypertile zones")
@@ -1142,7 +1071,7 @@ def main():
             launch_job(args.path)
             return
         if args.command == "daemon":
-            daemon(root, runtime, config)
+            daemon(root, runtime, config, lambda r, c, h: Controller(r, c, h, manage_scenes=False))
             return
         if args.command == "computers":
             computers = configuration(config)

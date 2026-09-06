@@ -12,7 +12,7 @@ local calls, timers = {}, {}
 local function tag(kind) return function(args) args.kind = kind; return args end end
 hl = { get_windows = function() return windows end, get_workspaces = function() return { ws } end,
   window_rule = function() end, timer = function(callback) timers[#timers + 1] = callback end,
-  dsp = { window = { resize = tag("resize") }, focus = tag("focus"), send_key_state = tag("key") },
+  dsp = { window = { resize = tag("resize"), move = tag("move"), float = tag("float"), fullscreen_state = tag("fullscreen") }, focus = tag("focus"), send_key_state = tag("key") },
   dispatch = function(args) calls[#calls + 1] = args end }
 local session = require("hypertile-session")
 package.loaded["hypertile-bridge"] = {
@@ -63,4 +63,43 @@ ok = pcall(session.stream_shortcut, { computer = "laptop", action = "clipboard" 
 assert(not ok and #calls == 3, "shortcut refuses a reused address")
 ok = pcall(engine.compile, { columns = { { name = "a", id = "same" }, { name = "b", id = "same" } } })
 assert(not ok, "duplicate zone identities are refused")
+-- Ordinary apps share no stream reservation or launch rule. Match and move
+-- one final window, rejecting a second copy and recycled compositor identities.
+windows[2] = nil
+windows[1].title = "Document"
+request.operation = "app-operation"
+session.scene_content_apply(request)
+local place = { workspace = "1", layout = "lua:test", operation = "app-operation", zone_id = "b", zone = "middle",
+  address = "a", stable_id = 1, pid = 11, app_class = "editor", app_title = "Document" }
+local count = #calls
+place.stable_id = 999
+assert(not pcall(session.scene_app_place, place) and #calls == count, "reused address cannot receive app placement")
+place.stable_id = 1
+windows[2] = { address = "extra", stable_id = 44, pid = 77, class = "editor", title = "Document", workspace = ws, mapped = true }
+assert(not pcall(session.scene_app_place, place) and #calls == count, "atomic placement rejects a late duplicate")
+windows[2] = nil
+local pin = session.scene_app_place(place)
+assert(pin.zone == "middle" and engine.state.test.pins.a == "middle")
+assert(engine.state.test.exclusive_pins.a, "generic app occupies the requested zone")
+local ws2 = { id = 2, name = "2", tiled_layout = "lua:test" }
+windows[1].workspace = ws2
+count = #calls
+session.scene_app_place(place)
+assert(#calls == count, "a repeated operation never moves a departed app back")
+session.scene_content_apply(request)
+assert(#calls == count, "repeated content apply preserves the original operation")
+session.scene_clear({ workspace = "1" })
+assert(engine.state.test.pins.a == "middle", "clearing a scene preserves a window moved to another workspace")
+assert(not pcall(session.scene_app_place, place) and #calls == count, "superseded operation cannot place a late window")
+windows[1].workspace = ws
+request.operation = "new-app-operation"
+session.scene_content_apply(request)
+place.operation = request.operation
+hl.get_workspaces = function() return {} end
+local before = #calls
+session.scene_app_place(place)
+assert(#calls > before, "a pending app can recreate its vanished empty workspace")
+local move
+for i = before + 1, #calls do if calls[i].kind == "move" then move = calls[i] end end
+assert(move and move.workspace == "1" and move.follow == false, "app placement does not take focus")
 print("scene adapter: all checks passed")

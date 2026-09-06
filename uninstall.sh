@@ -63,6 +63,10 @@ if [[ -x "$bin/hypertile-stream" ]]; then
   "$bin/hypertile-stream" stop >/dev/null 2>&1 || true
 fi
 
+if [[ -x "$bin/hypertile-scenes" ]]; then
+  "$bin/hypertile-scenes" stop >/dev/null 2>&1 || true
+fi
+
 # One backup per edited config file, overwritten on each edit.
 backup() {
   cp "$1" "$1.hypertile.bak"
@@ -140,6 +144,9 @@ done
 rm -f "$bin/hypertile-ctl"
 rm -f "$bin/hypertile-session" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/service.py" \
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/streams.py"
+rm -f "$bin/hypertile-scenes" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/scene_service.py" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/apps.py" \
+  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/ipc.py"
 rm -f "$bin/hypertile-stream" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/controller.py" \
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/mac_display.py" \
   "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/scenes.py" \

@@ -568,9 +568,24 @@ Column {
           }
         }
       }
-      Muted {
-        visible: pane.computers.length === 0
-        text: "No computers configured. Pair one in Moonlight and add it to ~/.config/hypertile/computers.json."
+      Column {
+        width: pane.width
+        spacing: Style.spacing.xxs
+        Label { text: "Installed apps"; topPadding: Style.spacing.xs; bottomPadding: Style.spacing.xxs }
+        Repeater {
+          model: pane.catalog.apps || []
+          ListRow {
+            required property var modelData
+            text: modelData.name
+            trait: "launch or reuse"
+            current: pane.source !== null && pane.source.type === "app" && pane.source.desktop_id === modelData.desktop_id
+            onClicked: pane.overlay.assignApp(modelData)
+          }
+        }
+        Muted {
+          visible: (pane.catalog.apps || []).length === 0
+          text: "Apps with a known window identity appear here. Open an installed app to help identify it."
+        }
       }
 
       Column {

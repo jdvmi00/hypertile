@@ -54,7 +54,7 @@ end
 -- second watcher or trigger a second restore. Start after workspace rules.
 if hl.timer then
   hl.timer(function()
-    local command = (os.getenv("HOME") or "") .. "/.local/bin/hypertile-stream"
+    local command = (os.getenv("HOME") or "") .. "/.local/bin/hypertile-scenes"
     local f = io.open(command, "r")
     if f then
       f:close()

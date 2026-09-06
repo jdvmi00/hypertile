@@ -3,7 +3,7 @@
 // One short phrase for a stream's observed state or a scene's phase. The
 // empty string means there is nothing to say (no scene, no state).
 var STATUS = {
-  ready: "Ready", restored: "Previous arrangement restored", partial: "Some content needs attention",
+  "waiting-session": "Waiting for session recovery", "waiting-window": "Opening app…", moved: "Moved", closed: "Closed", ready: "Ready", restored: "Previous arrangement restored", partial: "Some content needs attention",
   stopping: "Finishing previous connections…", layout: "Applying layout…", connecting: "Connecting…",
   preflight: "Checking host…", preparing: "Preparing display…", "preparing-display": "Preparing display…",
   "window-ready": "Connected", "startup-window": "Starting…", reconnecting: "Reconnecting…",
@@ -92,6 +92,7 @@ function label(source) {
   if (!source) return "Local windows"
   if (source.type === "empty") return "Empty"
   if (source.type === "local") return source.app_class || "Local windows"
+  if (source.type === "app") return source.app_name || source.desktop_id
   return source.computer + (source.profile ? " · " + source.profile : "")
 }
 
@@ -121,6 +122,11 @@ function detail(source) {
   if (source.type === "local") return source.status === "needs-attention"
     ? (source.error || "No matching window on this workspace yet")
     : "One matching window is pinned here"
+  if (source.type === "app") return source.error || (source.status === "moved"
+    ? "Moved by you; apply the scene again to place it here"
+    : source.status === "closed" ? "Closed by you; apply the scene again to open it"
+    : source.status === "waiting-window" ? "Waiting for the app window"
+    : "Placed here once; you can move it to any workspace")
   var bits = [status(source.status) || "Pending"]
   var requested = source.runtime && source.runtime.requested ? source.runtime.requested : {}
   if (source.status === "window-ready") bits.push(audioShort(requested.audio))

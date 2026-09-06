@@ -1,167 +1,174 @@
 # Scenes and content
 
-A scene saves a workspace's layout and the content assigned to its zones. It can
-combine local windows, paired remote desktops with named profiles, and Empty.
-The stream controller applies the scene, owns its connections, and records
-unfinished work for recovery. See [remote desktop setup](STREAMS.md) first to
-configure and pair computers.
+A scene saves a workspace's layout and the apps assigned to its zones. Choose
+an installed app, an already open local window, normal fill order, or Empty.
+Scenes launches or reuses an app window and places it once. You can then move,
+resize, float, fullscreen, or close it without Scenes pulling it back or
+opening another copy.
+
+Remote Desktops is an ordinary app in this model. It owns Moonlight/Sunshine,
+connection profiles, reconnects, and host display restoration. Hypertile owns
+layout and initial placement. No stream controller or computers.json is needed
+for app scenes.
 
 ## Overlay
 
-Open **Super+Alt+L** and switch the rail to its **Scenes** tab. The header
-names the workspace's scene (or *No scene*) with its state; **Save scene…**
-stores the current layout and content under a name, and **Restore previous**
-puts back what the workspace had before the scene. **Saved scenes** lists every
-scene with **Apply**; the applied one reads *Applied*, and ✕ deletes a saved
-definition after a confirmation (nothing on the workspace changes).
+Open **Super+Alt+L**, switch to **Scenes**, and select a zone. Under **Change to**,
+**Installed apps** offers desktop entries with a known window identity. Select
+**MacBook (Remote Desktop)** to launch or reuse that computer in the selected
+zone. Install its launcher in Remote Desktops first. Each computer's launcher
+uses that computer's default profile.
 
-**Content** lists the zones in fill order with what each one holds: local
-windows by fill order, *Empty*, one app, or a computer and profile with its
-state. Click a row or a zone on the screen, or move with Tab and the arrows.
-The **Zone** section shows the selected zone; for a remote desktop it offers
-Focus, Disconnect and Reconnect (Retry and Restore display when they apply),
-and **More controls** holds capture toggling, clipboard typing where supported,
-Moonlight statistics, focusing a local window, the Performance panel and the
-raw status. **Change to** puts something else in the zone: Local windows,
-Empty, a computer's profile (its non-default traits are shown beside it), or an
-open app. Choosing a computer already on this workspace moves its assignment.
-Choosing another profile reconnects that computer after restoring the old
-profile's managed display settings.
+Applications declaring `StartupWMClass` are available immediately. For other
+apps, an open window whose class equals the desktop ID without `.desktop`
+provides the identity. Apps without either can be configured through the CLI
+with an explicit class and optional exact title. **Open apps** retains the
+previous local-only behavior: pin one matching tiled window already on this
+workspace, without launching it.
 
-Local app assignments use one matching tiled window on that workspace. Open the
-app and Retry if none exists. If several match, resolve the ambiguity first;
-Hypertile does not guess, launch another copy, or move a window from elsewhere.
-Unassigned zones continue to use the layout's normal fill and application rules.
-At least one fill/cycle zone must remain available for local windows.
+**Save scene…** stores the current definition. **Apply** requests that saved
+arrangement again, including apps you moved or closed. **Retry** explicitly
+rechecks placement and may retry a failed/timed-out launch. Closing an app or
+moving it yourself leaves its source marked *Closed* or *Moved*. Changes to the
+saved definition happen only when you save.
 
-Changes and source swaps mark the current scene modified; saved definitions
-change only when explicitly saved (**Save** writes a named scene back). Restore
-previous returns to the layout and content from before the first scene
-application in this sequence. A later scene replaces pending work from the
-earlier one; compatible ready streams retain their client process. Failed
-sources remain visible while local content can finish applying.
+**Restore previous** restores the prior layout/content and eligible app pins.
+It leaves apps open and does not move departed windows back to their original
+workspace. Changing scenes or cancelling an in-progress scene stops pending
+placement; an app already launched may still open normally. Empty/fill behavior
+and the layout's application rules continue to apply to other windows.
 
-Browsing under the Layouts tab moves the live windows, including connected
-remote desktops. Scene assignments stay on the committed layout while the
-other layout is previewed. Closing the overlay or returning to Scenes restores
-that layout without reconnecting streams or changing saved scenes. An abandoned
-preview expires after ten seconds without its overlay heartbeat; restarting the
-controller also restores it. Session recovery retains its last committed
-checkpoint while a preview is active. Using another layout there asks first:
-the assignments are replaced with local content on the chosen layout (streams
-disconnect, local apps stay open). Layout editing takes effect on Save. Deleted
-referenced zones require choosing replacements; they are not reassigned by
-their position in the layout.
-
-Ordinary scene changes do not take focus. Focus, clipboard, statistics, and
-capture controls are explicit interactions with the selected remote desktop and
-close the overlay.
+Layout browsing previews the geometry and restores the committed layout when
+you leave the preview. The lease expires after ten seconds without a heartbeat.
+Session capture waits until the preview ends. Choosing a different layout
+replaces the assignments with local content; open apps keep running.
 
 ## CLI
 
 ```bash
-hypertile-ctl scene content --zone right --type stream --computer macbook --profile desktop
+hypertile-ctl scene catalog --json
+hypertile-ctl scene content --zone right --type app --desktop-id remote-desktops-macbook.desktop
 hypertile-ctl scene content --zone left --type empty
 hypertile-ctl scene content --zone center --type local --app-class org.example.Editor
 hypertile-ctl scene save work
-hypertile-ctl scene list --json
 hypertile-ctl scene apply work --workspace 1
 hypertile-ctl scene current --workspace 1 --json
 hypertile-ctl scene retry --workspace 1
 hypertile-ctl scene restore --workspace 1
 ```
 
-Use names from your actual layout and app classes from `hypertile-ctl windows
---json`. Scenes currently target existing numbered workspaces. Omit
-`--workspace` to use the active workspace. A computer can occupy one zone only;
-explicitly disconnect it before assigning it on another workspace.
+For an app without declared identity, add `--app-class org.example.App` and,
+when its class is shared, `--app-title 'Exact window title'`. Classes and titles
+are literal strings, not regexes. Use `hypertile-ctl windows --json` to inspect
+windows. Desktop IDs resolve through the XDG application directories, with
+user entries taking precedence. Arbitrary desktop paths and stored shell
+commands are not accepted. `gio launch` handles the installed desktop file.
 
-`apply` accepts work asynchronously. Check `current` for ready, connecting,
-partial, or needs-attention. Retry rechecks pending content. An explicit stream
-Disconnect suppresses further automatic reconnects from that scene. Apply the
-scene again to request those connections again. `cancel` is an alias for
-`restore`. `remove NAME` removes a saved definition without stopping its active
-connections. `scene layout NAME` starts a scene containing local windows using
-that layout.
+Scenes uses existing numbered workspaces. Omit `--workspace` for the current
+one. An explicit assignment elsewhere supersedes an older pending assignment
+of the same app. Applying a scene accepts work asynchronously; inspect `current`
+for progress. A missing app window times out after 45 seconds. Ambiguous matches
+require closing extras or narrowing the title; no arbitrary window is selected.
+An interrupted launch is not automatically submitted again after service restart.
 
-Switch a connected computer's profile without manually sequencing teardown:
-
-```bash
-hypertile-ctl stream profile macbook --profile desktop-capture
-hypertile-ctl stream stats macbook
-hypertile-ctl stream input-release macbook
-hypertile-ctl stream clipboard work-laptop
-```
-
-`input-release` toggles Moonlight's capture; it is not an idempotent release.
-For Mac Command shortcuts, select a `system_keys: always` profile, focus the
-stream, then enter it with the pointer or activate Toggle capture. Focusing a
-newly opened client alone may leave capture inactive.
-Clipboard typing sends the local text clipboard into the host's focused app.
-It is neither clipboard synchronization nor file transfer. Hypertile sends the
-stock Moonlight shortcut without reading or journaling clipboard contents.
-**Stock Sunshine on macOS does not implement this text-input path**; the action
-is disabled for configured Mac hosts. Other hosts still need a live input check.
-[Moonlight's implementation](https://github.com/moonlight-stream/moonlight-qt/blob/v6.1.0/app/streaming/input/keyboard.cpp)
-and [the tested Sunshine Mac implementation](https://github.com/LizardByte/Sunshine/blob/v2026.516.143833/src/platform/macos/input.cpp)
-explain the distinction.
+`cancel` aliases `restore`. `remove NAME` deletes only the saved definition.
+`layout NAME` applies a layout with normal local fill. Placement itself does not
+change focus; the app's own launcher may activate its window.
 
 ## Format and stable references
 
-Saved definitions live in `~/.config/hypertile/scenes/NAME.json`, mode 0600.
-This input example can be saved using `scene save work --file scene.json` after
-substituting your layout, zone and configured computer names:
+Definitions live in `~/.config/hypertile/scenes/NAME.json`, mode 0600. Save this
+input using `scene save work --file scene.json`, substituting your layout/zones:
 
 ```json
 {
   "version": 1,
   "layout": "my-layout",
   "sources": {
-    "right": { "type": "stream", "computer": "macbook", "profile": "desktop" },
+    "right": {
+      "type": "app",
+      "desktop_id": "remote-desktops-macbook.desktop",
+      "app_class": "com.moonlight_stream.Moonlight",
+      "app_title": "MacBook - Moonlight"
+    },
     "left": { "type": "empty" },
     "center": { "type": "local", "app_class": "org.example.Editor" }
   }
 }
 ```
 
+Remote Desktops publishes `X-RemoteDesktops-WindowClass` and
+`X-RemoteDesktops-WindowTitle` in each launcher. Scenes reads those optional
+metadata fields and preserves their exact match. This distinguishes computers
+whose Moonlight windows share a class. Ordinary apps use the same placement
+path. Overlapping app matches within a scene are rejected.
+
 On first save, Hypertile adds a persistent `layout_id` and leaf `id` fields to
-that layout without changing its geometry. The saved scene includes `layout_id`
-and keys `sources` by leaf ID; each source's `zone` field is a readable name hint.
-Use `scene show work` to inspect the normalized document and `scene validate
---file scene.json` for a read-only check. Name-based imports are allowed only
-when the input omits `layout_id`.
+the layout without changing geometry. Saved sources use leaf IDs, with `zone`
+as a readable hint. `scene show NAME` shows the normalized document;
+`scene validate --file FILE` checks it without applying changes. Name-based
+imports are allowed only when the input omits `layout_id`.
 
-Renaming or reordering zones preserves their identities. Splitting retains the
-original ID on the original half and gives the new half a new ID. A copied
-layout receives new identities. Deletion invalidates references; reusing a name
-does not revive the old ID. Layout renames resolve through `layout_id`; missing
-or duplicated identities produce an actionable error. Manually copied layout
-files must receive fresh identities before being used as different scenes.
+Renaming/reordering zones preserves IDs. Splitting retains the original ID on
+one half and gives the other a new ID. Copied layouts get new IDs. Deleted or
+ambiguous identities require choosing replacements; reusing a name does not
+revive a deleted zone. Keep one fill/cycle zone available for local overflow.
+No monitor-input source is enabled without a validated hardware profile.
 
-Scene sources stay outside layout geometry. Empty reservations are scoped to a
-workspace. No monitor-input source is enabled until a hardware profile has been
-validated; local and streamed scenes work without Dell/DDC support.
+## Service and recovery
 
-## Recovery and limits
+The independent `hypertile-scenes` service owns
+`~/.local/state/hypertile/scenes/state.json` and
+`$XDG_RUNTIME_DIR/hypertile-scenes/control.sock`. It takes its own writer lock,
+so it can run alongside Remote Desktops. It does not read legacy computer
+configuration or modify host display journals. The loader starts it; CLI scene
+commands also start it on demand. Launch/placement intent is persisted before
+effects. Work advances at 200 ms while connecting; settled scenes are checked
+at 30-second intervals or when the overlay/CLI requests state. There is no
+per-frame scripting in this path.
 
-Scene intent, its pre-scene baseline, progress, and source restoration journals
-live in the existing private stream state file. The single controller serializes
-scene and stream operations. Host restoration pending on an offline computer
-blocks that computer's replacement profile, while local content can continue.
-Session checkpoints include scene definitions and source references, excluding
-transient compositor scene state. Restoring an older checkpoint does not undo an
-explicit disconnect recorded by the controller.
+A restart in the same compositor preserves consumed launches and placements.
+A new compositor waits for session recovery's checkpoint before applying scene
+references. Scene-managed app windows are excluded from ordinary app recovery
+so there is one launch owner. Checkpoints omit app assignments that the user
+moved/closed; moved windows use normal session recovery, including the exact
+computer launcher where available. Saved scene files retain their defaults.
+Missing scene service/invalid legacy references produce recovery warnings.
 
-App pins are restored only when the same window still has the scene-owned pin;
-manually changed pins are preserved. Live compositor addresses are never used
-as saved scene identities. Selecting a different layout directly through other
-CLI/keybindings leaves the scene needing attention; apply or restore it to
-reconcile content.
+Pins are restored only when the same window still has the scene-owned pin on
+the same workspace. Identity checks include compositor address, stable ID, and
+PID, and happen again immediately before placement. A lost placement reply
+requires explicit reapplication instead of risking an automatic second move.
 
-Meeting profiles and system-key capture are described in [STREAMS.md](STREAMS.md).
-The [validation record](STREAMS-VALIDATION.md) distinguishes automated recovery
-checks, live desktop checks, and hardware/call features still unverified.
+## Migrating legacy remote scenes
 
-The [Performance panel](STREAM-QUALITY.md) adds measured reconnect timing,
-completed decoder statistics and readability assessments. Scheduled collection
-uses the same stream controller and is cancelled by superseding scene work.
+Existing `type: "stream"` scene files and legacy host recovery journals are
+preserved. They are not automatically converted: install each computer's
+Remote Desktops launcher, disconnect/restore legacy Hypertile streams, and
+replace those sources with `type: "app"` entries. Legacy stream scenes appear
+invalid until migrated. A live legacy stream on a workspace blocks new scene
+changes there. Runtime installation also requires disconnecting/restoring legacy
+sources first, so replacing the old service cannot orphan their recovery.
+
+The old `hypertile-stream` CLI remains available for legacy connection recovery;
+it is no longer auto-started by the layout loader and its daemon does not apply
+old scenes. `hypertile-stream scene ...` forwards to the independent service.
+Legacy stream profile changes require disconnecting and reconnecting with
+`--profile`. See [legacy stream recovery](STREAMS.md) for preserved journals and
+restoration tools. The old stream-specific overlay controls are not offered by
+the new app catalog; connection controls belong to Remote Desktops.
+
+## Validation
+
+On 2026-09-05, a live MacBook check used the installed desktop launcher with the
+new scene service and Lua adapter on temporary workspaces. Initial zone
+placement passed; a move to another workspace survived a scene-service restart;
+explicit reapplication reused the same client PID and connection generation;
+restoring the scene left the app running. Cleanup disconnected the test session
+and completed host display restoration. The regular session watcher was paused
+during the check and resumed afterward. The installed plugin was not replaced.
+
+Automated tests cover exact/ambiguous matches, interrupted launches and placement
+replies, app-only session recovery, cancelled/superseded operations, XDG launcher
+precedence, socket/lock isolation, and preservation of manual moves/closes.
+The Windows laptop has not been validated live through this integration.

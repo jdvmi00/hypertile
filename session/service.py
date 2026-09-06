@@ -194,6 +194,7 @@ class Launchers:
             raise ValueError("replay must be an array of command names")
         self.proc = proc
         self.entries = {}
+        self.exact_entries = []
         directories = [Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")]
         directories += [Path(p) for p in (os.environ.get("XDG_DATA_DIRS") or "/usr/local/share:/usr/share").split(":")]
         seen = set()
@@ -210,6 +211,10 @@ class Launchers:
                     app = entry["Desktop Entry"]
                     if app.get("Type") != "Application" or app.getboolean("Hidden", fallback=False):
                         continue
+                    exact_class = app.get("X-RemoteDesktops-WindowClass")
+                    exact_title = app.get("X-RemoteDesktops-WindowTitle")
+                    if exact_class and exact_title:
+                        self.exact_entries.append((exact_class, exact_title, str(path)))
                     keys = [desktop_id[:-len(".desktop")], app.get("StartupWMClass", "")]
                     for key in keys:
                         if key:
@@ -229,6 +234,11 @@ class Launchers:
             if not isinstance(argv, list) or not argv or not all(isinstance(a, str) for a in argv):
                 raise ValueError(f"apps.{cls}.argv must be a nonempty array of strings")
             return {"argv": argv, "per_window": explicit.get("per_window", False)}
+        exact = [path for app_class, title, path in self.exact_entries
+                 if window.get("class") == app_class and window.get("title") == title]
+        if exact:
+            return {"argv": ["gio", "launch", exact[0]], "per_window": False,
+                    "match": {"class": window["class"], "title": window["title"]}} if len(exact) == 1 else None
         # Browser owns the tabs and profiles. Only carry profile selectors;
         # startup URLs, remote-debugging flags and arbitrary process args are
         # deliberately not replayed.
@@ -345,9 +355,13 @@ class Launchers:
         return desktop
 
 
+def recipe_matches(saved, candidate):
+    return all(candidate.get(k) == v for k, v in (saved.get("launch") or {}).get("match", {}).items())
+
+
 def match_windows(saved, current, matches, same_instance=False):
     """Match uniquely, allowing titles to settle. Never guess between peers."""
-    available = {w["address"]: w for w in current if w["address"] not in matches.values()}
+    available = {w["address"]: w for w in current if not w.get("scene_app") and w["address"] not in matches.values()}
     pending = [w for w in saved if w["address"] not in matches]
     if same_instance:
         for old in pending[:]:
@@ -363,7 +377,8 @@ def match_windows(saved, current, matches, same_instance=False):
             if field and not old.get(field):
                 continue
             peers = [w for w in pending if identity(w) == identity(old) and (not field or w.get(field) == old.get(field))]
-            candidates = [w for w in available.values() if identity(w) == identity(old) and (not field or w.get(field) == old.get(field))]
+            candidates = [w for w in available.values() if identity(w) == identity(old) and recipe_matches(old, w)
+                          and (not field or w.get(field) == old.get(field))]
             if len(peers) == len(candidates) == 1:
                 live = candidates[0]
                 matches[old["address"]] = live["address"]
@@ -402,6 +417,7 @@ class Recovery:
 
     def tick(self, now):
         current = self.compositor.snapshot()
+        current["windows"] = [w for w in current["windows"] if not w.get("scene_app")]
         alive = {w["address"] for w in current["windows"]}
         for old, new in list(self.matches.items()):
             if new not in alive:
@@ -409,8 +425,9 @@ class Recovery:
                 self.placed.discard(old)
         if self.outstanding:
             old, cls, before, until = self.outstanding
+            saved = next(w for w in self.desktop["windows"] if w["address"] == old)
             candidates = [w for w in current["windows"] if w["address"] not in before
-                          and (w["initial_class"] or w["class"]) == cls]
+                          and (w["initial_class"] or w["class"]) == cls and recipe_matches(saved, w)]
             if len(candidates) == 1 and candidates[0]["address"] not in self.matches.values():
                 self.matches[old] = candidates[0]["address"]
                 self.outstanding = None
@@ -454,8 +471,9 @@ class Recovery:
                 if not recipe:
                     self.hopeless[saved["address"]] = "no launch recipe"
                     continue
-                peers = [w for w in current["windows"] if (w["initial_class"] or w["class"]) == cls]
-                expected = sum((w["initial_class"] or w["class"]) == cls for w in self.desktop["windows"])
+                matcher = {"launch": recipe}
+                peers = [w for w in current["windows"] if (w["initial_class"] or w["class"]) == cls and recipe_matches(matcher, w)]
+                expected = sum((w["initial_class"] or w["class"]) == cls and recipe_matches(matcher, w) for w in self.desktop["windows"])
                 if len(peers) >= expected or (peers and not recipe.get("per_window")):
                     continue
                 key = saved["address"] if recipe.get("per_window") else str(saved["pid"]) + json.dumps(recipe["argv"])
