@@ -3,9 +3,9 @@
 ## Current candidate
 
 - Repository/default branch: `jdvmi00/hypertile`, `main`.
-- Candidate: the `1.1.0` release, the merge of its release PR into `main`,
-  tagged `v1.1.0`. `main` is locked at that commit; its full SHA is recorded
-  here once the promotion has been read back.
+- Candidate: `25552c2a0ace46d74bff91390811c0ff73671b85`, the `1.1.0` release
+  (the merge of PR #7 into `main`), tagged `v1.1.0`. `main` is locked at that
+  commit.
 - Submission: https://github.com/omacom/omarchy-plugin-marketplace/issues/4893
   (initial listing, pending). It supersedes the earlier candidate
   `1ba0f8a30526f2148ff46885d67991862ae90f00` (manifest 1.0.1, marker tag
