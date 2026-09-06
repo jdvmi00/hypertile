@@ -199,10 +199,84 @@ Item {
   function contentLabel(zone) { return Content.label(contentFor(zone)) }
   function contentChip(zone) { return Content.chip(contentFor(zone)) }
 
+  // Icons and names for what a zone holds, from the desktop entries the
+  // catalog lists. The shell's icon provider resolves theme names; a window
+  // class is matched to an installed app, then to a desktop entry heuristically.
+  readonly property string genericIcon: Quickshell.iconPath("application-x-executable", true)
+  function resolveIcon(icon) {
+    var v = String(icon || "")
+    if (v === "") return genericIcon
+    if (v.charAt(0) === "/") return "file://" + v
+    var themed = Quickshell.iconPath(v, true)
+    return themed !== "" ? themed : genericIcon
+  }
+  function catalogApp(desktopId, apps) {
+    apps = apps || (contentCatalog && contentCatalog.apps) || []
+    for (var i = 0; i < apps.length; i++) if (apps[i].desktop_id === desktopId) return apps[i]
+    return null
+  }
+  function catalogAppForClass(cls, apps) {
+    var want = String(cls || "").toLowerCase()
+    if (want === "") return null
+    apps = apps || (contentCatalog && contentCatalog.apps) || []
+    for (var i = 0; i < apps.length; i++) if (String(apps[i].app_class || "").toLowerCase() === want) return apps[i]
+    return null
+  }
+  function iconForApp(desktopId, apps) {
+    var app = catalogApp(desktopId, apps)
+    return resolveIcon(app ? app.icon : "")
+  }
+  function iconForClass(cls, apps) {
+    var app = catalogAppForClass(cls, apps)
+    if (app) return resolveIcon(app.icon)
+    var entry = null
+    try { entry = DesktopEntries.heuristicLookup(String(cls || "")) } catch (e) { entry = null }
+    return resolveIcon(entry ? entry.icon : "")
+  }
+  function iconFor(source) {
+    if (!source) return ""
+    if (source.type === "app") return iconForApp(source.desktop_id)
+    if (source.type === "local" && source.app_class) return iconForClass(source.app_class)
+    return ""
+  }
+  function nameForClass(cls, apps) {
+    var app = catalogAppForClass(cls, apps)
+    if (app) return Content.displayName(app.name)
+    var entry = null
+    try { entry = DesktopEntries.heuristicLookup(String(cls || "")) } catch (e) { entry = null }
+    return entry && entry.name ? entry.name : String(cls || "")
+  }
+  // Zones by where they sit ("Top left"), falling back to the layout's name
+  // where positions would collide.
+  readonly property var zoneLabels: Content.positionLabels(zones, area)
+  function zoneLabel(name) { return zoneLabels[name] || name }
+  // The picker row under the pointer, previewed in the selected zone's card.
+  property var hoverMatch: null
+  function ghost(match) { hoverMatch = match }
+  function unghost(key) { if (hoverMatch && hoverMatch.key === key) hoverMatch = null }
+  // The zone carrying a fill number, for the digit keys.
+  function selectContentNumber(n) {
+    for (var i = 0; i < zones.length; i++) if (zones[i].numbers.indexOf(n) !== -1) { selected = zones[i].name; return }
+  }
+  function contentName(source) {
+    if (source && source.type === "local" && source.app_class) return nameForClass(source.app_class)
+    return Content.label(source)
+  }
+  function layoutSpec(name) {
+    for (var i = 0; i < layouts.length; i++) if (layouts[i].name === name) return layouts[i].spec
+    return null
+  }
+  function focusSearch() { rail.focusSearch() }
+  function nextContentZone() {
+    var names = activeSpec ? Editor.leafNames(activeSpec) : []
+    if (names.length) selected = names[(names.indexOf(selected) + 1) % names.length]
+  }
+
   function showContent(on) {
     if (editing) return
     contentMode = on
     namingScene = false
+    hoverMatch = null
     pendingSwitch = null
     confirmingDelete = false
     choosingNew = false
@@ -1286,15 +1360,16 @@ Item {
     // The Scenes tab: the keys select zones; the layout keys are the
     // Layouts tab's.
     if (root.contentMode) {
-      if (k === Qt.Key_Tab) {
-        var contentNames = root.activeSpec ? Editor.leafNames(root.activeSpec) : []
-        if (contentNames.length) root.selected = contentNames[(contentNames.indexOf(root.selected) + 1) % contentNames.length]
-        return true
-      }
+      if (k === Qt.Key_Tab) { nextContentZone(); return true }
       var dir = (k === Qt.Key_Left || (plain && k === Qt.Key_H)) ? "left"
         : (k === Qt.Key_Right || (plain && k === Qt.Key_L)) ? "right"
         : (k === Qt.Key_Up || (plain && k === Qt.Key_K)) ? "up"
         : (k === Qt.Key_Down || (plain && k === Qt.Key_J)) ? "down" : ""
+      if (dir !== "" && (k === Qt.Key_Left || k === Qt.Key_Right || k === Qt.Key_Up || k === Qt.Key_Down)) { selectContentNeighbor(dir); return true }
+      if (plain && k >= Qt.Key_1 && k <= Qt.Key_9) { selectContentNumber(k - Qt.Key_0); return true }
+      // A printable key with a zone selected starts a search in the
+      // picker, wherever the focus was (after a save, a click on chrome).
+      if (plain && root.selected !== "" && root.viewedIsActive && event.text.length === 1 && event.text.trim() !== "") { rail.typeSearch(event.text); return true }
       if (dir !== "") { selectContentNeighbor(dir); return true }
       if (k === Qt.Key_Return || k === Qt.Key_Enter) { dismiss(); return true }
       if (plain && k === Qt.Key_R) { refresh(); return true }
@@ -1548,6 +1623,10 @@ Item {
     function saveSceneAs(): void { root.startSceneSave() }
     function deleteScene(name: string): void { root.deleteScene(name) }
     function confirmSwitch(): void { root.confirmSwitch() }
+    function search(text: string): void { rail.setSearch(text) }
+    function pick(): void { rail.pickMatch() }
+    function hover(index: int): void { rail.hoverMatch(index) }
+    function focusSearch(): void { root.focusSearch() }
     function viewed(): string { return root.viewed ? root.viewed.name : "" }
     function view(name: string): void {
       if (root.editing) return
@@ -1596,7 +1675,7 @@ Item {
         undo: root.undoStack.length, status: root.statusText, error: root.errorText,
         workspaces: root.workspaces.length, windows: root.windows.length, defaultLayout: root.defaultLayout,
         committed: root.committedLayout, live: root.liveLayout, dockLeft: root.dockLeft, showKeys: root.showKeys,
-        area: root.area, contentMode: root.contentMode,
+        area: root.area, contentMode: root.contentMode, query: rail.searchText, matches: rail.matchCount,
         namingScene: root.namingScene, pendingSwitch: root.pendingSwitch, catalogFailed: root.catalogFailed,
         scene: root.contentCatalog ? root.contentCatalog.current : null })
     }

@@ -13,20 +13,34 @@ for app scenes.
 
 ## Overlay
 
-Open **Super+Alt+L**, switch to **Scenes**, and select a zone. Under **Change to**,
-**Installed apps** offers desktop entries with a known window identity. Select
-**MacBook (Remote Desktop)** to launch or reuse that computer in the selected
-zone. Install its launcher in Remote Desktops first. Each computer's launcher
-uses that computer's default profile.
+Open **Super+Alt+L** and switch to **Scenes**. Each zone card on the screen
+shows what it holds: the app's icon and name with its state, or *Local
+windows · fill order*. Click a card (or a row under **Zones**, or press its
+fill number) and the picker below takes the keys: type to search, ↑ ↓ pick a
+match, Enter assigns it, Esc clears the search. Hovering a match previews it
+in the selected card. Zones are listed by where they sit ("Top left"), with
+the layout's own name where positions would collide. **Local windows** and **Empty** are the two chips above the
+list. **Open here** lists the windows already on this workspace with their
+titles; choosing one pins that window without launching anything. **Remote
+desktops** lists each computer's Remote Desktops launcher (install it there
+first; it uses that computer's default profile). **Apps** lists installed
+desktop entries with a known window identity; entries whose window class is
+a packaging placeholder are left out. A card's **Change…** and **Clear** do
+the same from the screen, and a card that needs attention is outlined and
+offers **Retry**.
 
 Applications declaring `StartupWMClass` are available immediately. For other
 apps, an open window whose class equals the desktop ID without `.desktop`
 provides the identity. Apps without either can be configured through the CLI
-with an explicit class and optional exact title. **Open apps** retains the
-previous local-only behavior: pin one matching tiled window already on this
-workspace, without launching it.
+with an explicit class and optional exact title.
 
-**Save scene…** stores the current definition. **Apply** requests that saved
+The header names the workspace until a scene is applied, then the scene, with
+the layout, the workspace, and how many apps are placed. **Scenes** lists the
+saved scenes as cards: the layout with the apps it places drawn in their
+zones, and what it holds. Click a card to apply it; the delete appears on hover
+and confirms inline.
+
+**Save as scene…** stores the current definition. **Apply** requests that saved
 arrangement again, including apps you moved or closed. **Retry** explicitly
 rechecks placement and may retry a failed/timed-out launch. Closing an app or
 moving it yourself leaves its source marked *Closed* or *Moved*. Changes to the

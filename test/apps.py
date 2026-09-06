@@ -114,6 +114,9 @@ class AppTests(unittest.TestCase):
         self.assertEqual(source["app_class"], "com.moonlight_stream.Moonlight")
         self.assertEqual(self.command("catalog")["apps"][0]["name"], "MacBook")
         self.assertNotIn("computers", self.command("catalog"))
+        (self.apps_dir / "placeholder.desktop").write_text('[Desktop Entry]\nType=Application\nName=Placeholder\nExec=placeholder\nStartupWMClass=@@startup_wm_class\n')
+        self.ctl.scenes.apps.desktop.next_scan = 0
+        self.assertNotIn("Placeholder", [a["name"] for a in self.command("catalog")["apps"]])
         self.assertFalse(self.desktop.launched)
 
     def test_standalone_service_does_not_take_stream_lock_or_read_computers(self):

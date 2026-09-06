@@ -47,7 +47,8 @@ class DesktopApps:
                     match = app.get("X-RemoteDesktops-WindowClass") or app.get("StartupWMClass")
                     title = app.get("X-RemoteDesktops-WindowTitle")
                     entry = {"desktop_id": desktop_id, "name": app.get("Name", desktop_id), "path": str(path),
-                             "visible": not app.getboolean("NoDisplay", fallback=False)}
+                             "visible": not app.getboolean("NoDisplay", fallback=False),
+                             "icon": (app.get("Icon") or "")[:250]}
                     if match:
                         entry["app_class"] = text(match, "app class")
                     if title:
@@ -90,7 +91,9 @@ class DesktopApps:
                 stem = entry["desktop_id"][:-8]
                 if any(w.get("class") == stem for w in windows):
                     app["app_class"] = stem
-            if app.get("app_class"):
+            # A packaging placeholder such as "@@startup_wm_class" never
+            # matches a window; the entry would only clutter the picker.
+            if app.get("app_class") and "@@" not in app["app_class"]:
                 out.append(app)
         return sorted(out, key=lambda v: (v["name"].casefold(), v["desktop_id"]))
 
