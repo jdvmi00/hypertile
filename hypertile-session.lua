@@ -6,6 +6,7 @@ local prefix = modname:match("^(.-)hypertile%-session$") or ""
 local engine = require(prefix .. "hypertile")
 local json = require(prefix .. "hypertile-json")
 local M = {}
+local scene_content = {}
 
 local function selector(ws)
   if ws.special then return ws.name end
@@ -15,6 +16,7 @@ end
 
 function M.snapshot()
   local out = { windows = json.array(), workspaces = json.array(), layouts = {}, monitors = json.array() }
+  out.scene_content = scene_content
   for _, mon in ipairs(hl.get_monitors()) do
     out.monitors[#out.monitors + 1] = { name = mon.name, x = mon.x, y = mon.y }
   end
@@ -27,6 +29,7 @@ function M.snapshot()
       id = ws.id, selector = selector(ws), layout = ws.tiled_layout,
       monitor = ws.monitor and ws.monitor.name, visible = ws.visible, special = ws.special,
       order = json.array(live and live.orders[tostring(ws.id)] or {}),
+      navigation_keep = live and live.state.navigation_keep and live.state.navigation_keep[tostring(ws.id)] or nil,
     }
     if live then
       out.layouts[name] = { spec = live.spec, sizes = live.state.sizes }
@@ -36,13 +39,26 @@ function M.snapshot()
   -- go away; this query runs every few seconds, so prune here.
   for _, live in pairs(engine.live) do
     for id in pairs(live.orders or {}) do
-      if not existing[id] then live.orders[id] = nil end
+      if not existing[id] then
+        live.orders[id] = nil
+        if live.boxes then live.boxes[id] = nil end
+        if live.state.navigation_keep then live.state.navigation_keep[id] = nil end
+      end
     end
   end
   for _, win in ipairs(hl.get_windows()) do
     if win.mapped and win.workspace then
       local name = win.workspace.tiled_layout:match("^lua:(.+)$")
       local live = name and engine.live[name]
+      local scene_app
+      for workspace, scene in pairs(scene_content) do
+        if workspace == selector(win.workspace) then
+          for _, ref in pairs(scene.app_placements or {}) do
+            if ref.address == win.address and ref.pid == win.pid and ref.stable_id == win.stable_id
+              and live and live.state.pins[win.address] == ref.zone then scene_app = true end
+          end
+        end
+      end
       out.windows[#out.windows + 1] = {
         address = win.address, stable_id = win.stable_id, pid = win.pid, class = win.class, title = win.title,
         initial_class = win.initial_class, initial_title = win.initial_title,
@@ -50,6 +66,8 @@ function M.snapshot()
         at = win.at, size = win.size, floating = win.floating, pinned = win.pinned,
         fullscreen = win.fullscreen, fullscreen_client = win.fullscreen_client,
         pin = live and live.state.pins[win.address], grouped = win.group ~= nil,
+        pin_exclusive = live and live.state.exclusive_pins and live.state.exclusive_pins[win.address] or nil,
+        scene_app = scene_app,
       }
     end
   end
@@ -81,6 +99,330 @@ local function dispatch(fn, args)
   if type(result) == "table" and result.error then error(result.error) end
 end
 
+local function refresh_workspace(ws)
+  -- Target a window explicitly: neither this nor session.place changes focus.
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and w.workspace and w.workspace.id == ws.id and not w.floating and (w.fullscreen or 0) == 0 then
+      dispatch(hl.dsp.window.resize, { window = "address:" .. w.address, x = 0, y = 0, relative = true })
+      break
+    end
+  end
+end
+
+function M.scene_layout(request)
+  local bridge = require(prefix .. "hypertile-bridge")
+  if request.spec then engine.layout(request.layout:match("^lua:(.+)$"), request.spec) end
+  local rule = bridge.rule_source(request.workspace, request.layout, request.spec)
+  assert(load(rule, "=scene-workspace", "t"))()
+  return rule -- Persistence belongs to the external writer, never nested hyprctl.
+end
+
+function M.scene_clear(request)
+  local old = scene_content[request.workspace]
+  if not old then return true end
+  local windows = {}
+  for _, w in ipairs(hl.get_windows()) do windows[w.address] = w end
+  local live = engine.live[old.layout:match("^lua:(.+)$")]
+  if live then
+    if live.state.scene_empty then live.state.scene_empty[tostring(old.workspace_id)] = nil end
+    for _, p in ipairs(old.pins or {}) do
+      local w = windows[p.address]
+      if w and w.stable_id == p.stable_id and w.pid == p.pid and w.workspace
+        and selector(w.workspace) == request.workspace and live.state.pins[p.address] == p.zone then
+        live.state.pins[p.address] = p.before
+        if live.state.exclusive_pins then live.state.exclusive_pins[p.address] = p.exclusive end
+      end
+    end
+  end
+  scene_content[request.workspace] = nil
+  for _, ws in ipairs(hl.get_workspaces()) do if selector(ws) == request.workspace then refresh_workspace(ws) end end
+  return true
+end
+
+function M.scene_content_apply(request)
+  local previous = scene_content[request.workspace]
+  if request.operation and previous and previous.operation == request.operation then return previous end
+  local ws, live
+  for _, w in ipairs(hl.get_workspaces()) do
+    if selector(w) == request.workspace and w.tiled_layout == request.layout then ws = w end
+  end
+  if not ws and request.allow_missing_workspace and request.operation then
+    for _, w in ipairs(hl.get_workspaces()) do
+      assert(selector(w) ~= request.workspace, "scene workspace layout changed")
+    end
+    assert(request.workspace:match("^[1-9][0-9]*$"), "invalid scene workspace")
+    ws = { id = tonumber(request.workspace) }
+  end
+  assert(ws, "scene workspace or layout changed")
+  live = engine.live[request.layout:match("^lua:(.+)$")]
+  assert(live, "scene requires a Hypertile layout")
+  local empty, blocked = {}, {}
+  for _, source in ipairs(request.sources) do
+    local zone = source.zone_id and live.compiled.zone_ids[source.zone_id] or source.zone
+    assert(zone and live.compiled.leaf_set[zone], "scene zone no longer exists")
+    source.zone = zone
+    if source.type == "empty" then empty[zone], blocked[zone] = true, true end
+    assert(source.type == "local" or source.type == "app" or source.type == "empty", "unsupported scene source type")
+  end
+  local available = false
+  for _, zone in ipairs(live.compiled.cycle) do if not blocked[zone] then available = true end end
+  assert(available, "leave one fill zone for local windows")
+  M.scene_clear(request)
+  live.state.scene_empty = live.state.scene_empty or {}
+  live.state.scene_empty[tostring(ws.id)] = empty
+  live.state.exclusive_pins = live.state.exclusive_pins or {}
+  local record = { workspace_id = ws.id, layout = request.layout, operation = request.operation,
+    app_placements = {}, pins = json.array(), results = json.array() }
+  scene_content[request.workspace] = record
+  for _, source in ipairs(request.sources) do
+    if source.type == "local" and source.app_class then
+      local matches = {}
+      for _, w in ipairs(hl.get_windows()) do
+        if w.mapped and w.workspace and w.workspace.id == ws.id and not w.floating
+          and w.class == source.app_class then matches[#matches + 1] = w end
+      end
+      local result = { zone = source.zone, status = "needs-attention", error = #matches == 0 and "Open this app on the workspace" or "More than one matching app window is open" }
+      if #matches == 1 then
+        local w = matches[1]
+        record.pins[#record.pins + 1] = { address = w.address, pid = w.pid, stable_id = w.stable_id,
+          zone = source.zone, before = live.state.pins[w.address], exclusive = live.state.exclusive_pins[w.address] }
+        live.state.pins[w.address], live.state.exclusive_pins[w.address] = source.zone, true
+        result.status, result.error = "ready", nil
+      end
+      record.results[#record.results + 1] = result
+    end
+  end
+  refresh_workspace(ws)
+  return { results = record.results, pins = record.pins }
+end
+
+-- Called once per scene operation, with a live identity rather than a class
+-- dispatcher. Validation and placement happen together on the compositor thread.
+function M.scene_app_place(request)
+  local record = assert(scene_content[request.workspace], "Scene was superseded")
+  assert(request.operation and record.operation == request.operation, "Scene was superseded")
+  assert(record.layout == request.layout, "Scene layout changed")
+  local live = assert(engine.live[request.layout:match("^lua:(.+)$")], "Scene layout is unavailable")
+  request.zone = live.compiled.zone_ids[request.zone_id]
+  assert(request.zone and not live.compiled.leaf_opts[request.zone].spacer, "Scene zone is unavailable")
+  local ws
+  for _, candidate in ipairs(hl.get_workspaces()) do
+    if selector(candidate) == request.workspace then
+      assert(candidate.tiled_layout == request.layout, "Scene workspace layout changed")
+      ws = candidate
+    end
+  end
+  local previous = record.app_placements[request.zone_id]
+  if previous then return previous end
+  local matches = {}
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and w.workspace and w.class == request.app_class
+      and (not request.app_title or w.title == request.app_title) then matches[#matches + 1] = w end
+  end
+  assert(#matches == 1, "App window match changed or is ambiguous")
+  local w = matches[1]
+  assert(w.address == request.address and w.stable_id == request.stable_id and w.pid == request.pid,
+    "App window identity changed")
+  local pin = { address = w.address, stable_id = w.stable_id, pid = w.pid, zone = request.zone,
+    before = live.state.pins[w.address], exclusive = (live.state.exclusive_pins or {})[w.address] }
+  -- Mark consumed before dispatching. A lost IPC reply or later manual move
+  -- must not turn the next call into a second placement.
+  record.app_placements[request.zone_id] = pin
+  record.pins[#record.pins + 1] = pin
+  M.place({ address = w.address, layout = request.layout,
+    saved = { workspace = request.workspace, pin = request.zone, pin_exclusive = true, floating = false } })
+  if ws then refresh_workspace(ws) end
+  return pin
+end
+
+function M.scene_restore_pins(request)
+  for _, saved in ipairs(request.windows or {}) do
+    for _, w in ipairs(hl.get_windows()) do
+      if w.address == saved.address and w.stable_id == saved.stable_id and w.pid == saved.pid
+        and w.workspace and selector(w.workspace) == request.workspace then
+        local live = engine.live[w.workspace.tiled_layout:match("^lua:(.+)$")]
+        if live and live.state.pins[w.address] == saved.zone then
+          live.state.pins[w.address] = saved.before
+          live.state.exclusive_pins = live.state.exclusive_pins or {}
+          live.state.exclusive_pins[w.address] = saved.exclusive
+        end
+      end
+    end
+  end
+  for _, ws in ipairs(hl.get_workspaces()) do if selector(ws) == request.workspace then refresh_workspace(ws) end end
+  return true
+end
+
+local function swap_windows(request)
+  local found = {}
+  for i, ref in ipairs(request.windows) do
+    for _, w in ipairs(hl.get_windows()) do
+      if w.address == ref.address and w.stable_id == ref.stable_id then found[i] = w end
+    end
+    local w = found[i]
+    assert(w and w.mapped and w.workspace and not w.floating and not w.hidden and (w.fullscreen or 0) == 0,
+      "swap unavailable: window closed, moved or became fullscreen")
+  end
+  assert(#found == 2 and found[1].address ~= found[2].address, "swap needs two different windows")
+  local ws = found[1].workspace
+  assert(ws.id == found[2].workspace.id, "swap unavailable: windows must share a workspace")
+  local live = engine.live[ws.tiled_layout:match("^lua:(.+)$")]
+  assert(live, "swap unavailable: workspace must use Hypertile")
+  return found, ws, live
+end
+
+local function workspace_buckets(ws, live)
+  local by_address, targets = {}, {}
+  for _, w in ipairs(hl.get_windows()) do
+    if w.mapped and w.workspace and w.workspace.id == ws.id and not w.floating then by_address[w.address] = w end
+  end
+  for _, address in ipairs(live.orders[tostring(ws.id)] or {}) do
+    if by_address[address] then targets[#targets + 1] = { window = by_address[address] }; by_address[address] = nil end
+  end
+  assert(next(by_address) == nil, "swap unavailable: waiting for layout order")
+  local reserved = {}
+  for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do reserved[name] = true end
+  return engine.assign(live.compiled, targets, {
+    pins = live.state.pins, exclusive_pins = live.state.exclusive_pins,
+    reserved = reserved,
+  })
+end
+
+-- Resolve actual engine assignments, including rules, pins and reservations.
+-- Planning validates both windows without changing either pin.
+function M.swap_plan(request)
+  local windows, ws, live = swap_windows(request)
+  local buckets = workspace_buckets(ws, live)
+  local plan = { workspace = selector(ws), layout = ws.tiled_layout, windows = json.array() }
+  for i, w in ipairs(windows) do
+    local zone
+    for name, bucket in pairs(buckets) do
+      for _, t in ipairs(bucket) do
+        if t.window.address == w.address then
+          assert(#bucket == 1, "swap unavailable: use a zone containing one window")
+          zone = name
+        end
+      end
+    end
+    assert(zone, "swap unavailable: window has no zone")
+    plan.windows[i] = { address = w.address, stable_id = w.stable_id, pid = w.pid,
+      before = zone, before_id = live.compiled.leaf_opts[zone].id,
+      pin = live.state.pins[w.address],
+      exclusive = live.state.exclusive_pins and live.state.exclusive_pins[w.address] or nil }
+  end
+  assert(plan.windows[1].before ~= plan.windows[2].before, "swap unavailable: windows share a zone")
+  for i, ref in ipairs(plan.windows) do
+    ref.zone = plan.windows[3 - i].before
+    ref.zone_id = live.compiled.leaf_opts[ref.zone].id
+  end
+  return plan
+end
+
+-- Navigation uses layout boxes rather than window edges, so empty slots and
+-- aspect-constrained windows have the same directional destinations.
+function M.navigation_slots(active)
+  local ws = active.workspace
+  local live = engine.live[ws.tiled_layout:match("^lua:(.+)$")]
+  local boxes = live and live.boxes and live.boxes[tostring(ws.id)]
+  if not boxes then return end
+  local ok, buckets = pcall(workspace_buckets, ws, live)
+  if not ok then return end -- Wait for the compositor's next layout order.
+  local slots, source = {}, nil
+  for index, name in ipairs(live.compiled.leaves) do
+    local box, bucket = boxes[name], buckets[name]
+    if box and not live.compiled.leaf_opts[name].spacer and not bucket.reserved then
+      local slot = { address = string.format("%08d", index), zone = name, workspace = ws,
+        at = { x = box.x, y = box.y }, size = { x = box.w, y = box.h }, windows = {} }
+      local unavailable = false
+      for _, target in ipairs(bucket) do
+        slot.windows[#slot.windows + 1] = target.window
+        if target.window.hidden or (target.window.fullscreen or 0) ~= 0 then unavailable = true end
+        if target.window.address == active.address then source = slot end
+      end
+      if not unavailable then slots[#slots + 1] = slot end
+    end
+  end
+  return source, slots
+end
+
+function M.move_to_empty(active, zone)
+  local ws = active.workspace
+  local live = engine.live[ws.tiled_layout:match("^lua:(.+)$")]
+  local buckets = workspace_buckets(ws, live)
+  assert(live.compiled.leaf_set[zone] and not live.compiled.leaf_opts[zone].spacer,
+    "move unavailable: zone changed")
+  assert(#buckets[zone] == 0 and not buckets[zone].reserved, "move unavailable: zone is not empty")
+  local found = false
+  for _, bucket in pairs(buckets) do
+    for _, target in ipairs(bucket) do
+      local w = target.window
+      if w.address == active.address and w.stable_id == active.stable_id and w.pid == active.pid
+        and not w.hidden and (w.fullscreen or 0) == 0 then found = true end
+    end
+  end
+  assert(found, "move unavailable: window changed")
+  -- Explicit placement reveals configured slots even in collapsing layouts.
+  live.state.navigation_keep = live.state.navigation_keep or {}
+  live.state.navigation_keep[tostring(ws.id)] = true
+  -- Preserve the other windows' assignments before moving the active one;
+  -- otherwise fill order would pull them into the newly vacated slot.
+  live.state.exclusive_pins = live.state.exclusive_pins or {}
+  for name, bucket in pairs(buckets) do
+    for _, target in ipairs(bucket) do
+      local address = target.window.address
+      live.state.pins[address] = address == active.address and zone or name
+      live.state.exclusive_pins[address] = true
+    end
+  end
+  refresh_workspace(ws)
+  return true
+end
+
+-- Absolute assignments make retry after a lost IPC reply safe. Validate the
+-- entire exchange before changing either pin; never focus or relaunch.
+function M.swap_apply(plan)
+  local windows, ws, live = swap_windows(plan)
+  assert(selector(ws) == plan.workspace and ws.tiled_layout == plan.layout, "swap unavailable: layout changed")
+  for i, w in ipairs(windows) do
+    local ref = plan.windows[i]
+    assert(w.pid == ref.pid, "swap unavailable: window identity changed")
+    assert(live.compiled.leaf_set[ref.zone] and not live.compiled.leaf_opts[ref.zone].spacer,
+      "swap unavailable: zone changed")
+    assert((not ref.zone_id or live.compiled.leaf_opts[ref.zone].id == ref.zone_id)
+      and (not ref.before_id or (live.compiled.leaf_opts[ref.before] or {}).id == ref.before_id),
+      "swap unavailable: zone identity changed")
+    local pin = live.state.pins[w.address]
+    assert(pin == ref.pin or pin == ref.zone, "swap unavailable: pin changed")
+  end
+  local zones = {}
+  for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do
+    zones[name] = true
+    for _, ref in ipairs(plan.windows) do assert(ref.zone ~= name, "swap unavailable: zone is intentionally empty") end
+  end
+  local available = false
+  for _, zone in ipairs(live.compiled.cycle) do if not zones[zone] then available = true end end
+  assert(available, "swap unavailable: leave one fill zone for local windows")
+  live.state.exclusive_pins = live.state.exclusive_pins or {}
+  for _, ref in ipairs(plan.windows) do
+    live.state.pins[ref.address] = ref.zone
+    live.state.exclusive_pins[ref.address] = true
+  end
+  refresh_workspace(ws)
+  return true
+end
+
+function M.swap(active, target)
+  local live = engine.live[active.workspace.tiled_layout:match("^lua:(.+)$")]
+  if not live.state.pins[active.address] and not live.state.pins[target.address] then return false end
+  local request = { windows = { active, target } }
+  local ok, err = pcall(function() M.swap_apply(M.swap_plan(request)) end)
+  if not ok then
+    local function quote(v) return "'" .. tostring(v):gsub("'", "'\\''") .. "'" end
+    hl.exec_cmd("notify-send 'Hypertile swap' " .. quote(err))
+  end
+  return true
+end
+
 -- A layout that still exists keeps its current definition: the user may have
 -- edited it since the snapshot, and silently reverting to the saved spec
 -- until the next reload would be surprising. Only a layout that no longer
@@ -102,7 +444,7 @@ function M.prepare(snapshot)
   for _, ws in ipairs(snapshot.workspaces) do
     local name = ws.layout:match("^lua:(.+)$")
     local spec = name and current_spec(name, snapshot.layouts[name])
-    assert(load(bridge.rule_source(ws.layout, ws.selector, spec), "=session-workspace", "t"))()
+    assert(load(bridge.rule_source(ws.selector, ws.layout, spec), "=session-workspace", "t"))()
   end
   return true
 end
@@ -113,17 +455,25 @@ function M.place(request)
   local saved, address = request.saved, request.address
   local window = "address:" .. address
   dispatch(hl.dsp.window.fullscreen_state, { window = window, internal = 0, client = 0, action = "set" })
-  dispatch(hl.dsp.window.move, { window = window, workspace = saved.workspace, silent = true })
+  dispatch(hl.dsp.window.move, { window = window, workspace = saved.workspace, follow = false })
   dispatch(hl.dsp.window.float, { window = window, action = saved.floating and "on" or "off" })
   if saved.floating then
     dispatch(hl.dsp.window.resize, { window = window, x = saved.size.x, y = saved.size.y })
     dispatch(hl.dsp.window.move, { window = window, x = saved.at.x, y = saved.at.y })
     dispatch(hl.dsp.window.pin, { window = window, action = saved.pinned and "on" or "off" })
   end
-  for _, live in pairs(engine.live) do live.state.pins[address] = nil end
+  for _, live in pairs(engine.live) do
+    live.state.pins[address] = nil
+    if live.state.exclusive_pins then live.state.exclusive_pins[address] = nil end
+  end
   if saved.pin and request.layout then
     local name = request.layout:match("^lua:(.+)$")
-    if name and engine.state[name] then engine.state[name].pins[address] = saved.pin end
+    if name and engine.state[name] then
+      local state = engine.state[name]
+      state.pins[address] = saved.pin
+      state.exclusive_pins = state.exclusive_pins or {}
+      state.exclusive_pins[address] = saved.pin_exclusive or nil
+    end
   end
   return true
 end
@@ -172,6 +522,12 @@ function M.finish(request)
       if matches[old] then wanted[#wanted + 1] = matches[old] end
     end
     if live and wanted[1] then
+      for _, current in ipairs(hl.get_workspaces()) do
+        if selector(current) == ws.selector then
+          live.state.navigation_keep = live.state.navigation_keep or {}
+          live.state.navigation_keep[tostring(current.id)] = ws.navigation_keep or nil
+        end
+      end
       reorder(live, wanted, warnings, ws.selector)
     end
     local populated = false

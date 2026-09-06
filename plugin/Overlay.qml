@@ -6,6 +6,7 @@ import qs.Commons
 import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
+import "Content.js" as Content
 
 // Hypertile overlay: view and edit tiling layouts at true scale. The keys
 // are listed in README.md and in the rail (?).
@@ -47,6 +48,18 @@ Item {
   property var workspaces: []      // hypertile-ctl workspaces --json .workspaces
   property var windows: []         // hypertile-ctl windows --json .windows
   property string defaultLayout: ""
+  property bool contentMode: false      // the rail's Scenes tab: zones are selected, not browsed
+  property var contentCatalog: null     // hypertile-ctl scene catalog --json
+  property bool catalogFailed: false    // no scene service: scenes are unavailable, browsing is not
+  property int catalogFailures: 0
+  property string catalogError: ""
+  property bool namingScene: false
+  property var pendingSwitch: null      // { workspaces, close }: a layout switch over assigned content awaiting confirmation
+  property bool switchConfirmed: false
+  readonly property bool managedContent: {
+    if (!contentCatalog) return false
+    return contentCatalog.current && ["none", "restored"].indexOf(contentCatalog.current.phase) === -1
+  }
   property int viewIndex: 0
   property string errorText: ""
   property string statusText: ""
@@ -120,7 +133,7 @@ Item {
   readonly property bool viewedIsActive: viewed !== null && committedLayout !== "" && ("lua:" + viewed.name) === committedLayout
   readonly property string workspaceId: (current && current.workspace) ? String(current.workspace.id) : ""
   readonly property var selectedZone: {
-    if (!editing || selected === "") return null
+    if ((!editing && !contentMode) || selected === "") return null
     for (var i = 0; i < zones.length; i++) if (zones[i].name === selected) return zones[i]
     return null
   }
@@ -133,6 +146,16 @@ Item {
     }
     out.sort()
     return out
+  }
+  readonly property var contentWindowClasses: {
+    var seen = {}, out = []
+    for (var i = 0; i < windows.length; i++) {
+      var w = windows[i]
+      if (String(w.workspace) === workspaceId && w.class && !seen[w.class]) {
+        seen[w.class] = true; out.push(w.class)
+      }
+    }
+    return out.sort()
   }
   readonly property var monitors: {
     var seen = {}, out = []
@@ -164,6 +187,171 @@ Item {
   readonly property int radiusControl: Math.max(Style.cornerRadius, Style.space(7))
 
   function focusKeys() { keys.forceActiveFocus() }
+
+  // ------------------------------------------------------------- scenes
+  //
+  // The Scenes tab: what each zone of the workspace's layout holds (local
+  // windows, a remote desktop, one app, or nothing) and the saved scenes.
+  // Assignments and scenes are the scene service's; the overlay asks
+  // through hypertile-ctl scene and shows the catalog it re-reads while open.
+
+  function contentFor(zone) { return Content.source(contentCatalog, workspaceId, zone, viewedIsActive) }
+  function contentLabel(zone) { return Content.label(contentFor(zone)) }
+  function contentChip(zone) { return Content.chip(contentFor(zone)) }
+
+  // Icons and names for what a zone holds, from the desktop entries the
+  // catalog lists. The shell's icon provider resolves theme names; a window
+  // class is matched to an installed app, then to a desktop entry heuristically.
+  readonly property string genericIcon: Quickshell.iconPath("application-x-executable", true)
+  function resolveIcon(icon) {
+    var v = String(icon || "")
+    if (v === "") return genericIcon
+    if (v.charAt(0) === "/") return "file://" + v
+    var themed = Quickshell.iconPath(v, true)
+    return themed !== "" ? themed : genericIcon
+  }
+  function catalogApp(desktopId, apps) {
+    apps = apps || (contentCatalog && contentCatalog.apps) || []
+    for (var i = 0; i < apps.length; i++) if (apps[i].desktop_id === desktopId) return apps[i]
+    return null
+  }
+  function catalogAppForClass(cls, apps) {
+    var want = String(cls || "").toLowerCase()
+    if (want === "") return null
+    apps = apps || (contentCatalog && contentCatalog.apps) || []
+    for (var i = 0; i < apps.length; i++) if (String(apps[i].app_class || "").toLowerCase() === want) return apps[i]
+    return null
+  }
+  function iconForApp(desktopId, apps) {
+    var app = catalogApp(desktopId, apps)
+    return resolveIcon(app ? app.icon : "")
+  }
+  function iconForClass(cls, apps) {
+    var app = catalogAppForClass(cls, apps)
+    if (app) return resolveIcon(app.icon)
+    var entry = null
+    try { entry = DesktopEntries.heuristicLookup(String(cls || "")) } catch (e) { entry = null }
+    return resolveIcon(entry ? entry.icon : "")
+  }
+  function iconFor(source) {
+    if (!source) return ""
+    if (source.type === "app") return iconForApp(source.desktop_id)
+    if (source.type === "local" && source.app_class) return iconForClass(source.app_class)
+    return ""
+  }
+  function nameForClass(cls, apps) {
+    var app = catalogAppForClass(cls, apps)
+    if (app) return Content.displayName(app.name)
+    var entry = null
+    try { entry = DesktopEntries.heuristicLookup(String(cls || "")) } catch (e) { entry = null }
+    return entry && entry.name ? entry.name : String(cls || "")
+  }
+  // Zones by where they sit ("Top left"), falling back to the layout's name
+  // where positions would collide.
+  readonly property var zoneLabels: Content.positionLabels(zones, area)
+  function zoneLabel(name) { return zoneLabels[name] || name }
+  // The picker row under the pointer, previewed in the selected zone's card.
+  property var hoverMatch: null
+  function ghost(match) { hoverMatch = match }
+  function unghost(key) { if (hoverMatch && hoverMatch.key === key) hoverMatch = null }
+  // The zone carrying a fill number, for the digit keys.
+  function selectContentNumber(n) {
+    for (var i = 0; i < zones.length; i++) if (zones[i].numbers.indexOf(n) !== -1) { selected = zones[i].name; return }
+  }
+  function contentName(source) {
+    if (source && source.type === "local" && source.app_class) return nameForClass(source.app_class)
+    return Content.label(source)
+  }
+  function layoutSpec(name) {
+    for (var i = 0; i < layouts.length; i++) if (layouts[i].name === name) return layouts[i].spec
+    return null
+  }
+  function focusSearch() { rail.focusSearch() }
+  function nextContentZone() {
+    var names = activeSpec ? Editor.leafNames(activeSpec) : []
+    if (names.length) selected = names[(names.indexOf(selected) + 1) % names.length]
+  }
+
+  function showContent(on) {
+    if (editing) return
+    contentMode = on
+    namingScene = false
+    hoverMatch = null
+    pendingSwitch = null
+    confirmingDelete = false
+    choosingNew = false
+    errorText = ""
+    browseTimer.stop()
+    revertBrowse()
+    selectActive()
+    selected = ""
+    pollCatalog()
+  }
+
+  function pollCatalog() { if (!catalogProc.running && root.catalogFailures < 3) catalogProc.running = true }
+
+  function sceneAction(action, name, workspace) {
+    var args = ["scene", action]
+    if (name) args.push(name)
+    args.push("--workspace", workspace ? String(workspace) : workspaceId, "--json")
+    var status = action === "apply" ? "Applying " + name + "…"
+      : action === "restore" ? "Restoring the previous arrangement…"
+      : action === "save" ? "Saving " + name + "…"
+      : action === "remove" ? "Deleting " + name + "…"
+      : action === "retry" ? "Checking the pending content…"
+      : "Updating the scene…"
+    var done = action === "save" ? "Saved " + name : action === "remove" ? "Deleted " + name : ""
+    if (runCtl(args, status, done)) {
+      browseTimer.stop()
+      commitOnRefresh = true
+    }
+  }
+
+  function startSceneSave() {
+    if (!contentMode || busy || !viewedIsActive) return
+    namingScene = true
+    errorText = ""
+    var scene = contentCatalog ? contentCatalog.current : null
+    rail.focusName((scene && scene.document && scene.document.name && scene.phase !== "restored") ? scene.document.name : "")
+  }
+
+  function confirmSceneName() { saveScene(rail.nameText) }
+
+  function saveScene(name) {
+    name = String(name || "").trim()
+    if (!Editor.validName(name)) { errorText = "Scene name: letters, digits, _ and - only"; return }
+    errorText = ""
+    namingScene = false
+    focusKeys()
+    sceneAction("save", name)
+  }
+
+  function deleteScene(name) { sceneAction("remove", name) }
+
+  function assignContent(type, app) {
+    if (!selected || !viewedIsActive) { errorText = "Select a zone in the current layout"; return }
+    var what = type === "empty" ? "Empty" : app ? app : "Local windows"
+    var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", type, "--json"]
+    if (app) args.push("--app-class", app)
+    runCtl(args, "Putting " + what + " in " + selected + "…", "")
+  }
+
+  function assignApp(app) {
+    if (!selected || !viewedIsActive) { errorText = "Select a zone in the current layout"; return }
+    var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", "app",
+      "--desktop-id", app.desktop_id, "--app-class", app.app_class, "--json"]
+    if (app.app_title) args.push("--app-title", app.app_title)
+    runCtl(args, "Opening " + app.name + " in " + selected + "…", "")
+  }
+
+  function selectContentNeighbor(dir) {
+    if (!root.activeSpec) return
+    var names = Editor.leafNames(root.activeSpec)
+    if (names.length === 0) return
+    if (root.selected === "") { root.selected = names[0]; return }
+    var next = Editor.neighbor(root.activeSpec, root.area, root.selected, dir)
+    if (next !== "") root.selected = next
+  }
 
   // ------------------------------------------------------------ preferences
 
@@ -239,6 +427,7 @@ Item {
     workspacesProc.running = true
     windowsProc.running = true
     defaultProc.running = true
+    pollCatalog()
   }
 
   function parseJson(text, what) {
@@ -281,11 +470,13 @@ Item {
   property string liveLayout: ""        // what the compositor is showing
   property string browseTarget: ""      // what browsing wants it to show
   property string browseLaunched: ""    // what the running switch is going to
+  property string browseToken: ""       // controller lease for a workspace with assigned content
   property bool commitOnRefresh: false
   property bool dismissAfterApply: false
 
   function browseTo(layout) {
     if (layout === "" || root.workspaceId === "") return
+    if (root.contentMode || (root.contentCatalog === null && !root.catalogFailed)) return
     root.browseTarget = layout
     root.liveLayout = layout
     runBrowse()
@@ -293,6 +484,10 @@ Item {
 
   // A compositor-only switch of this workspace; nothing is persisted.
   function browseArgs(layout) {
+    if (root.managedContent || root.browseToken !== "") {
+      if (root.browseToken === "") root.browseToken = Editor.newId()
+      return [root.ctl, "scene", "browse", layout, "--workspace", root.workspaceId, "--browse-token", root.browseToken, "--json"]
+    }
     return [root.ctl, "apply", layout, "--workspace", root.workspaceId, "--no-persist", "--quiet"]
   }
 
@@ -308,6 +503,15 @@ Item {
   // killed with the overlay.
   function revertBrowse() {
     browseTimer.stop()
+    if (root.browseToken !== "") {
+      var token = root.browseToken
+      root.browseToken = ""
+      root.liveLayout = root.committedLayout
+      root.browseTarget = root.committedLayout
+      root.browseLaunched = root.committedLayout
+      Quickshell.execDetached([root.ctl, "scene", "browse-end", "--workspace", root.workspaceId, "--browse-token", token, "--json"])
+      return
+    }
     if (root.committedLayout === "" || root.liveLayout === "" || root.liveLayout === root.committedLayout || root.workspaceId === "") return
     root.liveLayout = root.committedLayout
     root.browseTarget = root.committedLayout
@@ -349,6 +553,7 @@ Item {
   // at it, and the default follow the new name.
   function startRename() {
     if (!root.viewed || root.editing || root.busy) return
+    if (root.browseToken !== "") revertBrowse()
     root.confirmingDelete = false
     root.choosingNew = false
     root.renaming = true
@@ -420,6 +625,7 @@ Item {
   // OSD is for switches made without it.
   function applyViewed(andClose) {
     if (!root.viewed) return
+    if (root.managedContent && !root.viewedIsActive) { askSwitch([root.workspaceId], andClose === true); return }
     browseTimer.stop()
     if (!runCtl(["apply", root.viewed.name, "--quiet"], "Using " + root.viewed.name + "…", "Now using " + root.viewed.name)) return
     root.commitOnRefresh = true
@@ -428,7 +634,56 @@ Item {
 
   function applyTo(workspace) {
     if (!root.viewed) return
-    runCtl(["apply", root.viewed.name, "--workspace", String(workspace), "--quiet"], "Using " + root.viewed.name + " on workspace " + workspace + "…", "Workspace " + workspace + " uses " + root.viewed.name)
+    workspace = String(workspace)
+    if (contentWorkspace(workspace)) {
+      if (!root.switchConfirmed) { askSwitch([workspace], false); return }
+      // The controller replaces the content along with the layout.
+      if (runCtl(["scene", "layout", root.viewed.name, "--workspace", workspace, "--json"], "Switching workspace " + workspace + " to " + root.viewed.name + "…", "Workspace " + workspace + " uses " + root.viewed.name)
+          && workspace === root.workspaceId) root.commitOnRefresh = true
+      return
+    }
+    runCtl(["apply", root.viewed.name, "--workspace", workspace, "--quiet"], "Using " + root.viewed.name + " on workspace " + workspace + "…", "Workspace " + workspace + " uses " + root.viewed.name)
+  }
+
+  // Whether a workspace has content assigned to zones (a scene).
+  function contentWorkspace(workspace) {
+    if (!root.contentCatalog) return false
+    if ((root.contentCatalog.active_workspaces || []).indexOf(workspace) !== -1) return true
+    return false
+  }
+
+  // Using another layout on a workspace with assigned content replaces the
+  // content (apps stay open), so it is asked about first.
+  function askSwitch(workspaces, close) {
+    root.applyQueue = []
+    root.confirmingDelete = false
+    root.choosingNew = false
+    root.pendingSwitch = { workspaces: workspaces.map(String), close: close === true }
+  }
+
+  function switchSummary() {
+    var p = root.pendingSwitch
+    if (!p) return ""
+    var managed = p.workspaces.filter(function(w) { return contentWorkspace(w) })
+    var s = managed.length === 1 ? "Workspace " + managed[0] + " has content assigned to its zones. " : "Workspaces " + managed.join(", ") + " have content assigned to their zones. "
+    s += "Every zone goes back to local windows; apps stay open."
+    return s + " Save the arrangement as a scene first to come back to it."
+  }
+
+  function confirmSwitch() {
+    var p = root.pendingSwitch
+    if (!p || !root.viewed || root.busy) return
+    root.pendingSwitch = null
+    root.switchConfirmed = true
+    if (p.close) {
+      browseTimer.stop()
+      if (!runCtl(["scene", "layout", root.viewed.name, "--workspace", root.workspaceId, "--json"], "Switching to " + root.viewed.name + "…", "Now using " + root.viewed.name)) { root.switchConfirmed = false; return }
+      root.commitOnRefresh = true
+      root.dismissAfterApply = true
+      return
+    }
+    root.applyQueue = p.workspaces.slice(1)
+    applyTo(p.workspaces[0])
   }
 
   // Every existing workspace on a monitor, one apply per workspace.
@@ -438,6 +693,7 @@ Item {
     var ids = []
     for (var i = 0; i < root.workspaces.length; i++) if (root.workspaces[i].monitor === monitor) ids.push(root.workspaces[i].id)
     if (ids.length === 0) return
+    if (!root.switchConfirmed) for (var j = 0; j < ids.length; j++) if (contentWorkspace(String(ids[j]))) { askSwitch(ids, false); return }
     root.applyQueue = ids.slice(1)
     applyTo(ids[0])
   }
@@ -466,7 +722,8 @@ Item {
     if (!root.current) return
     var fromBlank = blank === true || !root.viewed || !root.viewed.spec
     if (!asNew && fromBlank) return
-    root.draft = fromBlank ? ({ name: "main", fill: ["main"] }) : Editor.clone(root.viewed.spec)
+    if (root.browseToken !== "") revertBrowse()
+    root.draft = Editor.identify(fromBlank ? ({ name: "main", fill: ["main"] }) : root.viewed.spec, asNew === true)
     root.draftIsNew = asNew === true
     root.draftName = !root.draftIsNew ? root.viewed.name : (fromBlank ? uniqueLayoutName("new-layout") : uniqueLayoutName(root.viewed.name + "-copy"))
     root.undoStack = []
@@ -691,6 +948,7 @@ Item {
 
   function doPreview() {
     if (!root.editing || !root.draft || root.workspaceId === "") return
+    if (root.managedContent) { root.statusText = "Assigned content stays in place while editing. Changes take effect when saved."; return }
     if (previewProc.running) { root.previewPending = true; return }
     editFile.setText(docJson())
   }
@@ -927,6 +1185,50 @@ Item {
     }
   }
 
+  // The scene catalog: the workspace's scene, the saved scenes, the
+  // installed apps. Re-read every couple of seconds while open,
+  // so the states in the Scenes tab follow the controller. Without the
+  // scene service (an older install) there are no scenes; the Scenes
+  // tab says so, and nothing else is affected.
+  Process {
+    id: catalogProc
+    command: [root.ctl, "scene", "catalog", "--json"].concat(root.workspaceId ? ["--workspace", root.workspaceId] : [])
+      .concat(root.browseToken ? ["--browse-token", root.browseToken] : [])
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var doc = null
+        try { doc = JSON.parse(String(text || "")) } catch (e) { return }
+        if (!doc || typeof doc !== "object") return
+        root.catalogFailures = 0
+        root.catalogFailed = false
+        root.catalogError = ""
+        var old = root.contentCatalog ? root.contentCatalog.current : null
+        root.contentCatalog = doc
+        if (old && doc.current && (old.phase !== doc.current.phase || JSON.stringify(old.document) !== JSON.stringify(doc.current.document))) {
+          root.commitOnRefresh = true
+          if (!currentProc.running) currentProc.running = true
+        }
+      }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.catalogError = String(text || "").trim().replace(/^hypertile-ctl: /, "")
+    }
+    onExited: function(code, status) {
+      if (code === 0 && status === 0) return
+      root.catalogFailures = (code === 126 || code === 127) ? 3 : root.catalogFailures + 1
+      if (root.catalogFailures >= 3) root.catalogFailed = true
+    }
+  }
+
+  Timer {
+    interval: 2000
+    repeat: true
+    running: root.opened && root.catalogFailures < 3
+    onTriggered: root.pollCatalog()
+  }
+
   // One generic runner for apply / default / rename / remove / save;
   // refreshes when done.
   CtlProcess {
@@ -938,6 +1240,7 @@ Item {
         root.commitOnRefresh = false
         root.dismissAfterApply = false
         root.applyQueue = []
+        root.switchConfirmed = false
         root.statusText = ""
         return
       }
@@ -949,6 +1252,7 @@ Item {
         root.applyTo(id)
         return
       }
+      root.switchConfirmed = false
       if (root.dismissAfterApply) {
         // The switch is persisted now: closing must not revert it.
         root.dismissAfterApply = false
@@ -975,8 +1279,8 @@ Item {
     var shift = event.modifiers & Qt.ShiftModifier
     var k = event.key
 
-    if (root.naming || root.renaming) {
-      if (k === Qt.Key_Escape) { root.naming = false; root.renaming = false; root.errorText = ""; keys.forceActiveFocus(); return true }
+    if (root.naming || root.renaming || root.namingScene) {
+      if (k === Qt.Key_Escape) { root.naming = false; root.renaming = false; root.namingScene = false; root.errorText = ""; keys.forceActiveFocus(); return true }
       return false
     }
 
@@ -988,6 +1292,7 @@ Item {
     if (k === Qt.Key_Question || (shift && k === Qt.Key_Slash)) { setPref("showKeys", !root.showKeys); return true }
 
     if (k === Qt.Key_Escape) {
+      if (root.pendingSwitch) { root.pendingSwitch = null; return true }
       if (root.confirmingDelete) { root.confirmingDelete = false; return true }
       if (root.choosingNew) { root.choosingNew = false; return true }
       if (root.confirmingDiscard) { root.confirmingDiscard = false; return true }
@@ -999,6 +1304,11 @@ Item {
         return true
       }
       dismiss()
+      return true
+    }
+
+    if (root.pendingSwitch) {
+      if (k === Qt.Key_Return || k === Qt.Key_Enter) { confirmSwitch(); return true }
       return true
     }
 
@@ -1047,6 +1357,24 @@ Item {
       return true
     }
 
+    // The Scenes tab: the keys select zones; the layout keys are the
+    // Layouts tab's.
+    if (root.contentMode) {
+      if (k === Qt.Key_Tab) { nextContentZone(); return true }
+      var dir = (k === Qt.Key_Left || (plain && k === Qt.Key_H)) ? "left"
+        : (k === Qt.Key_Right || (plain && k === Qt.Key_L)) ? "right"
+        : (k === Qt.Key_Up || (plain && k === Qt.Key_K)) ? "up"
+        : (k === Qt.Key_Down || (plain && k === Qt.Key_J)) ? "down" : ""
+      if (dir !== "" && (k === Qt.Key_Left || k === Qt.Key_Right || k === Qt.Key_Up || k === Qt.Key_Down)) { selectContentNeighbor(dir); return true }
+      if (plain && k >= Qt.Key_1 && k <= Qt.Key_9) { selectContentNumber(k - Qt.Key_0); return true }
+      // A printable key with a zone selected starts a search in the
+      // picker, wherever the focus was (after a save, a click on chrome).
+      if (plain && root.selected !== "" && root.viewedIsActive && event.text.length === 1 && event.text.trim() !== "") { rail.typeSearch(event.text); return true }
+      if (dir !== "") { selectContentNeighbor(dir); return true }
+      if (k === Qt.Key_Return || k === Qt.Key_Enter) { dismiss(); return true }
+      if (plain && k === Qt.Key_R) { refresh(); return true }
+      return true
+    }
     if (k === Qt.Key_Right || k === Qt.Key_Down || (plain && (k === Qt.Key_L || k === Qt.Key_J))) { step(1); return true }
     if (k === Qt.Key_Left || k === Qt.Key_Up || (plain && (k === Qt.Key_H || k === Qt.Key_K))) { step(-1); return true }
     if (k === Qt.Key_Return || k === Qt.Key_Enter) { if (root.viewedIsActive) dismiss(); else applyViewed(true); return true }
@@ -1134,7 +1462,7 @@ Item {
         }
 
         function zoneAt(x, y) {
-          return (root.editing && root.draft && inArea(x, y)) ? Editor.leafAt(root.draft, root.area, x, y) : ""
+          return ((root.editing || root.contentMode) && root.activeSpec && inArea(x, y)) ? Editor.leafAt(root.activeSpec, root.area, x, y) : ""
         }
 
         onPositionChanged: function(mouse) {
@@ -1152,6 +1480,7 @@ Item {
           if (root.naming) root.naming = false
           if (root.renaming) root.renaming = false
           if (!root.editing) {
+            if (root.contentMode) { root.selected = zoneAt(mouse.x, mouse.y); return }
             if (mouse.button === Qt.LeftButton) root.dismiss()
             return
           }
@@ -1286,6 +1615,18 @@ Item {
     function keysHint(on: bool): void { root.setPref("showKeys", on) }
     function peek(on: bool): void { root.peeking = on }
     function refresh(): void { root.refresh() }
+    function content(on: bool): void { root.showContent(on) }
+    function assign(kind: string): void { root.assignContent(kind) }
+    function assignApp(cls: string): void { root.assignContent("local", cls) }
+    function scene(action: string, name: string): void { root.sceneAction(action, name) }
+    function saveScene(name: string): void { root.saveScene(name) }
+    function saveSceneAs(): void { root.startSceneSave() }
+    function deleteScene(name: string): void { root.deleteScene(name) }
+    function confirmSwitch(): void { root.confirmSwitch() }
+    function search(text: string): void { rail.setSearch(text) }
+    function pick(): void { rail.pickMatch() }
+    function hover(index: int): void { rail.hoverMatch(index) }
+    function focusSearch(): void { root.focusSearch() }
     function viewed(): string { return root.viewed ? root.viewed.name : "" }
     function view(name: string): void {
       if (root.editing) return
@@ -1334,7 +1675,9 @@ Item {
         undo: root.undoStack.length, status: root.statusText, error: root.errorText,
         workspaces: root.workspaces.length, windows: root.windows.length, defaultLayout: root.defaultLayout,
         committed: root.committedLayout, live: root.liveLayout, dockLeft: root.dockLeft, showKeys: root.showKeys,
-        area: root.area })
+        area: root.area, contentMode: root.contentMode, query: rail.searchText, matches: rail.matchCount,
+        namingScene: root.namingScene, pendingSwitch: root.pendingSwitch, catalogFailed: root.catalogFailed,
+        scene: root.contentCatalog ? root.contentCatalog.current : null })
     }
   }
 }

@@ -37,7 +37,7 @@ everything else in place, and is the one to run again after every update:
 - the engine and bridge into `~/.config/hypr/`, and the two shipped layouts
   into `~/.config/hypr/layouts/` (a layout that already exists is left alone)
 - `hypertile-ctl` into `~/.local/bin/`
-- the session recovery service, started by the layout loader
+- the session recovery and independent Scenes services, started by the layout loader
 - a `require("hypr.hypertile-layouts")` line in `hyprland.lua`
 - the bar widget after the workspaces (skipped when it is already on the bar)
 - a **Layouts** entry in the `SUPER+SPACE` menu (`--no-menu` skips it)
@@ -47,7 +47,11 @@ everything else in place, and is the one to run again after every update:
   overlay; `SUPER+L` cycles the workspace through your layouts and then
   dwindle, replacing Omarchy's dwindle/scrolling toggle, which cannot
   return to a Lua layout; `SUPER+SHIFT+L` cycles the other way
-- `SUPER+Arrow` focuses and `SUPER+SHIFT+Arrow` swaps with the nearest window in that direction,
+- `SUPER+Arrow` focuses the nearest window in that direction. `SUPER+SHIFT+Arrow`
+  moves to the next layout slot: an empty slot receives the active window, and an
+  occupied slot swaps windows. Other apps stay in their slots; spacers and scene
+  slots marked Empty are skipped. Moving into a collapsed slot reveals the full
+  layout on that workspace until the layout is reset.
 
 Every config file it edits is first copied to `<file>.hypertile.bak`. It
 then reloads Hyprland and checks `hyprctl configerrors`. Update with:
@@ -302,16 +306,20 @@ Two layouts ship:
 manifest.json          the Omarchy plugin manifest (kinds: overlay, bar-widget)
 plugin/                the shell plugin: Overlay.qml, Rail.qml (inspector), ZoneItem.qml,
                        Divider.qml, Thumb.qml, Card.qml, Chip.qml, Geometry.js (drawing),
-                       Editor.js (edits); LayoutWidget.qml (bar widget)
+                       Editor.js (edits); ContentPane.qml and Content.js (the Scenes tab);
+                       LayoutWidget.qml (bar widget)
 hypertile.lua          engine: spec -> layout provider (hot-swappable)
 hypertile-bridge.lua   bridge: load/serialize/JSON/save/preview/apply
 hypertile-json.lua     JSON encode/decode (pure Lua)
 hypertile-layouts.lua  loader: requires every ~/.config/hypr/layouts/*.lua
+hypertile-navigation.lua  gap-aware focus and swap for SUPER+arrows and SUPER+SHIFT+arrows
 hypertile-session.lua  compositor adapter: capture and restore window placement
 session/service.py    session watcher, durable snapshots, app launch and matching
+scenes/*.py            scenes service: saved scenes, the app catalog, one-shot placement
 layouts/*.lua          shipped layouts: ultrawide, quad
 bin/hypertile-ctl      CLI over the bridge
 bin/hypertile-session  session service entry point (also via hypertile-ctl session)
+bin/hypertile-scenes   scenes service entry point (also via hypertile-ctl scene)
 install.sh             puts the engine, CLI, layouts, keybinds, and menu entry in place
 uninstall.sh           takes them out again
 probe.lua              live probe (logs everything the API hands a layout)
@@ -366,6 +374,21 @@ where the hand-written provider in `test/fixtures/legacy-ultrawide.lua`
 put them (within 1px on stacked heights, where hypertile rounds edges
 instead of sizes to avoid seams). The CLI runs from a checkout without
 installing: `HYPERTILE_SRC=$PWD bin/hypertile-ctl list`.
+
+## Remote desktops
+
+Scenes can launch or reuse installed apps in named zones, including each
+computer's Remote Desktops launcher. Placement happens once; subsequent window
+moves and closes stay under your control. The independent Scenes service does
+not own remote connections or host display settings.
+
+Use the overlay’s **Scenes** tab or `hypertile-ctl scene` to assign apps, local
+windows, or Empty, then save the arrangement. See [scenes and content](docs/SCENES.md)
+for setup, migration from legacy stream sources, and recovery behavior.
+Remote connections and host recovery now belong to
+[Remote Desktops](https://github.com/jdvmi00/remote-desktops). Upgrade checks
+require legacy connections to be disconnected and restored before removing
+their old runtime files; saved configuration and journals are preserved.
 
 ## License
 

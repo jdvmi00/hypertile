@@ -40,11 +40,36 @@ state="${XDG_STATE_HOME:-$HOME/.local/state}/hypertile"
 plugin_id="jmartin.hypertile"
 plugin_dst="$config/omarchy/plugins/$plugin_id"
 
+PYTHONPATH="$src/session" python3 - "$state" <<'PY_PREFLIGHT'
+from pathlib import Path
+from upgrade import check_legacy
+import sys
+check_legacy(Path(sys.argv[1]))
+PY_PREFLIGHT
+
 # Stop the writer before removing its code; retain recovery snapshots unless
 # --purge was requested. A missing/stopped service is harmless.
 if [[ -x "$bin/hypertile-session" ]]; then
   "$bin/hypertile-session" stop >/dev/null 2>&1 || true
 fi
+if [[ -x "$bin/hypertile-stream" ]]; then
+  "$bin/hypertile-stream" stop >/dev/null 2>&1 || true
+fi
+
+if [[ -x "$bin/hypertile-scenes" ]]; then
+  "$bin/hypertile-scenes" stop >/dev/null 2>&1 || true
+fi
+
+# Keep pending host recovery tools intact and prevent legacy writer restarts.
+mkdir -p "$state/streams"
+exec 9>"$state/streams/writer.lock"
+flock -sn 9 || { echo "uninstall.sh: legacy controller is still running" >&2; exit 1; }
+PYTHONPATH="$src/session" python3 - "$state" <<'PY_CHECK'
+from pathlib import Path
+from upgrade import check_legacy
+import sys
+check_legacy(Path(sys.argv[1]))
+PY_CHECK
 
 # One backup per edited config file, overwritten on each edit.
 backup() {
@@ -121,7 +146,19 @@ for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts
   rm -f "$hypr/$f"
 done
 rm -f "$bin/hypertile-ctl"
-rm -f "$bin/hypertile-session" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/service.py"
+PYTHONPATH="$src/session" python3 - "$bin" "${XDG_DATA_HOME:-$HOME/.local/share}" <<'PY_CLEANUP'
+from pathlib import Path
+from upgrade import cleanup
+import sys
+cleanup(Path(sys.argv[1]), Path(sys.argv[2]))
+PY_CLEANUP
+rm -f "$bin/hypertile-session" "$bin/hypertile-scenes"
+for module in service scene_recovery upgrade; do
+  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/$module.py"
+done
+for module in scene_service apps ipc scenes browse; do
+  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/scenes/$module.py"
+done
 echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then

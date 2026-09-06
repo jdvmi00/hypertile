@@ -3,7 +3,9 @@
 import os
 from pathlib import Path
 import runpy
+import sys
 
 source = os.environ.get("HYPERTILE_SRC")
 root = Path(source) if source else Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hypertile"
+sys.path.insert(0, str(root / "session"))
 runpy.run_path(str(root / "session/service.py"), run_name="__main__")

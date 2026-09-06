@@ -1,0 +1,433 @@
+"""Scene definitions and orchestration. App lifecycle belongs to each app."""
+import copy
+import json
+import os
+from pathlib import Path
+import re
+import subprocess
+import tempfile
+import uuid
+
+from service import atomic_json
+from apps import AppPlacement
+
+
+def check(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
+def name(value):
+    check(isinstance(value, str) and re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}", value), "invalid scene name")
+    return value
+
+
+def leaves(spec):
+    children = spec.get("columns", spec.get("rows"))
+    if children is None:
+        return [spec]
+    return [leaf for child in children for leaf in leaves(child)]
+
+
+def identify(spec):
+    spec = copy.deepcopy(spec)
+    spec.setdefault("layout_id", str(uuid.uuid4()))
+    for leaf in leaves(spec):
+        leaf.setdefault("id", str(uuid.uuid4()))
+    return spec
+
+
+class Layouts:
+    def __init__(self):
+        src = os.environ.get("HYPERTILE_SRC")
+        self.ctl = str(Path(src) / "bin/hypertile-ctl" if src else Path.home() / ".local/bin/hypertile-ctl")
+        self.directory = Path(os.environ.get("HYPERTILE_LAYOUTS_DIR") or
+                              Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "hypr/layouts")
+        self.stamp, self.cache = None, []
+
+    def run(self, *args, document=None):
+        result = subprocess.run([self.ctl, *args], input=json.dumps(document) if document is not None else None,
+                                capture_output=True, text=True, timeout=10)
+        check(result.returncode == 0, result.stderr.strip() or "layout command failed")
+        return result.stdout
+
+    def all(self):
+        stamp = [(str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in sorted(self.directory.glob("*.lua"))]
+        if stamp != self.stamp:
+            self.cache = [v for v in json.loads(self.run("list", "--json"))["layouts"] if v.get("spec")]
+            self.stamp = stamp
+        return copy.deepcopy(self.cache)
+
+    def get(self, hint, identity=None):
+        entries = self.all()
+        matches = [v for v in entries if (v["spec"].get("layout_id") == identity if identity else v["name"] == hint)]
+        check(len(matches) == 1, "Scene layout is missing or its identity is ambiguous; choose a layout again")
+        return matches[0]
+
+    def ensure(self, hint):
+        entry = self.get(hint)
+        spec = identify(entry["spec"])
+        if spec != entry["spec"]:
+            # One-time metadata migration. No geometry, fill or app rules change.
+            self.run("save", "-", "--no-reload", document={"name": hint, "spec": spec})
+            self.stamp = None
+        return {"name": hint, "spec": spec}
+
+    def persist(self, workspace, rule):
+        check(re.fullmatch(r"[1-9][0-9]*", workspace), "invalid scene workspace")
+        state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+        directory = Path(os.environ.get("HYPERTILE_RULES_DIR") or state / "hypertile/workspace-rules")
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        fd, path = tempfile.mkstemp(prefix=".scene-", dir=directory)
+        try:
+            with os.fdopen(fd, "w") as stream:
+                stream.write(rule + "\n")
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(path, directory / (workspace + ".lua"))
+            (state / "omarchy/workspace-layouts" / (workspace + ".lua")).unlink(missing_ok=True)
+        finally:
+            Path(path).unlink(missing_ok=True)
+
+
+class Manager:
+    def __init__(self, controller, layouts=None, directory=None):
+        self.ctl = controller
+        self.apps = AppPlacement(controller)
+        self.layouts = layouts or Layouts()
+        self.directory = directory or controller.config.parent / "scenes"
+        self.records = controller.state.setdefault("scenes", {})
+
+    def path(self, value):
+        return self.directory / (name(value) + ".json")
+
+    def load(self, value):
+        try:
+            return json.loads(self.path(value).read_text())
+        except FileNotFoundError:
+            raise ValueError("No saved scene named " + value) from None
+
+    def resolve(self, doc, migrate=False):
+        check(isinstance(doc, dict) and doc.get("version") == 1, "unsupported scene schema")
+        hint = doc.get("layout", "").removeprefix("lua:")
+        name(hint)
+        entry = self.layouts.get(hint, doc.get("layout_id"))
+        if migrate:
+            entry = self.layouts.ensure(entry["name"])
+        spec = entry["spec"]
+        nodes = leaves(spec)
+        ids = [n.get("id") for n in nodes if n.get("id")]
+        check(len(ids) == len(set(ids)), "duplicate zone identities")
+        inputs = doc.get("sources", {})
+        check(isinstance(inputs, dict), "scene sources must be an object")
+        output, blocked, apps = {}, set(), set()
+        for key, source in inputs.items():
+            check(isinstance(source, dict), "invalid scene source")
+            matches = [n for n in nodes if n.get("id") == key]
+            if not matches and not doc.get("layout_id"):
+                matches = [n for n in nodes if n["name"] == key]
+            check(len(matches) == 1, "Scene zone is missing: " + str(source.get("zone", key)) + "; choose its replacement")
+            leaf = matches[0]
+            kind = source.get("type")
+            check(kind != "stream", "Legacy stream source: replace it with an installed app desktop ID")
+            check(kind in ("local", "empty", "app"), "unsupported scene source type")
+            check(not leaf.get("spacer") or kind == "empty", "A spacer can only contain Empty")
+            value = {"type": kind, "zone": leaf["name"]}
+            if kind == "app":
+                value.update(self.apps.desktop.resolve(source))
+                match = (value["app_class"], value.get("app_title"))
+                check(not any(c == match[0] and (not t or not match[1] or t == match[1]) for c, t in apps),
+                      "Overlapping app matches cannot occupy separate scene zones")
+                apps.add(match)
+            if kind == "local" and source.get("app_class"):
+                app = source["app_class"]
+                check(isinstance(app, str) and 0 < len(app) <= 250 and "\n" not in app, "invalid app class")
+                check(not any(c == app for c, _ in apps), "An app class can occupy only one scene zone")
+                apps.add((app, None))
+                value["app_class"] = app
+            if kind == "empty":
+                blocked.add(leaf["name"])
+            output[leaf.get("id", leaf["name"])] = value
+        cycle = spec.get("cycle", spec.get("fill", [n["name"] for n in nodes if not n.get("spacer")]))
+        check(any(zone not in blocked for zone in cycle), "Leave one fill zone for local windows")
+        normalized = {"version": 1, "layout": entry["name"], "sources": output}
+        if spec.get("layout_id"):
+            normalized["layout_id"] = spec["layout_id"]
+        if doc.get("name"):
+            normalized["name"] = name(doc["name"])
+        return normalized, spec
+
+    def workspace(self, request, snap):
+        workspace = str(request.get("workspace") or snap["workspace"])
+        check(re.fullmatch(r"[1-9][0-9]*", workspace), "Scenes currently use numbered workspaces")
+        check(any(w["selector"] == workspace for w in snap["workspaces"]), "Create this workspace before applying a scene")
+        return workspace
+
+    def capture(self, workspace, snap, migrate=True):
+        ws = next(w for w in snap["workspaces"] if w["selector"] == workspace)
+        check(ws["layout"].startswith("lua:"), "Choose a Hypertile layout before saving content")
+        entry = self.layouts.ensure(ws["layout"][4:]) if migrate else self.layouts.get(ws["layout"][4:])
+        spec, bindings = entry["spec"], {}
+        active = self.records.get(workspace)
+        if active and active.get("phase") not in ("waiting-workspace", "restored") and active.get("document") and active["document"].get("layout_id") == spec.get("layout_id"):
+            bindings = copy.deepcopy(active["document"]["sources"])
+            bindings = {k: v for k, v in bindings.items() if v["type"] != "stream"}
+        doc = {"version": 1, "layout": entry["name"], "sources": bindings}
+        if spec.get("layout_id"):
+            doc["layout_id"] = spec["layout_id"]
+        # A change to a named scene keeps the name: the scene is then modified
+        # (Save writes it back) rather than a new unsaved one.
+        if active and active.get("phase") not in ("waiting-workspace", "restored") and active.get("document") \
+                and active["document"].get("name") and active["document"].get("layout_id") == spec.get("layout_id"):
+            doc["name"] = active["document"]["name"]
+        return doc
+
+    def modified(self, document):
+        """Whether the document differs from its saved definition (unnamed: always)."""
+        if not document.get("name"):
+            return True
+        try:
+            saved, _ = self.resolve(self.load(document["name"]))
+        except (ValueError, KeyError, TypeError):
+            return True
+        return saved["sources"] != document["sources"] or saved.get("layout_id") != document.get("layout_id")
+
+    def public(self, record):
+        if not record:
+            return {"phase": "none", "sources": [], "document": None}
+        out = {k: copy.deepcopy(record[k]) for k in ("document", "workspace", "generation", "operation", "phase", "error", "modified", "results") if k in record}
+        out["can_restore"] = bool(record.get("baseline"))
+        out["sources"] = []
+        for key, source in record.get("document", {}).get("sources", {}).items():
+            item = {**source, "zone_id": key}
+            item["status"] = "ready"
+            for result in record.get("results", []):
+                if result["zone"] == source["zone"]:
+                    item.update(result)
+            if source["type"] == "app":
+                state = record.get("apps", {}).get(key, {})
+                item.update(status=state.get("status", "pending"), error=state.get("error"))
+            out["sources"].append(item)
+        return out
+
+    def has_apps(self, document):
+        return any(s["type"] == "app" for s in document["sources"].values())
+
+    def start(self, doc, workspace, snap, restoring=False, force=False):
+        document, spec = self.resolve(doc)
+        check(document.get("layout_id"), "Save the scene first to establish layout and zone identities")
+        old = self.records.get(workspace)
+        if old:
+            self.apps.observe(old, snap)
+        if not force and not restoring and old and not any(a.get("status") in ("moved", "closed", "needs-attention") for a in old.get("apps", {}).values()) and old.get("document") == document and old["phase"] not in ("needs-attention", "restored", "waiting-workspace", "waiting-session"):
+            return self.public(old)
+        if old and old.get("baseline") and old["phase"] != "restored":
+            baseline = copy.deepcopy(old["baseline"])
+        else:
+            ws = next((w for w in snap["workspaces"] if w["selector"] == workspace), None)
+            if not ws:
+                check(self.has_apps(document), "Workspace is unavailable")
+                ws = {"layout": "dwindle"}
+            baseline = {"layout": ws["layout"], "document": self.capture(workspace, snap) if ws["layout"].startswith("lua:") else None,
+                        "windows": [{k: w[k] for k in ("address", "stable_id", "pid", "pin", "pin_exclusive") if k in w}
+                                    for w in snap["windows"] if w["workspace"] == workspace], "instance": self.ctl.compositor.instance}
+        record = {"workspace": workspace, "document": document, "spec": spec, "baseline": baseline,
+                  "generation": (old or {}).get("generation", 0) + 1, "operation": uuid.uuid4().hex,
+                  "phase": "stopping", "restoring": restoring, "modified": self.modified(document)}
+        record["retired_pins"] = copy.deepcopy((old or {}).get("retired_pins", []) + (old or {}).get("pins", []))
+        # A new explicit assignment supersedes pending placement elsewhere.
+        # An older workspace must not claim the app when its late window arrives.
+        for other_ws, other in self.records.items():
+            if other_ws == workspace or other.get("phase") == "restored":
+                continue
+            for key, source in other.get("document", {}).get("sources", {}).items():
+                if source["type"] == "app" and any(s["type"] == "app" and s["app_class"] == source["app_class"]
+                    and (not s.get("app_title") or not source.get("app_title") or s["app_title"] == source["app_title"])
+                    for s in document["sources"].values()):
+                    other.setdefault("apps", {})[key] = {"status": "moved"}
+        self.records[workspace] = record
+        self.ctl.persist()
+        return self.public(record)
+
+    def command(self, request):
+        action = request.get("action", "current")
+        if action in ("browse", "browse-end"):
+            return self.ctl.browser.command(request)
+        if action == "list":
+            entries = []
+            for path in sorted(self.directory.glob("*.json")):
+                try:
+                    doc, _ = self.resolve(json.loads(path.read_text()))
+                    # What the scene places, for the overlay's scene cards.
+                    sources = [{k: v for k, v in s.items() if k in ("zone", "type", "desktop_id", "app_name", "app_class")}
+                               for s in doc["sources"].values()]
+                    entries.append({"name": path.stem, "layout": doc["layout"], "valid": True, "sources": sources})
+                except (ValueError, KeyError, TypeError) as error:
+                    entries.append({"name": path.stem, "valid": False, "error": str(error)})
+            return {"version": 1, "scenes": entries}
+        if action == "show":
+            return self.load(request["name"])
+        if action == "remove":
+            self.path(request["name"]).unlink()
+            return {"removed": request["name"]}
+        if action == "validate":
+            doc, _ = self.resolve(request["document"])
+            return {"valid": True, "document": doc}
+        snap = self.ctl.compositor.snapshot()
+        requested_workspace = str(request.get("workspace") or snap["workspace"])
+        workspace = requested_workspace if action == "current" and requested_workspace in self.records else self.workspace(request, snap)
+        changed = [self.apps.observe(r, snap) for r in self.records.values()]
+        if any(changed):
+            self.ctl.persist()
+        if action == "current":
+            return self.public(self.records.get(workspace))
+        if action == "catalog":
+            self.ctl.browser.heartbeat(workspace, request.get("browse_token"))
+            return {"version": 1, "current": self.public(self.records.get(workspace)),
+                    "scenes": self.command({"action": "list"})["scenes"],
+                    "active_workspaces": [w for w, r in self.records.items() if r["phase"] != "restored"],
+                    "apps": self.apps.desktop.catalog(snap["windows"]),
+                    "monitor_inputs": [], "workspace": workspace}
+        if action == "save":
+            doc = request.get("document") or self.capture(workspace, snap)
+            doc, _ = self.resolve(doc, migrate=True)
+            doc["name"] = name(request["name"])
+            self.directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            atomic_json(self.path(doc["name"]), doc)
+            active = self.records.get(workspace)
+            if active and active["document"]["sources"] == doc["sources"] and active["document"]["layout_id"] == doc["layout_id"]:
+                active["document"] = copy.deepcopy(doc)
+                active["modified"] = False
+                if active["phase"] == "restored":
+                    # The restored arrangement is now this named scene, applied.
+                    active.update(phase="ready", restoring=False)
+                    active.pop("error", None)
+                self.ctl.persist()
+            return {"saved": doc["name"], "document": doc}
+        if action == "apply":
+            return self.start(self.load(request["name"]), workspace, snap)
+        if action == "layout":
+            entry = self.layouts.ensure(request["name"])
+            return self.start({"version": 1, "layout": entry["name"], "layout_id": entry["spec"]["layout_id"], "sources": {}}, workspace, snap)
+        if action in ("restore", "cancel"):
+            active = self.records.get(workspace)
+            check(active and active.get("baseline"), "No scene changes to restore")
+            baseline = active["baseline"]
+            if baseline["document"]:
+                return self.start(baseline["document"], workspace, snap, restoring=True)
+            active.update(phase="restore-builtin", restoring=True)
+            self.ctl.persist()
+            return self.public(active)
+        if action == "retry":
+            active = self.records.get(workspace)
+            check(active, "No active scene")
+            self.apps.retry(active)
+            return self.start(active["document"], workspace, snap, force=True)
+        if action == "content":
+            doc = self.capture(workspace, snap)
+            spec = self.layouts.get(doc["layout"], doc["layout_id"])["spec"]
+            leaf = next((n for n in leaves(spec) if n["name"] == request.get("zone")), None)
+            check(leaf, "Select a zone in the current layout")
+            source = {"type": request["type"], "zone": leaf["name"]}
+            for k in ("app_class", "app_title", "desktop_id"):
+                if request.get(k):
+                    source[k] = request[k]
+            if source["type"] == "app":
+                doc["sources"] = {k: v for k, v in doc["sources"].items() if v.get("desktop_id") != source.get("desktop_id")}
+            doc["sources"][leaf["id"]] = source
+            return self.start(doc, workspace, snap)
+        raise ValueError("unknown scene command")
+
+    def restore_refs(self, refs):
+        for ref in refs:
+            workspace = str(ref.get("workspace", ""))
+            if (workspace in self.records and self.records[workspace]["phase"] != "waiting-session") or not re.fullmatch(r"[1-9][0-9]*", workspace):
+                continue
+            self.records[workspace] = {"workspace": workspace, "document": copy.deepcopy(ref["document"]),
+                "phase": "waiting-workspace", "generation": 0, "operation": uuid.uuid4().hex,
+                "deadline": self.ctl.now() + 45}
+        self.ctl.persist()
+
+    def tick(self):
+        for record in self.records.values():
+            if record["workspace"] in self.ctl.browser.active:
+                continue
+            try:
+                self.step(record)
+            except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired) as error:
+                record.update(phase="needs-attention", error=str(error))
+
+    def step(self, record):
+        phase, workspace = record["phase"], record["workspace"]
+        if phase == "waiting-workspace":
+            snap = self.ctl.compositor.snapshot()
+            if any(w["selector"] == workspace for w in snap["workspaces"]) or (self.has_apps(record["document"])):
+                self.start(record["document"], workspace, snap)
+            elif self.ctl.now() > record["deadline"]:
+                record.update(phase="needs-attention", error="Workspace did not return during session recovery")
+            return
+        if phase in ("restored", "needs-attention", "waiting-session"):
+            return
+        if phase in ("stopping", "restore-builtin"):
+            self.ctl.compositor.call("scene_clear", {"workspace": workspace})
+            if phase == "restore-builtin":
+                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": record["baseline"]["layout"]})
+                self.layouts.persist(workspace, rule)
+                record["phase"] = "restored"
+                return
+            # Resolve again before writes: a queued scene cannot use stale IDs.
+            document, spec = self.resolve(record["document"])
+            record.update(document=document, spec=spec, phase="layout")
+            self.ctl.persist()
+        if record["phase"] == "layout":
+            rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": "lua:" + record["document"]["layout"], "spec": record["spec"]})
+            self.layouts.persist(workspace, rule)
+            record.update(phase="connecting", content_applied=False)
+            self.ctl.persist()
+        snap = self.ctl.compositor.snapshot()
+        live_ws = next((w for w in snap["workspaces"] if w["selector"] == workspace), None)
+        if not live_ws:
+            # An empty workspace can disappear while its app is starting. Its
+            # committed layout rule and content operation still exist; moving
+            # the eventual window there recreates it without taking focus.
+            if not record.get("content_applied") and self.has_apps(record["document"]):
+                sources = [{**value, "zone_id": key} for key, value in record["document"]["sources"].items()]
+                content = self.ctl.compositor.call("scene_content_apply", {"workspace": workspace,
+                    "layout": "lua:" + record["document"]["layout"], "sources": sources,
+                    "operation": record["operation"], "allow_missing_workspace": True})
+                record.update(content_applied=True, results=content["results"], pins=content["pins"])
+            if record.get("content_applied"):
+                results = self.apps.step(record, snap)
+                zones = {r["zone"] for r in results}
+                record["results"] = [r for r in record.get("results", []) if r["zone"] not in zones] + results
+                if any(r["status"] == "needs-attention" for r in results):
+                    record["phase"] = "partial"
+            return
+        live_spec = snap.get("layouts", {}).get(live_ws["layout"].removeprefix("lua:"), {}).get("spec", {})
+        if live_spec.get("layout_id") == record["document"].get("layout_id"):
+            document, spec = self.resolve(record["document"])
+            if document != record["document"]:
+                record.update(document=document, spec=spec, content_applied=False, phase="stopping")
+                return  # Reconcile the full reservation set before either new name is assigned.
+        # A user selected a different layout directly: don't force this scene back.
+        if live_ws["layout"] != "lua:" + record["document"]["layout"]:
+            record.update(phase="needs-attention", error="Workspace layout changed; apply or restore the scene")
+            return
+        if not record.get("content_applied") or workspace not in snap.get("scene_content", {}):
+            sources = [{**value, "zone_id": key} for key, value in record["document"]["sources"].items()]
+            content = self.ctl.compositor.call("scene_content_apply", {"workspace": workspace, "layout": live_ws["layout"], "sources": sources, "operation": record["operation"]})
+            record["results"], record["pins"] = content["results"], content["pins"]
+            record["content_applied"] = True
+        app_results = self.apps.step(record, snap)
+        app_zones = {r["zone"] for r in app_results}
+        record["results"] = [r for r in record.get("results", []) if r["zone"] not in app_zones] + app_results
+        problems = any(r.get("status") == "needs-attention" for r in record.get("results", []))
+        if not problems and not any(r["status"] == "waiting-window" for r in app_results):
+            record["phase"] = "ready"
+            record.pop("error", None)
+        else:
+            record["phase"] = "partial" if problems else "connecting"
+        if record.get("restoring") and record["phase"] == "ready":
+            if record["baseline"].get("instance") == self.ctl.compositor.instance:
+                self.ctl.compositor.call("scene_restore_pins", {"workspace": workspace, "windows": record.get("retired_pins", [])})
+            record["phase"] = "restored"

@@ -86,6 +86,7 @@ local function normalize_node(node, path)
   return {
     kind = "leaf",
     name = node.name,
+    id = node.id,
     size = size,
     stack = node.stack,
     spacer = node.spacer == true,
@@ -119,6 +120,16 @@ function M.compile(spec)
     leaves[#leaves + 1] = name
   end
   local leaf_set = seen
+  assert(spec.layout_id == nil or (type(spec.layout_id) == "string" and spec.layout_id:match("^[%w_%-]+$") and #spec.layout_id <= 128), "hypertile: invalid layout id")
+  local zone_ids = {}
+  for _, name in ipairs(leaves) do
+    local id = leaf_opts[name].id
+    if id ~= nil then
+      assert(type(id) == "string" and id:match("^[%w_%-]+$") and #id <= 128, "hypertile: invalid zone id")
+      assert(not zone_ids[id], "hypertile: duplicate zone id " .. id)
+      zone_ids[id] = name
+    end
+  end
   local fillable = {}
   for _, name in ipairs(leaves) do
     local o = leaf_opts[name]
@@ -177,6 +188,7 @@ function M.compile(spec)
     leaves = leaves,
     fillable = fillable,
     leaf_set = leaf_set,
+    zone_ids = zone_ids,
     leaf_opts = leaf_opts,
     fill = fill,
     fill_pos = fill_pos,
@@ -240,6 +252,17 @@ end
 -- inside a slot regardless of whether they arrived by pin, rule, or fill.
 function M.assign(compiled, targets, state)
   local pins = state and state.pins or {}
+  local reserved = state and state.reserved or {}
+  -- A local window exchanged with a reserved source takes one whole zone.
+  -- Ordinary pins retain their existing stacking behavior. Only live swap
+  -- pins exclude ordinary fill; overflow may still use these local zones.
+  local occupied = {}
+  for _, target in ipairs(targets) do
+    local key = window_key(target.window)
+    if key and state and state.exclusive_pins and state.exclusive_pins[key] and pins[key] then
+      occupied[pins[key]] = true
+    end
+  end
   local slot_of = {}
   local count = {}
   for _, name in ipairs(compiled.leaves) do
@@ -252,6 +275,7 @@ function M.assign(compiled, targets, state)
   end
 
   local function has_room(name)
+    if reserved[name] or occupied[name] then return false end
     if compiled.leaf_opts[name].never_split then
       return count[name] < 1
     end
@@ -265,7 +289,11 @@ function M.assign(compiled, targets, state)
     local win = target.window
     local key = window_key(win)
     local slot = key and pins[key]
-    if slot and compiled.leaf_set[slot] and not compiled.leaf_opts[slot].spacer then
+    for name, owner in pairs(reserved) do
+      if key == owner then slot = name end
+    end
+    if slot and compiled.leaf_set[slot] and not compiled.leaf_opts[slot].spacer
+      and (not reserved[slot] or reserved[slot] == key) then
       take(slot, i)
     else
       -- Among every rule this window matches, take the slot with the lowest
@@ -317,18 +345,25 @@ function M.assign(compiled, targets, state)
       local fallback
       for _ = 1, #compiled.cycle do
         local name = next_slot()
-        if not compiled.leaf_opts[name].never_split then
+        if not reserved[name] and not compiled.leaf_opts[name].never_split then
           fallback = name
           break
         end
       end
-      take(fallback or next_slot(), i)
+      if not fallback then
+        for _, name in ipairs(compiled.cycle) do
+          if not reserved[name] then fallback = name; break end
+        end
+      end
+      assert(fallback, "empty zones must leave a window overflow zone")
+      take(fallback, i)
     end
   end
 
   local buckets = {}
   for _, name in ipairs(compiled.leaves) do
     buckets[name] = {}
+    buckets[name].reserved = reserved[name] ~= nil
   end
   for i, target in ipairs(targets) do
     table.insert(buckets[slot_of[i]], target)
@@ -343,7 +378,7 @@ end
 local function subtree_has_windows(node, buckets)
   if node.kind == "leaf" then
     -- A spacer is a fixed hole: it is never collapsed away.
-    return node.spacer or #buckets[node.name] > 0
+    return node.spacer or buckets[node.name].reserved or #buckets[node.name] > 0
   end
   for _, child in ipairs(node.children) do
     if subtree_has_windows(child, buckets) then
@@ -402,6 +437,15 @@ local function walk(node, box, compiled, buckets, overrides, out, empty)
   end
 end
 
+-- The configured slots, including ones currently collapsed out of view.
+function M.slot_boxes(compiled, area, sizes)
+  local buckets, boxes = {}, {}
+  for _, name in ipairs(compiled.leaves) do buckets[name] = { reserved = true } end
+  walk(compiled.tree, { x = area.x, y = area.y, w = area.w, h = area.h },
+    compiled, buckets, sizes, boxes, "keep")
+  return boxes
+end
+
 -- Shrink `box` to `aspect` (w/h) and/or `scale`, centered. Returns the
 -- original box when neither is set.
 local function fit_box(box, opts)
@@ -453,6 +497,14 @@ function M.recalculate(compiled, ctx, state)
     return {}
   end
   local area = ctx.area
+  -- Reservations are workspace-specific and contain only placement data.
+  -- The external controller owns every process and network operation.
+  local win = targets[1].window
+  local workspace = win and win.workspace and tostring(win.workspace.id)
+  local keep_slots = state and state.navigation_keep and state.navigation_keep[workspace]
+  local reserved = {}
+  for name in pairs(state and state.scene_empty and state.scene_empty[workspace] or {}) do reserved[name] = true end
+  state = setmetatable({ reserved = reserved }, { __index = state or {} })
   local buckets = M.assign(compiled, targets, state)
   -- state.jiggle: true for every workspace on this layout, or a workspace
   -- id to jiggle only that workspace (looked up from the first window).
@@ -464,7 +516,7 @@ function M.recalculate(compiled, ctx, state)
   end
   state = state or { pins = {}, sizes = {} }
   local jstate = { pins = state.pins, sizes = state.sizes, jiggle = jiggle and true or false }
-  if n == 1 and compiled.single == "collapse" then
+  if n == 1 and compiled.single == "collapse" and next(reserved) == nil and not keep_slots then
     -- The lone window takes the whole area, but keeps its slot's shape.
     local slot
     for _, name in ipairs(compiled.leaves) do
@@ -479,7 +531,11 @@ function M.recalculate(compiled, ctx, state)
     return { ["*"] = full }, buckets
   end
   local boxes = {}
-  walk(compiled.tree, { x = area.x, y = area.y, w = area.w, h = area.h }, compiled, buckets, jstate.sizes, boxes, compiled.empty)
+  if keep_slots then
+    boxes = M.slot_boxes(compiled, area, jstate.sizes)
+  else
+    walk(compiled.tree, { x = area.x, y = area.y, w = area.w, h = area.h }, compiled, buckets, jstate.sizes, boxes, compiled.empty)
+  end
   for _, name in ipairs(compiled.leaves) do
     local box = boxes[name]
     if box and #buckets[name] > 0 then
@@ -535,11 +591,13 @@ function M.handle_msg(compiled, state, msg, active_window)
       return "no active window"
     end
     state.pins[key] = slot
+    if state.exclusive_pins then state.exclusive_pins[key] = nil end
     return true
   elseif cmd == "unpin" then
     local key = window_key(active_window)
     if key then
       state.pins[key] = nil
+      if state.exclusive_pins then state.exclusive_pins[key] = nil end
     end
     return true
   elseif cmd == "size" or cmd == "grow" then
@@ -555,6 +613,8 @@ function M.handle_msg(compiled, state, msg, active_window)
     return true
   elseif cmd == "reset" then
     state.pins = {}
+    state.exclusive_pins = {}
+    state.navigation_keep = {}
     state.sizes = {}
     return true
   elseif cmd == "relayout" then
@@ -582,6 +642,7 @@ function M.provider(name, spec)
   live.spec = spec
   live.state = state
   live.orders = live.orders or {}
+  live.boxes = {} -- Plain geometry only; never retain compositor targets.
   M.live[name] = live
   return {
     recalculate = function(ctx)
@@ -597,6 +658,9 @@ function M.provider(name, spec)
       end
       if workspace then live.orders[workspace] = order end
       local ok, err = pcall(M.recalculate, live.compiled, ctx, live.state)
+      if workspace then
+        live.boxes[workspace] = ok and M.slot_boxes(live.compiled, ctx.area, live.state.sizes) or nil
+      end
       if not ok then
         print("hypertile[" .. name .. "]: " .. tostring(err))
       end

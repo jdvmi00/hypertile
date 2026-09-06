@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Link and apply a Hypertile checkout to an existing Omarchy installation."""
 import argparse
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager, nullcontext, ExitStack
 import fcntl
 import hashlib
 import json
@@ -15,6 +15,8 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "session"))
+from upgrade import check_legacy, obsolete, cleanup
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
 STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "hypertile"
@@ -56,7 +58,8 @@ def groups():
     return {
         "lua": sorted(ROOT.glob("hypertile*.lua")),
         "cli": [ROOT / "bin/hypertile-ctl"],
-        "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "session").glob("*.py"))],
+        "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "bin").glob("hypertile-scenes")),
+                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "scenes").glob("*.py"))],
         "shell": [ROOT / "manifest.json", *sorted(p for p in (ROOT / "plugin").rglob("*") if p.is_file())],
     }
 
@@ -71,7 +74,7 @@ def destination(path):
     relative = path.relative_to(ROOT)
     if relative.parts[0] == "bin":
         return BIN / path.name
-    if relative.parts[0] == "session":
+    if relative.parts[0] in ("session", "scenes"):
         return DATA / "hypertile" / relative
     return CONFIG / "hypr" / path.name
 
@@ -163,26 +166,63 @@ def wait_for(probe, description, seconds=10):
 
 @contextmanager
 def stopped_session():
-    path = STATE / "sessions/writer.lock"
-    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-    with path.open("a") as lock:
-        def available():
-            try:
-                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                return True
-            except BlockingIOError:
-                return False
-        if not available():
-            status = session_status()
-            if not status:
-                raise RuntimeError("session writer is busy but not responding; no files were changed")
-            if status.get("instance") != ENV.get("HYPRLAND_INSTANCE_SIGNATURE"):
-                raise RuntimeError("session service belongs to another compositor; use its terminal or --instance")
-            run(BIN / "hypertile-session", "stop")
-            wait_for(available, "session service to stop")
-        # Hold the writer lock across installation/reload. The loader cannot
-        # start a watcher against a half-updated set of runtime files.
-        yield
+    with ExitStack() as stack:
+        scene_lock = None
+        if (BIN / "hypertile-scenes").exists():
+            path = STATE / "scenes/writer.lock"
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            scene_lock = stack.enter_context(path.open("a"))
+            def scene_available():
+                try:
+                    fcntl.flock(scene_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return True
+                except BlockingIOError:
+                    return False
+            if not scene_available():
+                run(BIN / "hypertile-scenes", "stop", timeout=10)
+                wait_for(scene_available, "scene service to stop")
+        stream_lock = None
+        if (BIN / "hypertile-stream").exists() or (STATE / "streams/state.json").exists():
+            path = STATE / "streams/writer.lock"
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            stream_lock = stack.enter_context(path.open("a"))
+            def stream_available():
+                try:
+                    # Exclude the legacy writer while permitting Remote Desktops
+                    # to keep its shared migration guard throughout deployment.
+                    fcntl.flock(stream_lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    return True
+                except BlockingIOError:
+                    return False
+            if not stream_available():
+                status = json.loads(run(BIN / "hypertile-stream", "status", "--json", timeout=3).stdout)
+                if status.get("instance") != ENV.get("HYPRLAND_INSTANCE_SIGNATURE"):
+                    raise RuntimeError("legacy stream controller belongs to another compositor")
+                if any(r.get("desired") or r.get("journal") for r in status.get("computers", [])):
+                    raise RuntimeError("disconnect/restore legacy Hypertile streams before applying runtime changes")
+                run(BIN / "hypertile-stream", "stop", timeout=55)
+                wait_for(stream_available, "stream controller to stop")
+        check_legacy(STATE)
+        path = STATE / "sessions/writer.lock"
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with path.open("a") as lock:
+            def available():
+                try:
+                    fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    return True
+                except BlockingIOError:
+                    return False
+            if not available():
+                status = session_status()
+                if not status:
+                    raise RuntimeError("session writer is busy but not responding; no files were changed")
+                if status.get("instance") != ENV.get("HYPRLAND_INSTANCE_SIGNATURE"):
+                    raise RuntimeError("session service belongs to another compositor; use its terminal or --instance")
+                run(BIN / "hypertile-session", "stop")
+                wait_for(available, "session service to stop")
+            # Hold the writer lock across installation/reload. The loader cannot
+            # start a watcher against a half-updated set of runtime files.
+            yield
 
 
 def lua_string(value):
@@ -202,6 +242,9 @@ def reload_lua():
 
 
 def start_session():
+    if (BIN / "hypertile-scenes").exists():
+        command = shlex.join(["env", "-u", "HYPERTILE_SRC", str(BIN / "hypertile-scenes"), "daemon"])
+        run("hyprctl", "eval", f"hl.exec_cmd({lua_string(command)})")
     settings = read_json(CONFIG / "hypertile/session.json", {})
     if settings.get("enabled", True) is False:
         print("Session service is disabled in session.json.")
@@ -256,6 +299,13 @@ def apply(force):
                             saved.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(target, saved)
                         atomic_write(target, content, 0o755 if path.relative_to(ROOT).parts[0] == "bin" else 0o644)
+                if "session" in changed:
+                    for target in obsolete(BIN, DATA):
+                        if target.exists():
+                            saved = backup / "retired" / (Path("bin") / target.name if target.parent == BIN else target.relative_to(DATA))
+                            saved.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(target, saved)
+                    cleanup(BIN, DATA)
                 if "lua" in changed:
                     reload_lua()
             finally:

@@ -3,17 +3,29 @@ import qs.Commons
 import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
+import "Content.js" as Content
 
-// The inspector rail: the layout's name and actions on top, then the
-// sections for the current mode. View mode shows the layout list, the
-// fill order, the workspaces to put the layout on, and the cycle switch.
-// Edit mode shows the selected zone, then (collapsed by default) the apps
-// pinned to it and the layout's gutters and policies. The keys are shown
-// on request (?). The rail docks on either side.
+// The inspector rail: the name and actions of what is being looked at on
+// top, then the sections for the current mode. The Layouts tab shows the
+// layout list, the fill order, the workspaces to put the layout on, and
+// the cycle switch. The Scenes tab (ContentPane) shows what each zone of
+// the workspace holds and the saved scenes. Edit mode shows the selected
+// zone, then (collapsed by default) the apps pinned to it and the
+// layout's gutters and policies. The keys are shown on request (?). The
+// rail docks on either side.
 Card {
   id: rail
   property real maxHeight: 100000
   readonly property string nameText: nameField.text
+  // The Scenes tab's picker: what is typed into its search, and the keys
+  // that drive it from the overlay and its IPC.
+  readonly property string searchText: contentPane.query
+  readonly property int matchCount: contentPane.matchCount
+  function focusSearch() { contentPane.focusSearch() }
+  function setSearch(text) { contentPane.setQuery(text) }
+  function typeSearch(text) { contentPane.typeSearch(text) }
+  function pickMatch() { contentPane.pickMatch() }
+  function hoverMatch(index) { contentPane.hoverMatch(index) }
 
   // Put the cursor in the layout-name field, preloaded with `initial`.
   function focusName(initial) {
@@ -41,6 +53,12 @@ Card {
   readonly property bool borderSet: draft && draft.border !== undefined
   readonly property int borderPx: borderSet ? draft.border : globalBorder
   readonly property bool inspecting: overlay.editing && !overlay.numbering
+  // The Scenes tab's header: the workspace's scene, if the catalog is in.
+  readonly property var scene: (overlay.contentCatalog && overlay.contentCatalog.current) ? overlay.contentCatalog.current : null
+  readonly property bool sceneNamed: !!(scene && scene.document && scene.document.name && ["none", "restored"].indexOf(scene.phase) === -1)
+  readonly property bool sceneModified: Content.sceneModified(scene)
+  readonly property bool contentReady: overlay.contentCatalog !== null && !overlay.catalogFailed && overlay.viewedIsActive
+  readonly property bool scenesTab: overlay.contentMode && !overlay.editing
   readonly property string widthTarget: (sel && draft) ? Editor.extentTarget(draft, sel.name, "w") : ""
   readonly property string heightTarget: (sel && draft) ? Editor.extentTarget(draft, sel.name, "h") : ""
 
@@ -52,16 +70,22 @@ Card {
   }
 
   readonly property var keyHints: {
-    if (overlay.naming) return [["Enter", "save"], ["Esc", "cancel"]]
+    if (overlay.naming || overlay.namingScene) return [["Enter", "save"], ["Esc", "cancel"]]
     if (overlay.renaming) return [["Enter", "rename"], ["Esc", "cancel"]]
+    if (overlay.contentMode) return [["click / ← → ↑ ↓", "select zone"], ["Tab", "next zone"], ["1 – 9", "zone by number"], ["type", "search apps"], ["↑ ↓", "pick a match"], ["Enter", "assign the match, else close"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
     if (overlay.numbering) return [["click", "next in order"], ["click again", "stack"], ["Backspace", "undo"], ["Enter", "done"]]
     if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w", "save"], ["Esc", "leave"], ["?", "hide keys"]]
     return [["← →", "browse (the windows follow)"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
   }
 
   readonly property string metaText: {
-    if (overlay.naming || overlay.renaming) return "Letters, digits, _ and - only"
+    if (overlay.naming || overlay.renaming || overlay.namingScene) return "Letters, digits, _ and - only"
     if (overlay.numbering) return "Click zones in the order windows should fill them"
+    if (overlay.contentMode) {
+      if (overlay.catalogFailed || overlay.contentCatalog === null) return ""
+      if (!overlay.viewedIsActive) return (overlay.current && overlay.current.workspace) ? "Workspace " + overlay.workspaceId + " uses " + String(overlay.current.workspace.layout).replace(/^lua:/, "") : ""
+      return Content.sceneMeta(rail.scene, overlay.viewed ? overlay.viewed.name : "", overlay.workspaceId)
+    }
     if (overlay.editing) {
       var s = overlay.workspaceId !== "" ? "Previewing on workspace " + overlay.workspaceId : "Previewing"
       if (overlay.draftIsNew) s += "  ·  new layout"
@@ -70,6 +94,7 @@ Card {
     if (!overlay.viewed) return "No layouts in ~/.config/hypr/layouts yet"
     var m = ""
     if (overlay.viewedIsActive) m = "In use on workspace " + overlay.current.workspace.id
+    else if (overlay.managedContent && overlay.current && overlay.current.workspace) m = "Workspace " + overlay.current.workspace.id + " keeps its windows in place: it has assigned content"
     else if (overlay.current && overlay.current.workspace) m = "Workspace " + overlay.current.workspace.id + " uses " + String(overlay.current.workspace.layout).replace(/^lua:/, "")
     if (overlay.viewedIsDefault) m += (m !== "" ? "  ·  " : "") + "default layout"
     if (!overlay.viewedInCycle) m += (m !== "" ? "  ·  " : "") + "not in the SUPER+L cycle"
@@ -399,32 +424,51 @@ Card {
       width: scroller.width
       spacing: Style.spacing.xl
 
-      // ---- Header: mode, name, meta, actions.
+      // ---- Header: tabs or mode, name, meta, actions.
       Column {
         width: column.width
         spacing: Style.spacing.sm
 
         Item {
           width: parent.width
-          implicitHeight: Math.max(eyebrow.implicitHeight, headerTools.implicitHeight)
+          implicitHeight: Math.max(eyebrow.implicitHeight, tabs.implicitHeight, headerTools.implicitHeight)
           Label {
             id: eyebrow
+            visible: !tabs.visible
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
             text: overlay.naming ? "SAVE AS"
               : overlay.renaming ? "RENAME"
+              : overlay.namingScene ? "SAVE SCENE AS"
               : overlay.numbering ? "RENUMBERING"
               : overlay.editing ? (overlay.draftIsNew ? "NEW LAYOUT" : "EDITING")
-              : "HYPERTILE" + (overlay.layouts.length > 0 ? "   " + (overlay.viewIndex + 1) + " / " + overlay.layouts.length : "")
+              : "HYPERTILE"
+          }
+          // The two things the rail can be about: the layouts (browsed with
+          // the arrows, the windows follow) and the scenes (what each zone
+          // of the workspace holds).
+          Row {
+            id: tabs
+            visible: !overlay.editing && !overlay.naming && !overlay.renaming && !overlay.namingScene
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.xs
+            Action { text: "Layouts"; bordered: false; selected: !overlay.contentMode; tooltipText: "Browse and edit the layouts"; onClicked: overlay.showContent(false) }
+            Action { text: "Scenes"; bordered: false; selected: overlay.contentMode; tooltipText: "What each zone holds: local windows, a remote desktop, an app; saved as scenes"; onClicked: overlay.showContent(true) }
           }
           Row {
             id: headerTools
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.spacing.sm
+            Label {
+              visible: !overlay.editing && !overlay.contentMode && overlay.layouts.length > 0
+              text: (overlay.viewIndex + 1) + " / " + overlay.layouts.length
+              anchors.verticalCenter: parent.verticalCenter
+            }
             Chip {
-              visible: overlay.editing && overlay.dirty
-              text: "unsaved"
+              visible: (overlay.editing && overlay.dirty) || (rail.scenesTab && rail.sceneModified)
+              text: overlay.editing ? "unsaved" : "modified"
               foreground: rail.fg
               fontFamily: rail.family
               fontSize: overlay.uiCaption
@@ -451,10 +495,12 @@ Card {
         }
 
         Text {
-          visible: !overlay.naming && !overlay.renaming
+          visible: !overlay.naming && !overlay.renaming && !overlay.namingScene
           width: parent.width
           textFormat: Text.PlainText
-          text: overlay.editing ? overlay.draftName : (overlay.viewed ? overlay.viewed.name : "No layouts")
+          text: overlay.editing ? overlay.draftName
+            : overlay.contentMode ? ((overlay.catalogFailed || overlay.contentCatalog === null) ? "Scenes" : Content.sceneTitle(rail.scene, overlay.workspaceId))
+            : (overlay.viewed ? overlay.viewed.name : "No layouts")
           color: rail.accent
           font.family: rail.family
           font.pixelSize: overlay.uiTitle
@@ -464,33 +510,42 @@ Card {
 
         TextField {
           id: nameField
-          visible: overlay.naming || overlay.renaming
+          visible: overlay.naming || overlay.renaming || overlay.namingScene
           width: parent.width
           foreground: rail.fg
           accent: rail.accent
           font.family: rail.family
           font.pixelSize: overlay.uiFont
-          placeholderText: "layout name"
+          placeholderText: overlay.namingScene ? "scene name" : "layout name"
           Component.onCompleted: background.radius = overlay.radiusControl
           Keys.onPressed: function(event) {
-            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { overlay.renaming ? overlay.confirmRename() : overlay.confirmName(); event.accepted = true }
-            else if (event.key === Qt.Key_Escape) { overlay.naming = false; overlay.renaming = false; overlay.errorText = ""; overlay.focusKeys(); event.accepted = true }
+            if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) { overlay.renaming ? overlay.confirmRename() : overlay.namingScene ? overlay.confirmSceneName() : overlay.confirmName(); event.accepted = true }
+            else if (event.key === Qt.Key_Escape) { overlay.naming = false; overlay.renaming = false; overlay.namingScene = false; overlay.errorText = ""; overlay.focusKeys(); event.accepted = true }
           }
         }
 
         Muted { text: rail.metaText; visible: text !== "" }
+        Muted { visible: rail.scenesTab && rail.scene !== null && !!rail.scene.error; text: rail.scene ? (rail.scene.error || "") : ""; color: Color.urgent }
 
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
           topPadding: Style.spacing.xs
 
-          // view mode
-          Action { visible: !overlay.editing && !overlay.renaming; text: overlay.viewedIsActive ? "In use" : "Use"; selected: overlay.viewedIsActive; tooltipText: "Use on this workspace and close (Enter)"; enabled: overlay.viewed !== null && !overlay.viewedIsActive && !overlay.busy; onClicked: overlay.applyViewed(true) }
-          Action { visible: !overlay.editing && !overlay.renaming; text: "Edit"; tooltipText: "Edit this layout (e)"; enabled: overlay.viewed !== null; onClicked: overlay.startEdit(false) }
-          Action { visible: !overlay.editing && !overlay.renaming; text: "New"; selected: overlay.choosingNew; tooltipText: "New layout: blank, or a copy of this one (n)"; enabled: overlay.current !== null; onClicked: { overlay.confirmingDelete = false; overlay.choosingNew = !overlay.choosingNew } }
-          Action { visible: !overlay.editing && !overlay.renaming; text: "Rename"; tooltipText: "Rename this layout (F2)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.startRename() }
-          Action { visible: !overlay.editing && !overlay.renaming && !overlay.confirmingDelete; text: "Delete"; accent: Color.urgent; tooltipText: overlay.viewedIsDefault ? "The default layout cannot be deleted; make another the default first" : "Delete this layout's file (d)"; enabled: overlay.viewed !== null && !overlay.viewedIsDefault && !overlay.busy; onClicked: { overlay.choosingNew = false; overlay.confirmingDelete = true } }
+          // the Layouts tab
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: overlay.viewedIsActive ? "In use" : "Use"; selected: overlay.viewedIsActive; tooltipText: "Use on this workspace and close (Enter)"; enabled: overlay.viewed !== null && !overlay.viewedIsActive && !overlay.busy; onClicked: overlay.applyViewed(true) }
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Edit"; tooltipText: "Edit this layout (e)"; enabled: overlay.viewed !== null; onClicked: overlay.startEdit(false) }
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "New"; selected: overlay.choosingNew; tooltipText: "New layout: blank, or a copy of this one (n)"; enabled: overlay.current !== null; onClicked: { overlay.confirmingDelete = false; overlay.choosingNew = !overlay.choosingNew } }
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Rename"; tooltipText: "Rename this layout (F2)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.startRename() }
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.confirmingDelete; text: "Delete"; accent: Color.urgent; tooltipText: overlay.viewedIsDefault ? "The default layout cannot be deleted; make another the default first" : "Delete this layout's file (d)"; enabled: overlay.viewed !== null && !overlay.viewedIsDefault && !overlay.busy; onClicked: { overlay.choosingNew = false; overlay.confirmingDelete = true } }
+          // the Scenes tab
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.sceneNamed; text: "Save"; tooltipText: rail.sceneModified ? "Save the changes to " + rail.scene.document.name : "Saved"; enabled: rail.sceneModified && !overlay.busy; onClicked: overlay.saveScene(rail.scene.document.name) }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.contentReady; text: rail.sceneNamed ? "Save as…" : "Save as scene…"; tooltipText: "Save this workspace's layout and content under a name"; enabled: !overlay.busy; onClicked: overlay.startSceneSave() }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && rail.scene.can_restore === true && ["restored", "none"].indexOf(rail.scene.phase) === -1; text: "Restore previous"; tooltipText: "Put back the layout and content the workspace had before the scene"; enabled: !overlay.busy; onClicked: overlay.sceneAction("restore") }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: "Retry"; tooltipText: "Check the pending content again"; enabled: !overlay.busy; onClicked: overlay.sceneAction("retry") }
+          // naming a scene
+          Action { visible: overlay.namingScene; text: "Save"; onClicked: overlay.confirmSceneName() }
+          Action { visible: overlay.namingScene; text: "Cancel"; onClicked: { overlay.namingScene = false; overlay.errorText = ""; overlay.focusKeys() } }
           // edit mode
           Action { visible: overlay.editing && !overlay.naming; text: overlay.numbering ? "Done numbering" : "Renumber"; selected: overlay.numbering; tooltipText: "Click zones in fill order (f)"; onClicked: overlay.numbering ? overlay.finishNumbering() : overlay.startNumbering() }
           Action { visible: overlay.editing && !overlay.naming; text: "Undo"; tooltipText: "Undo (u)"; enabled: overlay.undoStack.length > 0; onClicked: overlay.undo() }
@@ -507,7 +562,7 @@ Card {
 
       // ---- View mode: new layout, blank or a copy.
       Prompt {
-        visible: !overlay.editing && overlay.choosingNew
+        visible: !overlay.editing && !overlay.contentMode && overlay.choosingNew
         PromptTitle { text: "Start a new layout from" }
         Flow {
           width: parent.width
@@ -520,7 +575,7 @@ Card {
 
       // ---- View mode: confirm a delete.
       Prompt {
-        visible: !overlay.editing && overlay.confirmingDelete && overlay.viewed !== null
+        visible: !overlay.editing && !overlay.contentMode && overlay.confirmingDelete && overlay.viewed !== null
         warning: true
         PromptTitle { text: "Delete " + (overlay.viewed ? overlay.viewed.name : "") + "?" }
         Muted {
@@ -543,6 +598,23 @@ Card {
         }
       }
 
+      // ---- View mode: a layout switch over assigned content replaces it.
+      Prompt {
+        visible: !overlay.editing && overlay.pendingSwitch !== null && overlay.viewed !== null
+        warning: true
+        PromptTitle { text: "Use " + (overlay.viewed ? overlay.viewed.name : "") + " anyway?" }
+        Muted { width: parent.width; text: overlay.switchSummary() }
+        Flow {
+          width: parent.width
+          spacing: Style.spacing.sm
+          Action { text: "Use " + (overlay.viewed ? overlay.viewed.name : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
+          Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.pendingSwitch = null }
+        }
+      }
+
+      // ---- The Scenes tab: saved scenes, what each zone holds, the selected zone.
+      ContentPane { id: contentPane; visible: rail.scenesTab; width: column.width; overlay: rail.overlay }
+
       // ---- Edit mode: unsaved changes.
       Prompt {
         visible: overlay.editing && overlay.confirmingDiscard
@@ -560,7 +632,7 @@ Card {
 
       // ---- View mode: every layout on disk, with a picture of each.
       Section {
-        visible: !overlay.editing && overlay.layouts.length > 1
+        visible: !overlay.editing && !overlay.contentMode && overlay.layouts.length > 1
         title: "LAYOUTS"
 
         Column {
@@ -651,7 +723,7 @@ Card {
 
       // ---- View mode: fill order.
       Section {
-        visible: !overlay.editing && overlay.viewed !== null && overlay.viewed.spec !== undefined
+        visible: !overlay.editing && !overlay.contentMode && overlay.viewed !== null && overlay.viewed.spec !== undefined
         title: "FILL ORDER"
         Body {
           text: {
@@ -668,7 +740,7 @@ Card {
 
       // ---- View mode: workspaces.
       Section {
-        visible: !overlay.editing && overlay.viewed !== null && overlay.workspaces.length > 0
+        visible: !overlay.editing && !overlay.contentMode && overlay.viewed !== null && overlay.workspaces.length > 0
         title: "WORKSPACES"
 
         Column {
@@ -755,7 +827,7 @@ Card {
 
       // ---- View mode: the SUPER+L cycle.
       Section {
-        visible: !overlay.editing && overlay.viewed !== null
+        visible: !overlay.editing && !overlay.contentMode && overlay.viewed !== null
         title: "CYCLE"
         Switch {
           label: "In the SUPER+L cycle"
@@ -1100,7 +1172,7 @@ Card {
       }
 
       Muted {
-        visible: !overlay.showKeys && !overlay.naming && !overlay.renaming
+        visible: !overlay.showKeys && !overlay.naming && !overlay.renaming && !overlay.namingScene
         text: overlay.editing ? "Hold Space to peek at the windows  ·  ? for the keys" : "Hold Space to peek  ·  ? for the keys"
       }
     }

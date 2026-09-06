@@ -81,6 +81,23 @@ class DevTests(unittest.TestCase):
         runner.start()
         self.addCleanup(runner.stop)
 
+    def test_apply_guard_can_coexist_with_remote_desktops_shared_lock(self):
+        dev.BIN.mkdir(parents=True)
+        for name in ("hypertile-stream", "hypertile-scenes"):
+            (dev.BIN / name).write_text("placeholder")
+        path = self.state / "streams/writer.lock"
+        path.parent.mkdir(parents=True)
+        with path.open("a") as remote:
+            fcntl.flock(remote, fcntl.LOCK_SH | fcntl.LOCK_NB)
+            with dev.stopped_session():
+                with path.open("a") as legacy:
+                    with self.assertRaises(BlockingIOError):
+                        fcntl.flock(legacy, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self.assertFalse(any(c[-2:] == ["hypertile-stream", "stop"] or
+                                 (c[0].endswith("hypertile-stream") and c[-1] == "stop") for c in self.commands))
+        with (self.state / "scenes/writer.lock").open("a") as scene:
+            fcntl.flock(scene, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_link_preserves_dirty_checkout_and_is_idempotent(self):
         (self.plugin / ".git").mkdir(parents=True)
         (self.plugin / ".git/HEAD").write_text("original HEAD")

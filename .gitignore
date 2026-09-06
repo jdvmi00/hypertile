@@ -10,3 +10,5 @@ __pycache__/
 # Private planning notes, kept locally only
 docs/PLAN.md
 docs/REMOTE-SOURCES.md
+docs/COOPERATING-AGENTS.md
+docs/REMOTE-SOURCES-PROTOTYPES.md

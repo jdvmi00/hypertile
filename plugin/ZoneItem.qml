@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Effects
 import qs.Commons
 import qs.Ui
+import "Content.js" as Content
 
 // One zone of the viewed or edited layout, drawn at true scale over the
 // windows it will hold. A badge in the corner carries the fill-order
@@ -21,9 +22,18 @@ Item {
   readonly property color fg: overlay.foreground
   readonly property color accent: overlay.accent
   readonly property bool editing: overlay.editing
-  readonly property bool isSelected: editing && overlay.selected === modelData.name
-  readonly property bool isHovered: editing && !overlay.numbering && !overlay.dragDivider && !overlay.hoverDivider && overlay.hoverZone === modelData.name
-  readonly property bool isSpacer: modelData.spacer === true
+  readonly property bool isSelected: (editing || overlay.contentMode) && overlay.selected === modelData.name
+  readonly property bool isHovered: (editing || overlay.contentMode) && !overlay.numbering && !overlay.dragDivider && !overlay.hoverDivider && overlay.hoverZone === modelData.name
+  readonly property var source: overlay.contentFor(modelData.name)
+  // The Scenes tab: the card names what the zone holds, with its icon.
+  readonly property bool content: overlay.contentMode
+  readonly property string icon: (content && source !== null) ? overlay.iconFor(source) : ""
+  readonly property var contentState: content ? Content.state(source) : ({ text: "", urgent: false })
+  // A picker row under the pointer previews itself in the selected card.
+  readonly property var ghost: (content && isSelected) ? overlay.hoverMatch : null
+  readonly property bool urgent: content && contentState.urgent
+  readonly property bool showCentre: content && roomy && (ghost !== null || (source !== null && source.type !== "empty"))
+  readonly property bool isSpacer: modelData.spacer === true || (source !== null && source.type === "empty")
   readonly property bool fitted: modelData.fitted === true && !isSpacer
   readonly property int inset: Style.space(6)
   readonly property int stackCount: modelData.neverSplit ? 1 : Math.max(1, modelData.numbers.length)
@@ -69,6 +79,7 @@ Item {
       : Util.alpha(zone.accent, zone.fitted ? 0.04 : (zone.isSelected ? 0.16 : (zone.isHovered ? 0.12 : (zone.editing ? 0.08 : 0.03)))))
     border.width: zone.isSelected && !zone.peek ? Math.max(2, Style.space(2)) : 1
     border.color: zone.peek ? Util.alpha(zone.isSelected ? zone.accent : zone.fg, zone.isSelected ? 0.7 : 0.25)
+      : zone.urgent ? Util.alpha(Color.urgent, zone.isSelected ? 1 : 0.8)
       : zone.isSelected ? zone.accent
       : (zone.isHovered ? Util.alpha(zone.accent, 0.8)
       : Util.alpha(zone.isSpacer ? zone.fg : zone.accent, zone.isSpacer ? 0.35 : 0.55))
@@ -85,11 +96,11 @@ Item {
     radius: zone.overlay.effectiveRounding
     color: "transparent"
     border.width: Math.max(2, Style.space(2))
-    border.color: zone.accent
+    border.color: zone.urgent ? Color.urgent : zone.accent
     layer.enabled: visible
     layer.effect: MultiEffect {
       shadowEnabled: true
-      shadowColor: zone.accent
+      shadowColor: zone.urgent ? Color.urgent : zone.accent
       shadowOpacity: 0.85
       shadowBlur: 1.0
       blurMax: 32
@@ -130,7 +141,8 @@ Item {
 
   // Faint numeral in the middle.
   Text {
-    visible: !zone.peek
+    id: numeral
+    visible: !zone.peek && !zone.showCentre
     anchors.centerIn: parent
     width: parent.width - zone.pad * 2
     textFormat: Text.PlainText
@@ -141,6 +153,70 @@ Item {
     font.pixelSize: Math.max(Style.font.heading, Math.min(zone.height * 0.3, zone.width * 0.26, Style.space(150)))
     horizontalAlignment: Text.AlignHCenter
     elide: Text.ElideRight
+  }
+
+  // Under the numeral while scenes are edited: what an unassigned zone does.
+  Text {
+    visible: zone.content && zone.roomy && !zone.peek && !zone.showCentre
+    anchors.top: numeral.bottom
+    anchors.horizontalCenter: parent.horizontalCenter
+    width: parent.width - zone.pad * 2
+    textFormat: Text.PlainText
+    text: zone.modelData.spacer === true ? "Spacer  ·  never holds windows"
+      : zone.isSpacer ? "Empty  ·  nothing opens here"
+      : "Local windows  ·  fill order"
+    color: Util.alpha(zone.fg, zone.isSelected ? 0.7 : 0.45)
+    font.family: zone.overlay.fontFamily
+    font.pixelSize: zone.overlay.uiFontSmall
+    horizontalAlignment: Text.AlignHCenter
+    elide: Text.ElideRight
+  }
+
+  // What the zone holds: the app's icon, its name, and its state.
+  Column {
+    id: centre
+    visible: zone.showCentre && !zone.peek
+    anchors.centerIn: parent
+    width: parent.width - zone.pad * 2
+    spacing: Style.spacing.md
+    opacity: zone.ghost !== null ? 0.55 : 1
+    Behavior on opacity { NumberAnimation { duration: zone.overlay.motionFast } }
+    readonly property int iconSize: Math.round(Math.min(zone.width * 0.2, zone.height * 0.26, zone.overlay.uiFont * 4.5))
+    readonly property string shownIcon: zone.ghost !== null ? zone.ghost.icon : zone.icon
+    Image {
+      visible: centre.shownIcon !== ""
+      anchors.horizontalCenter: parent.horizontalCenter
+      width: centre.iconSize
+      height: centre.iconSize
+      sourceSize.width: centre.iconSize
+      sourceSize.height: centre.iconSize
+      source: centre.shownIcon
+      smooth: true
+      mipmap: true
+      opacity: zone.isSelected ? 1 : 0.9
+    }
+    Text {
+      width: parent.width
+      textFormat: Text.PlainText
+      text: zone.ghost !== null ? zone.ghost.name : zone.overlay.contentName(zone.source)
+      color: Util.alpha(zone.fg, 0.92)
+      font.family: zone.overlay.fontFamily
+      font.pixelSize: Math.round(zone.overlay.uiFont * 1.25)
+      font.bold: true
+      horizontalAlignment: Text.AlignHCenter
+      elide: Text.ElideRight
+    }
+    Text {
+      visible: text !== ""
+      width: parent.width
+      textFormat: Text.PlainText
+      text: zone.ghost !== null ? "click to put it here" : zone.contentState.text
+      color: (zone.contentState.urgent && zone.ghost === null) ? Color.urgent : Util.alpha(zone.fg, 0.62)
+      font.family: zone.overlay.fontFamily
+      font.pixelSize: zone.overlay.uiFontSmall
+      horizontalAlignment: Text.AlignHCenter
+      elide: Text.ElideRight
+    }
   }
 
   // Badge row: number, name (edit mode: names only matter when editing
@@ -172,12 +248,23 @@ Item {
         }
       }
       Chip {
-        visible: zone.editing
+        visible: zone.editing || zone.overlay.contentMode
         text: zone.modelData.name
         bold: true
         foreground: zone.fg
         fontFamily: zone.overlay.fontFamily
         fontSize: zone.overlay.uiFontSmall
+        anchors.verticalCenter: parent.verticalCenter
+      }
+      // What the zone holds when it is not simply local windows: a remote
+      // desktop (accent), an app, or nothing.
+      Chip {
+        visible: zone.source !== null && !zone.showCentre
+        text: zone.overlay.contentChip(zone.modelData.name)
+        foreground: zone.fg
+        fontFamily: zone.overlay.fontFamily
+        fontSize: zone.overlay.uiFontSmall
+        strong: zone.source !== null && zone.source.type === "app"
         anchors.verticalCenter: parent.verticalCenter
       }
     }
@@ -229,9 +316,22 @@ Item {
     radius: zone.overlay.radiusControl
   }
 
+  // Quick actions on a zone while scenes are edited.
+  Row {
+    visible: zone.content && (zone.isSelected || zone.isHovered || zone.urgent) && zone.roomy && !zone.peek && zone.modelData.spacer !== true
+    anchors.right: parent.right
+    anchors.bottom: parent.bottom
+    anchors.margins: zone.pad
+    spacing: Style.spacing.sm
+
+    ZoneButton { visible: zone.urgent; text: "Retry"; accent: Color.urgent; tooltipText: "Check the pending content again"; enabled: !zone.overlay.busy; onClicked: zone.overlay.sceneAction("retry") }
+    ZoneButton { text: "Change…"; tooltipText: "Choose what opens here"; onClicked: { zone.overlay.selected = zone.modelData.name; zone.overlay.focusSearch() } }
+    ZoneButton { visible: zone.source !== null; text: "Clear"; tooltipText: "Back to local windows in fill order"; enabled: !zone.overlay.busy; onClicked: { zone.overlay.selected = zone.modelData.name; zone.overlay.assignContent("local") } }
+  }
+
   // Quick actions on the selected zone.
   Row {
-    visible: zone.isSelected && !zone.overlay.numbering && zone.roomy && !zone.peek
+    visible: zone.isSelected && zone.editing && !zone.overlay.numbering && zone.roomy && !zone.peek
     anchors.right: parent.right
     anchors.bottom: parent.bottom
     anchors.margins: zone.pad

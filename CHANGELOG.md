@@ -1,6 +1,36 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (2026-09-06)
+
+- Scenes: save a workspace's layout together with what each zone holds: an
+  installed app, one open window, local windows in fill order, or Empty.
+  Applying a scene launches or reuses each app and places it once; you can
+  then move or close it freely. Scenes live in `~/.config/hypertile/scenes/`
+  and are managed from the overlay's Scenes tab or `hypertile-ctl scene`; an
+  independent `hypertile-scenes` service owns placement. See
+  [scenes and content](docs/SCENES.md).
+
+- Scenes tab redesign. The header names the workspace until a scene is
+  applied, then the scene with how many apps are placed. Saved scenes are
+  cards like the layout list, with the apps drawn in their zones; the row
+  applies. One zone list replaces CONTENT, ZONE and CHANGE TO; the picker
+  under the selected zone filters as you type, shows app icons, and groups
+  open windows (with titles), remote desktops, and installed apps. Zone
+  cards show what they hold with icon, name, and state, plus Change… and
+  Clear; a card that needs attention is outlined and offers Retry. Digits
+  select zones by fill number, hovering a match previews it in the card, and
+  zones are listed by position ("Top left"). The catalog lists each app's
+  icon and each saved scene's sources, and skips placeholder window classes.
+
+- Remote desktops: each computer's launcher from
+  [Remote Desktops](https://github.com/jdvmi00/remote-desktops) is an ordinary
+  app for Scenes and session recovery. Hypertile does not manage connections
+  or host displays. Upgrade checks preserve unresolved host recovery and user
+  configuration.
+
+- `SUPER+SHIFT+arrows` move a window into an empty slot of the layout as well
+  as swapping with a neighbour, so a lone app can travel around a sparse
+  layout. Explicit moves reveal collapsed slots until the layout is reset.
 
 - Session recovery: batched automatic checkpoints with durable publication and
   previous generations; named sessions; protected partial restores; supported
