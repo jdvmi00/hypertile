@@ -29,6 +29,7 @@ function M.snapshot()
       id = ws.id, selector = selector(ws), layout = ws.tiled_layout,
       monitor = ws.monitor and ws.monitor.name, visible = ws.visible, special = ws.special,
       order = json.array(live and live.orders[tostring(ws.id)] or {}),
+      navigation_keep = live and live.state.navigation_keep and live.state.navigation_keep[tostring(ws.id)] or nil,
     }
     if live then
       out.layouts[name] = { spec = live.spec, sizes = live.state.sizes }
@@ -38,7 +39,11 @@ function M.snapshot()
   -- go away; this query runs every few seconds, so prune here.
   for _, live in pairs(engine.live) do
     for id in pairs(live.orders or {}) do
-      if not existing[id] then live.orders[id] = nil end
+      if not existing[id] then
+        live.orders[id] = nil
+        if live.boxes then live.boxes[id] = nil end
+        if live.state.navigation_keep then live.state.navigation_keep[id] = nil end
+      end
     end
   end
   for _, win in ipairs(hl.get_windows()) do
@@ -266,10 +271,7 @@ local function swap_windows(request)
   return found, ws, live
 end
 
--- Resolve actual engine assignments, including rules, pins and reservations.
--- Planning validates both windows without changing either pin.
-function M.swap_plan(request)
-  local windows, ws, live = swap_windows(request)
+local function workspace_buckets(ws, live)
   local by_address, targets = {}, {}
   for _, w in ipairs(hl.get_windows()) do
     if w.mapped and w.workspace and w.workspace.id == ws.id and not w.floating then by_address[w.address] = w end
@@ -280,10 +282,17 @@ function M.swap_plan(request)
   assert(next(by_address) == nil, "swap unavailable: waiting for layout order")
   local reserved = {}
   for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do reserved[name] = true end
-  local buckets = engine.assign(live.compiled, targets, {
+  return engine.assign(live.compiled, targets, {
     pins = live.state.pins, exclusive_pins = live.state.exclusive_pins,
     reserved = reserved,
   })
+end
+
+-- Resolve actual engine assignments, including rules, pins and reservations.
+-- Planning validates both windows without changing either pin.
+function M.swap_plan(request)
+  local windows, ws, live = swap_windows(request)
+  local buckets = workspace_buckets(ws, live)
   local plan = { workspace = selector(ws), layout = ws.tiled_layout, windows = json.array() }
   for i, w in ipairs(windows) do
     local zone
@@ -307,6 +316,66 @@ function M.swap_plan(request)
     ref.zone_id = live.compiled.leaf_opts[ref.zone].id
   end
   return plan
+end
+
+-- Navigation uses layout boxes rather than window edges, so empty slots and
+-- aspect-constrained windows have the same directional destinations.
+function M.navigation_slots(active)
+  local ws = active.workspace
+  local live = engine.live[ws.tiled_layout:match("^lua:(.+)$")]
+  local boxes = live and live.boxes and live.boxes[tostring(ws.id)]
+  if not boxes then return end
+  local ok, buckets = pcall(workspace_buckets, ws, live)
+  if not ok then return end -- Wait for the compositor's next layout order.
+  local slots, source = {}, nil
+  for index, name in ipairs(live.compiled.leaves) do
+    local box, bucket = boxes[name], buckets[name]
+    if box and not live.compiled.leaf_opts[name].spacer and not bucket.reserved then
+      local slot = { address = string.format("%08d", index), zone = name, workspace = ws,
+        at = { x = box.x, y = box.y }, size = { x = box.w, y = box.h }, windows = {} }
+      local unavailable = false
+      for _, target in ipairs(bucket) do
+        slot.windows[#slot.windows + 1] = target.window
+        if target.window.hidden or (target.window.fullscreen or 0) ~= 0 then unavailable = true end
+        if target.window.address == active.address then source = slot end
+      end
+      if not unavailable then slots[#slots + 1] = slot end
+    end
+  end
+  return source, slots
+end
+
+function M.move_to_empty(active, zone)
+  local ws = active.workspace
+  local live = engine.live[ws.tiled_layout:match("^lua:(.+)$")]
+  local buckets = workspace_buckets(ws, live)
+  assert(live.compiled.leaf_set[zone] and not live.compiled.leaf_opts[zone].spacer,
+    "move unavailable: zone changed")
+  assert(#buckets[zone] == 0 and not buckets[zone].reserved, "move unavailable: zone is not empty")
+  local found = false
+  for _, bucket in pairs(buckets) do
+    for _, target in ipairs(bucket) do
+      local w = target.window
+      if w.address == active.address and w.stable_id == active.stable_id and w.pid == active.pid
+        and not w.hidden and (w.fullscreen or 0) == 0 then found = true end
+    end
+  end
+  assert(found, "move unavailable: window changed")
+  -- Explicit placement reveals configured slots even in collapsing layouts.
+  live.state.navigation_keep = live.state.navigation_keep or {}
+  live.state.navigation_keep[tostring(ws.id)] = true
+  -- Preserve the other windows' assignments before moving the active one;
+  -- otherwise fill order would pull them into the newly vacated slot.
+  live.state.exclusive_pins = live.state.exclusive_pins or {}
+  for name, bucket in pairs(buckets) do
+    for _, target in ipairs(bucket) do
+      local address = target.window.address
+      live.state.pins[address] = address == active.address and zone or name
+      live.state.exclusive_pins[address] = true
+    end
+  end
+  refresh_workspace(ws)
+  return true
 end
 
 -- Absolute assignments make retry after a lost IPC reply safe. Validate the
@@ -453,6 +522,12 @@ function M.finish(request)
       if matches[old] then wanted[#wanted + 1] = matches[old] end
     end
     if live and wanted[1] then
+      for _, current in ipairs(hl.get_workspaces()) do
+        if selector(current) == ws.selector then
+          live.state.navigation_keep = live.state.navigation_keep or {}
+          live.state.navigation_keep[tostring(current.id)] = ws.navigation_keep or nil
+        end
+      end
       reorder(live, wanted, warnings, ws.selector)
     end
     local populated = false

@@ -47,7 +47,11 @@ everything else in place, and is the one to run again after every update:
   overlay; `SUPER+L` cycles the workspace through your layouts and then
   dwindle, replacing Omarchy's dwindle/scrolling toggle, which cannot
   return to a Lua layout; `SUPER+SHIFT+L` cycles the other way
-- `SUPER+Arrow` focuses and `SUPER+SHIFT+Arrow` swaps with the nearest window in that direction,
+- `SUPER+Arrow` focuses the nearest window in that direction. `SUPER+SHIFT+Arrow`
+  moves to the next layout slot: an empty slot receives the active window, and an
+  occupied slot swaps windows. Other apps stay in their slots; spacers and scene
+  slots marked Empty are skipped. Moving into a collapsed slot reveals the full
+  layout on that workspace until the layout is reset.
 
 Every config file it edits is first copied to `<file>.hypertile.bak`. It
 then reloads Hyprland and checks `hyprctl configerrors`. Update with:

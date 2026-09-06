@@ -437,6 +437,15 @@ local function walk(node, box, compiled, buckets, overrides, out, empty)
   end
 end
 
+-- The configured slots, including ones currently collapsed out of view.
+function M.slot_boxes(compiled, area, sizes)
+  local buckets, boxes = {}, {}
+  for _, name in ipairs(compiled.leaves) do buckets[name] = { reserved = true } end
+  walk(compiled.tree, { x = area.x, y = area.y, w = area.w, h = area.h },
+    compiled, buckets, sizes, boxes, "keep")
+  return boxes
+end
+
 -- Shrink `box` to `aspect` (w/h) and/or `scale`, centered. Returns the
 -- original box when neither is set.
 local function fit_box(box, opts)
@@ -492,6 +501,7 @@ function M.recalculate(compiled, ctx, state)
   -- The external controller owns every process and network operation.
   local win = targets[1].window
   local workspace = win and win.workspace and tostring(win.workspace.id)
+  local keep_slots = state and state.navigation_keep and state.navigation_keep[workspace]
   local reserved = {}
   for name in pairs(state and state.scene_empty and state.scene_empty[workspace] or {}) do reserved[name] = true end
   state = setmetatable({ reserved = reserved }, { __index = state or {} })
@@ -506,7 +516,7 @@ function M.recalculate(compiled, ctx, state)
   end
   state = state or { pins = {}, sizes = {} }
   local jstate = { pins = state.pins, sizes = state.sizes, jiggle = jiggle and true or false }
-  if n == 1 and compiled.single == "collapse" and next(reserved) == nil then
+  if n == 1 and compiled.single == "collapse" and next(reserved) == nil and not keep_slots then
     -- The lone window takes the whole area, but keeps its slot's shape.
     local slot
     for _, name in ipairs(compiled.leaves) do
@@ -521,7 +531,11 @@ function M.recalculate(compiled, ctx, state)
     return { ["*"] = full }, buckets
   end
   local boxes = {}
-  walk(compiled.tree, { x = area.x, y = area.y, w = area.w, h = area.h }, compiled, buckets, jstate.sizes, boxes, compiled.empty)
+  if keep_slots then
+    boxes = M.slot_boxes(compiled, area, jstate.sizes)
+  else
+    walk(compiled.tree, { x = area.x, y = area.y, w = area.w, h = area.h }, compiled, buckets, jstate.sizes, boxes, compiled.empty)
+  end
   for _, name in ipairs(compiled.leaves) do
     local box = boxes[name]
     if box and #buckets[name] > 0 then
@@ -600,6 +614,7 @@ function M.handle_msg(compiled, state, msg, active_window)
   elseif cmd == "reset" then
     state.pins = {}
     state.exclusive_pins = {}
+    state.navigation_keep = {}
     state.sizes = {}
     return true
   elseif cmd == "relayout" then
@@ -627,6 +642,7 @@ function M.provider(name, spec)
   live.spec = spec
   live.state = state
   live.orders = live.orders or {}
+  live.boxes = {} -- Plain geometry only; never retain compositor targets.
   M.live[name] = live
   return {
     recalculate = function(ctx)
@@ -642,6 +658,9 @@ function M.provider(name, spec)
       end
       if workspace then live.orders[workspace] = order end
       local ok, err = pcall(M.recalculate, live.compiled, ctx, live.state)
+      if workspace then
+        live.boxes[workspace] = ok and M.slot_boxes(live.compiled, ctx.area, live.state.sizes) or nil
+      end
       if not ok then
         print("hypertile[" .. name .. "]: " .. tostring(err))
       end
