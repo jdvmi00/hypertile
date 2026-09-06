@@ -3,17 +3,18 @@
 ## Current candidate
 
 - Repository/default branch: `jdvmi00/hypertile`, `main`.
-- Frozen candidate: `1ba0f8a30526f2148ff46885d67991862ae90f00`.
-- Immutable reference: `marketplace-1ba0f8a` (a candidate marker, not approval).
-- Initial submission: https://github.com/omacom/omarchy-plugin-marketplace/issues/4893
-- The candidate's manifest says `1.0.1`, but the existing `v1.0.1` tag points
-  to an older commit. Preserve both facts: do not move that tag or modify the
-  selected candidate to change its version. Use the full SHA in review.
+- Candidate: the `1.1.0` release, the merge of its release PR into `main`,
+  tagged `v1.1.0`. `main` is locked at that commit; its full SHA is recorded
+  here once the promotion has been read back.
+- Submission: https://github.com/omacom/omarchy-plugin-marketplace/issues/4893
+  (initial listing, pending). It supersedes the earlier candidate
+  `1ba0f8a30526f2148ff46885d67991862ae90f00` (manifest 1.0.1, marker tag
+  `marketplace-1ba0f8a`); leave that tag and the older `v1.0.1` tag alone.
 
 `main` is locked, including for administrators. It remains GitHub's default
 branch because marketplace validation and upstream installation resolve it.
-Ongoing development belongs on `develop` and feature branches. The newer
-remote-stream and scene work is not part of this candidate.
+Ongoing development belongs on `develop` and feature branches. Scenes and
+session recovery are part of this candidate.
 
 ## Development
 
@@ -32,9 +33,8 @@ passing development PR from changing the candidate accidentally.
 
 ## Finish the current submission
 
-1. Verify remote `main` still equals the candidate above and its existing
-   `test` check passed. The candidate predates the Windows stream test job;
-   do not change it to add newer development CI.
+1. Verify remote `main` still equals the candidate above and both its
+   checks passed.
 2. Update the existing submission's maintainer notes to describe this exact
    tree, including session recovery, background service, application launch,
    and menu/config changes. Remove stale claims such as no background service.
