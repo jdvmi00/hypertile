@@ -91,8 +91,8 @@ class Layouts:
 
 
 class Manager:
-    def __init__(self, controller, computers, layouts=None, directory=None):
-        self.ctl, self.computers = controller, computers
+    def __init__(self, controller, layouts=None, directory=None):
+        self.ctl = controller
         self.apps = AppPlacement(controller)
         self.layouts = layouts or Layouts()
         self.directory = directory or controller.config.parent / "scenes"
@@ -120,8 +120,7 @@ class Manager:
         check(len(ids) == len(set(ids)), "duplicate zone identities")
         inputs = doc.get("sources", {})
         check(isinstance(inputs, dict), "scene sources must be an object")
-        computers = self.computers()
-        output, blocked, used, apps = {}, set(), set(), set()
+        output, blocked, apps = {}, set(), set()
         for key, source in inputs.items():
             check(isinstance(source, dict), "invalid scene source")
             matches = [n for n in nodes if n.get("id") == key]
@@ -130,7 +129,8 @@ class Manager:
             check(len(matches) == 1, "Scene zone is missing: " + str(source.get("zone", key)) + "; choose its replacement")
             leaf = matches[0]
             kind = source.get("type")
-            check(kind in ("local", "stream", "empty", "app"), "monitor inputs require a validated hardware profile")
+            check(kind != "stream", "Legacy stream source: replace it with an installed app desktop ID")
+            check(kind in ("local", "empty", "app"), "unsupported scene source type")
             check(not leaf.get("spacer") or kind == "empty", "A spacer can only contain Empty")
             value = {"type": kind, "zone": leaf["name"]}
             if kind == "app":
@@ -139,22 +139,13 @@ class Manager:
                 check(not any(c == match[0] and (not t or not match[1] or t == match[1]) for c, t in apps),
                       "Overlapping app matches cannot occupy separate scene zones")
                 apps.add(match)
-            if kind == "stream":
-                check(not getattr(self.ctl, "generic_scenes", False), "Legacy stream source: replace it with an installed app desktop ID")
-                computer, profile = source.get("computer"), source.get("profile")
-                check(computer in computers, "Configure computer " + str(computer) + " first")
-                check(profile in computers[computer]["profiles"], "Unknown profile for " + computer)
-                check(computer not in used, "A computer can occupy only one scene zone")
-                used.add(computer)
-                value.update(computer=computer, profile=profile)
             if kind == "local" and source.get("app_class"):
                 app = source["app_class"]
                 check(isinstance(app, str) and 0 < len(app) <= 250 and "\n" not in app, "invalid app class")
-                check(app != "com.moonlight_stream.Moonlight", "Choose a configured computer for Moonlight")
                 check(not any(c == app for c, _ in apps), "An app class can occupy only one scene zone")
                 apps.add((app, None))
                 value["app_class"] = app
-            if kind in ("empty", "stream"):
+            if kind == "empty":
                 blocked.add(leaf["name"])
             output[leaf.get("id", leaf["name"])] = value
         cycle = spec.get("cycle", spec.get("fill", [n["name"] for n in nodes if not n.get("spacer")]))
@@ -181,12 +172,6 @@ class Manager:
         if active and active.get("phase") not in ("waiting-workspace", "restored") and active.get("document") and active["document"].get("layout_id") == spec.get("layout_id"):
             bindings = copy.deepcopy(active["document"]["sources"])
             bindings = {k: v for k, v in bindings.items() if v["type"] != "stream"}
-        by_name = {n["name"]: n.get("id", n["name"]) for n in leaves(spec)}
-        for r in self.ctl.records.values():
-            if r["desired"] and r["assignment"]["workspace"] == workspace:
-                zone = r["assignment"]["zone"]
-                check(zone in by_name, "An assigned source zone is missing: " + zone)
-                bindings[by_name[zone]] = {"zone": zone, "type": "stream", "computer": r["computer"], "profile": r["profile"]}
         doc = {"version": 1, "layout": entry["name"], "sources": bindings}
         if spec.get("layout_id"):
             doc["layout_id"] = spec["layout_id"]
@@ -215,16 +200,10 @@ class Manager:
         out["sources"] = []
         for key, source in record.get("document", {}).get("sources", {}).items():
             item = {**source, "zone_id": key}
-            if source["type"] == "stream":
-                r = self.ctl.records.get(source["computer"])
-                item["status"] = r["observed"] if r else "pending"
-                item["error"] = r.get("error") if r else None
-                item["suppressed"] = source["computer"] in record.get("suppressed", [])
-            else:
-                item["status"] = "ready"
-                for result in record.get("results", []):
-                    if result["zone"] == source["zone"]:
-                        item.update(result)
+            item["status"] = "ready"
+            for result in record.get("results", []):
+                if result["zone"] == source["zone"]:
+                    item.update(result)
             if source["type"] == "app":
                 state = record.get("apps", {}).get(key, {})
                 item.update(status=state.get("status", "pending"), error=state.get("error"))
@@ -237,29 +216,24 @@ class Manager:
     def start(self, doc, workspace, snap, restoring=False, force=False):
         document, spec = self.resolve(doc)
         check(document.get("layout_id"), "Save the scene first to establish layout and zone identities")
-        for source in document["sources"].values():
-            if source["type"] == "stream":
-                r = self.ctl.records.get(source["computer"])
-                check(not r or not r["desired"] or r["assignment"]["workspace"] == workspace,
-                      "Computer is already assigned on another workspace: " + source["computer"])
         old = self.records.get(workspace)
         if old:
             self.apps.observe(old, snap)
-        if not force and not restoring and old and not any(a.get("status") in ("moved", "closed", "needs-attention") for a in old.get("apps", {}).values()) and old.get("document") == document and old["phase"] not in ("needs-attention", "restored", "waiting-workspace", "waiting-session") and not old.get("suppressed"):
+        if not force and not restoring and old and not any(a.get("status") in ("moved", "closed", "needs-attention") for a in old.get("apps", {}).values()) and old.get("document") == document and old["phase"] not in ("needs-attention", "restored", "waiting-workspace", "waiting-session"):
             return self.public(old)
         if old and old.get("baseline") and old["phase"] != "restored":
             baseline = copy.deepcopy(old["baseline"])
         else:
             ws = next((w for w in snap["workspaces"] if w["selector"] == workspace), None)
             if not ws:
-                check(getattr(self.ctl, "generic_scenes", False) and self.has_apps(document), "Workspace is unavailable")
+                check(self.has_apps(document), "Workspace is unavailable")
                 ws = {"layout": "dwindle"}
             baseline = {"layout": ws["layout"], "document": self.capture(workspace, snap) if ws["layout"].startswith("lua:") else None,
                         "windows": [{k: w[k] for k in ("address", "stable_id", "pid", "pin", "pin_exclusive") if k in w}
                                     for w in snap["windows"] if w["workspace"] == workspace], "instance": self.ctl.compositor.instance}
         record = {"workspace": workspace, "document": document, "spec": spec, "baseline": baseline,
                   "generation": (old or {}).get("generation", 0) + 1, "operation": uuid.uuid4().hex,
-                  "phase": "stopping", "launched": [], "suppressed": [], "restoring": restoring, "modified": self.modified(document)}
+                  "phase": "stopping", "restoring": restoring, "modified": self.modified(document)}
         record["retired_pins"] = copy.deepcopy((old or {}).get("retired_pins", []) + (old or {}).get("pins", []))
         # A new explicit assignment supersedes pending placement elsewhere.
         # An older workspace must not claim the app when its late window arrives.
@@ -273,54 +247,7 @@ class Manager:
                     other.setdefault("apps", {})[key] = {"status": "moved"}
         self.records[workspace] = record
         self.ctl.persist()
-        self.stop_superseded(record)
         return self.public(record)
-
-    def desired(self, record):
-        return {s["computer"]: {**s, "zone_id": key} for key, s in record["document"]["sources"].items()
-                if s["type"] == "stream" and s["computer"] not in record.get("suppressed", [])}
-
-    def stop_superseded(self, record):
-        wanted = self.desired(record)
-        for computer, r in self.ctl.records.items():
-            if not r["desired"] or r["assignment"]["workspace"] != record["workspace"]:
-                continue
-            target = wanted.get(computer)
-            retain = target and r["profile"] == target["profile"] and r["phase"] == "watching" and r.get("window")
-            if not retain:
-                self.ctl.command({"command": "disconnect", "computer": computer, "scene_internal": True})
-
-    def interrupted(self, request):
-        if request.get("scene_internal") or request.get("command") not in ("connect", "disconnect", "restore", "release", "swap"):
-            return
-        computer = request.get("computer")
-        for record in self.records.values():
-            if computer in self.desired(record):
-                if request["command"] in ("disconnect", "restore", "release"):
-                    record.setdefault("suppressed", []).append(computer)
-                record["modified"] = True
-
-    def swapped(self):
-        for record in self.records.values():
-            if record["phase"] not in ("ready", "partial"):
-                continue
-            nodes = {n["name"]: n.get("id") for n in leaves(record["spec"])}
-            sources = record["document"]["sources"]
-            changes = []
-            for key, source in list(sources.items()):
-                r = self.ctl.records.get(source.get("computer"))
-                if source["type"] == "stream" and r and r["assignment"]["zone"] != source["zone"]:
-                    changes.append((key, nodes[r["assignment"]["zone"]], {**source, "zone": r["assignment"]["zone"]}))
-            for old, _, _ in changes:
-                sources.pop(old)
-            for old, key, source in changes:
-                displaced = sources.pop(key, None)
-                if displaced:
-                    displaced["zone"] = next(n["name"] for n in leaves(record["spec"]) if n.get("id") == old)
-                    sources[old] = displaced
-                sources[key] = source
-            if changes:
-                record["modified"] = True
 
     def command(self, request):
         action = request.get("action", "current")
@@ -353,14 +280,8 @@ class Manager:
             return self.public(self.records.get(workspace))
         if action == "catalog":
             self.ctl.browser.heartbeat(workspace, request.get("browse_token"))
-            computers = self.computers()
             return {"version": 1, "current": self.public(self.records.get(workspace)),
                     "scenes": self.command({"action": "list"})["scenes"],
-                    "computers": [{"computer": k, "profiles": [{"name": p, "audio": s.get("audio", "focus"),
-                                  "input": s.get("input", "absolute"), "keep_awake": s.get("keep_awake", "visible"),
-                                  "system_keys": s.get("system_keys", "never"),
-                                  "meeting": "unverified"} for p, s in v["profiles"].items()]} for k, v in computers.items()],
-                    "streams": [self.ctl.public(r) for r in self.ctl.records.values()],
                     "active_workspaces": [w for w, r in self.records.items() if r["phase"] != "restored"],
                     "apps": self.apps.desktop.catalog(snap["windows"]),
                     "monitor_inputs": [], "workspace": workspace}
@@ -391,55 +312,28 @@ class Manager:
             baseline = active["baseline"]
             if baseline["document"]:
                 return self.start(baseline["document"], workspace, snap, restoring=True)
-            # Built-in layout baselines have no source zones.
-            for r in self.ctl.records.values():
-                if r["desired"] and r["assignment"]["workspace"] == workspace:
-                    self.ctl.command({"command": "disconnect", "computer": r["computer"], "scene_internal": True})
             active.update(phase="restore-builtin", restoring=True)
             self.ctl.persist()
             return self.public(active)
         if action == "retry":
             active = self.records.get(workspace)
             check(active, "No active scene")
-            if any(s["type"] == "app" for s in active["document"]["sources"].values()):
-                self.apps.retry(active)
-                return self.start(active["document"], workspace, snap, force=True)
-            if active["phase"] == "needs-attention":
-                active.update(phase="stopping", error=None)
-                self.stop_superseded(active)
-            for computer in self.desired(active):
-                r = self.ctl.records.get(computer)
-                if r and not r["desired"] and r.get("journal"):
-                    self.ctl.command({"command": "restore", "computer": computer, "scene_internal": True})
-                elif r and r["desired"] and not self.ctl.processes.pid(r):
-                    self.ctl.command({"command": "retry", "computer": computer, "scene_internal": True})
-                elif not r or not r["desired"]:
-                    active["launched"] = [c for c in active["launched"] if c != computer]
-            active["content_applied"] = False
-            self.ctl.persist()
-            return self.public(active)
+            self.apps.retry(active)
+            return self.start(active["document"], workspace, snap, force=True)
         if action == "content":
             doc = self.capture(workspace, snap)
             spec = self.layouts.get(doc["layout"], doc["layout_id"])["spec"]
             leaf = next((n for n in leaves(spec) if n["name"] == request.get("zone")), None)
             check(leaf, "Select a zone in the current layout")
             source = {"type": request["type"], "zone": leaf["name"]}
-            for k in ("computer", "profile", "app_class", "app_title", "desktop_id"):
+            for k in ("app_class", "app_title", "desktop_id"):
                 if request.get(k):
                     source[k] = request[k]
             if source["type"] == "app":
                 doc["sources"] = {k: v for k, v in doc["sources"].items() if v.get("desktop_id") != source.get("desktop_id")}
-            if source["type"] == "stream":
-                doc["sources"] = {k: v for k, v in doc["sources"].items()
-                                  if v.get("computer") != source.get("computer")}
             doc["sources"][leaf["id"]] = source
             return self.start(doc, workspace, snap)
         raise ValueError("unknown scene command")
-
-    def blocks(self, computer):
-        r = self.ctl.records[computer]
-        scene = self.records.get(r["assignment"]["workspace"])
-        return bool(scene and scene["phase"] in ("stopping", "layout", "restore-builtin") and r["desired"])
 
     def restore_refs(self, refs):
         for ref in refs:
@@ -448,7 +342,7 @@ class Manager:
                 continue
             self.records[workspace] = {"workspace": workspace, "document": copy.deepcopy(ref["document"]),
                 "phase": "waiting-workspace", "generation": 0, "operation": uuid.uuid4().hex,
-                "launched": [], "suppressed": [], "deadline": self.ctl.now() + 45}
+                "deadline": self.ctl.now() + 45}
         self.ctl.persist()
 
     def tick(self):
@@ -464,26 +358,14 @@ class Manager:
         phase, workspace = record["phase"], record["workspace"]
         if phase == "waiting-workspace":
             snap = self.ctl.compositor.snapshot()
-            if any(w["selector"] == workspace for w in snap["workspaces"]) or (getattr(self.ctl, "generic_scenes", False) and self.has_apps(record["document"])):
-                suppressed = [c for c in self.desired(record) if c in self.ctl.records and not self.ctl.records[c]["desired"]]
+            if any(w["selector"] == workspace for w in snap["workspaces"]) or (self.has_apps(record["document"])):
                 self.start(record["document"], workspace, snap)
-                restored = self.records[workspace]
-                # A scene in an older checkpoint must not undo a disconnect.
-                restored["suppressed"] = suppressed
             elif self.ctl.now() > record["deadline"]:
                 record.update(phase="needs-attention", error="Workspace did not return during session recovery")
             return
         if phase in ("restored", "needs-attention", "waiting-session"):
             return
-        wanted = self.desired(record)
-        local_records = [r for r in self.ctl.records.values() if r["assignment"]["workspace"] == workspace]
         if phase in ("stopping", "restore-builtin"):
-            # Old local views must exit before their zones/layout are reused.
-            if any(not r["desired"] and self.ctl.processes.pid(r) for r in local_records):
-                return
-            for r in local_records:
-                self.ctl.compositor.call("stream_release", {"computer": r["computer"]})
-                self.ctl.applied.pop(r["computer"], None)
             self.ctl.compositor.call("scene_clear", {"workspace": workspace})
             if phase == "restore-builtin":
                 rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": record["baseline"]["layout"]})
@@ -493,18 +375,10 @@ class Manager:
             # Resolve again before writes: a queued scene cannot use stale IDs.
             document, spec = self.resolve(record["document"])
             record.update(document=document, spec=spec, phase="layout")
-            wanted = self.desired(record)
             self.ctl.persist()
         if record["phase"] == "layout":
             rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": "lua:" + record["document"]["layout"], "spec": record["spec"]})
             self.layouts.persist(workspace, rule)
-            for computer, target in wanted.items():
-                r = self.ctl.records.get(computer)
-                if r and r["desired"]:
-                    r["assignment"] = {"workspace": workspace, "layout": "lua:" + record["document"]["layout"],
-                                       "zone": target["zone"], "zone_id": target["zone_id"]}
-                    self.ctl.applied.pop(computer, None)
-                    record["launched"].append(computer)
             record.update(phase="connecting", content_applied=False)
             self.ctl.persist()
         snap = self.ctl.compositor.snapshot()
@@ -513,7 +387,7 @@ class Manager:
             # An empty workspace can disappear while its app is starting. Its
             # committed layout rule and content operation still exist; moving
             # the eventual window there recreates it without taking focus.
-            if not record.get("content_applied") and getattr(self.ctl, "generic_scenes", False) and self.has_apps(record["document"]):
+            if not record.get("content_applied") and self.has_apps(record["document"]):
                 sources = [{**value, "zone_id": key} for key, value in record["document"]["sources"].items()]
                 content = self.ctl.compositor.call("scene_content_apply", {"workspace": workspace,
                     "layout": "lua:" + record["document"]["layout"], "sources": sources,
@@ -531,7 +405,6 @@ class Manager:
             document, spec = self.resolve(record["document"])
             if document != record["document"]:
                 record.update(document=document, spec=spec, content_applied=False, phase="stopping")
-                self.stop_superseded(record)
                 return  # Reconcile the full reservation set before either new name is assigned.
         # A user selected a different layout directly: don't force this scene back.
         if live_ws["layout"] != "lua:" + record["document"]["layout"]:
@@ -542,22 +415,11 @@ class Manager:
             content = self.ctl.compositor.call("scene_content_apply", {"workspace": workspace, "layout": live_ws["layout"], "sources": sources, "operation": record["operation"]})
             record["results"], record["pins"] = content["results"], content["pins"]
             record["content_applied"] = True
-        for computer, target in wanted.items():
-            if computer in record["launched"]:
-                continue
-            r = self.ctl.records.get(computer)
-            if r and (r["desired"] or r["phase"] != "idle" or self.ctl.processes.pid(r) or r.get("journal")):
-                continue
-            self.ctl.command({"command": "connect", "computer": computer, "profile": target["profile"],
-                              "zone": target["zone"], "workspace": workspace, "scene_internal": True})
-            record["launched"].append(computer)
         app_results = self.apps.step(record, snap)
         app_zones = {r["zone"] for r in app_results}
         record["results"] = [r for r in record.get("results", []) if r["zone"] not in app_zones] + app_results
-        states = [self.ctl.records.get(c, {}) for c in wanted]
-        problems = any(r.get("observed") in ("needs-attention", "restore-pending", "degraded") or not r.get("desired", True) for r in states)
-        problems = problems or any(r.get("status") == "needs-attention" for r in record.get("results", []))
-        if all(r.get("window") for r in states) and not problems and not any(r["status"] == "waiting-window" for r in app_results):
+        problems = any(r.get("status") == "needs-attention" for r in record.get("results", []))
+        if not problems and not any(r["status"] == "waiting-window" for r in app_results):
             record["phase"] = "ready"
             record.pop("error", None)
         else:

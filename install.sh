@@ -63,10 +63,17 @@ if [[ -d "$plugin_dst/.git" && "$(cd "$plugin_dst" && pwd -P)" != "$src" ]]; the
   exit 1
 fi
 
-for tool in lua jq python3; do
+for tool in lua jq python3 flock; do
   command -v "$tool" >/dev/null 2>&1 || { echo "install.sh: $tool is required" >&2; exit 1; }
 done
 [[ -e "$hypr/hyprland.lua" ]] || { echo "install.sh: $hypr/hyprland.lua not found; is this an Omarchy 4 (Lua config) system?" >&2; exit 1; }
+
+PYTHONPATH="$src/session" python3 - "$state" <<'PY_PREFLIGHT'
+from pathlib import Path
+from upgrade import check_legacy
+import sys
+check_legacy(Path(sys.argv[1]))
+PY_PREFLIGHT
 
 # Retire old in-memory scene code before installing the independent writer.
 # Keep active legacy connection recovery running until the owner migrates it.
@@ -94,6 +101,18 @@ for name in ("hypertile-scenes", "hypertile-session"):
             subprocess.run([str(entry), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
 PY_SERVICES
 
+# Hold the migration lock through all runtime edits. Shared Remote Desktops
+# guards coexist; a legacy writer cannot start while its files are retired.
+mkdir -p "$state/streams"
+exec 9>"$state/streams/writer.lock"
+flock -sn 9 || { echo "install.sh: legacy controller is still running" >&2; exit 1; }
+PYTHONPATH="$src/session" python3 - "$state" <<'PY_CHECK'
+from pathlib import Path
+from upgrade import check_legacy
+import sys
+check_legacy(Path(sys.argv[1]))
+PY_CHECK
+
 mkdir -p "$hypr/layouts" "$bin" "$state"
 
 # One backup per edited config file, overwritten on each edit.
@@ -106,16 +125,20 @@ for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts
 done
 install -m 0755 "$src/bin/hypertile-ctl" "$bin/hypertile-ctl"
 install -m 0755 "$src/bin/hypertile-session" "$bin/hypertile-session"
-install -m 0755 "$src/bin/hypertile-stream" "$bin/hypertile-stream"
 install -m 0755 "$src/bin/hypertile-scenes" "$bin/hypertile-scenes"
 session_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session"
 mkdir -p "$session_data"
 for f in "$src"/session/*.py; do install -m 0644 "$f" "$session_data/$(basename "$f")"; done
-stream_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream"
-mkdir -p "$stream_data"
-for f in "$src"/stream/*.py; do install -m 0644 "$f" "$stream_data/$(basename "$f")"; done
-mkdir -p "$stream_data/windows"
-for f in "$src"/stream/windows/*.ps1 "$src"/stream/windows/*.cs; do install -m 0644 "$f" "$stream_data/windows/$(basename "$f")"; done
+scene_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/scenes"
+mkdir -p "$scene_data"
+for f in "$src"/scenes/*.py; do install -m 0644 "$f" "$scene_data/$(basename "$f")"; done
+
+PYTHONPATH="$src/session" python3 - "$bin" "${XDG_DATA_HOME:-$HOME/.local/share}" <<'PY_CLEANUP'
+from pathlib import Path
+from upgrade import cleanup
+import sys
+cleanup(Path(sys.argv[1]), Path(sys.argv[2]))
+PY_CLEANUP
 
 for f in "$src"/layouts/*.lua; do
   name="$(basename "$f")"

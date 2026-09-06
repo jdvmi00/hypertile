@@ -8,5 +8,5 @@ import sys
 root = Path(os.environ["HYPERTILE_SRC"]) if os.environ.get("HYPERTILE_SRC") else Path(
     os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hypertile"
 sys.path.insert(0, str(root / "session"))
-sys.path.insert(0, str(root / "stream"))
-runpy.run_path(str(root / "stream/scene_service.py"), run_name="__main__")
+sys.path.insert(0, str(root / "scenes"))
+runpy.run_path(str(root / "scenes/scene_service.py"), run_name="__main__")

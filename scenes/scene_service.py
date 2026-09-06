@@ -19,9 +19,8 @@ class SceneController:
         self.state = read_json(root / "state.json") if (root / "state.json").exists() else {"version": 1}
         if self.state.get("version") != 1:
             raise ValueError("unsupported scene state version")
-        self.records, self.applied, self.running = {}, {}, True
-        self.generic_scenes = True
-        self.scenes = Manager(self, lambda: {})
+        self.running = True
+        self.scenes = Manager(self)
         self.browser = Browser(self)
         if self.state.get("instance") != compositor.instance:
             self.state["app_launches"].clear()
@@ -49,11 +48,6 @@ class SceneController:
             return {"accepted": True}
         if command != "scene":
             raise ValueError("Scenes only manages layouts and app placement")
-        if payload.get("action") in ("apply", "content", "layout", "restore", "cancel", "retry", "browse"):
-            snap = self.compositor.snapshot()
-            workspace = str(payload.get("workspace") or snap["workspace"])
-            if any(s.get("workspace") == workspace for s in snap.get("streams", [])):
-                raise ValueError("Disconnect legacy Hypertile streams on this workspace before changing its scene")
         self.browser.before_command(payload)
         return self.scenes.command(payload)
 

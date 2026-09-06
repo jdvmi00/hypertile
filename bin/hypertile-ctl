@@ -64,12 +64,8 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
                              monitor size, reserved edges, gaps, and layout area
   workspaces [--json]        every workspace with its monitor and layout
   windows [--json]           open windows (class, title, workspace)
-  computers [--json]         configured remote computers and pairing references
   scene <command> [...]     list, save, apply, current, restore, retry, content;
                              see docs/SCENES.md
-  stream <command> [...]    probe, connect, focus, disconnect, status, retry,
-                             restore, release, swap, reconnect, local, quality,
-                             measure, readability; see docs/STREAMS.md
   session <command> [name]   status, save <name>, restore [name], freeze, resume,
                              stop, logout, reboot, shutdown; see docs/SESSIONS.md
   default [name|BUILTINS] [--no-reload]
@@ -448,16 +444,14 @@ end
 
 local argv = { ... }
 local cmd = table.remove(argv, 1)
-if cmd == "stream" or cmd == "computers" or cmd == "scene" then
-  local entry = cmd == "scene" and "hypertile-scenes" or "hypertile-stream"
+if cmd == "scene" then
+  local entry = "hypertile-scenes"
   local command = src and src ~= "" and (src .. "/bin/" .. entry)
     or ((os.getenv("HOME") or "") .. "/.local/bin/" .. entry)
   local words = { command }
-  if cmd == "computers" then words[#words + 1] = "computers" end
   if cmd == "scene" then
     if #argv == 0 then argv[1] = "current" end
   end
-  if cmd == "stream" and #argv == 0 then argv[1] = "status" end
   for _, value in ipairs(argv) do words[#words + 1] = value end
   for i, value in ipairs(words) do words[i] = "'" .. value:gsub("'", "'\\''") .. "'" end
   local ok, _, code = os.execute(table.concat(words, " "))

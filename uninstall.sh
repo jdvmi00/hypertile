@@ -40,19 +40,12 @@ state="${XDG_STATE_HOME:-$HOME/.local/state}/hypertile"
 plugin_id="jmartin.hypertile"
 plugin_dst="$config/omarchy/plugins/$plugin_id"
 
-# Keep recovery available until every managed source is disconnected/restored.
-if [[ -e "$state/streams/state.json" ]]; then
-  python3 - "$state/streams/state.json" <<'PY'
-import json
+PYTHONPATH="$src/session" python3 - "$state" <<'PY_PREFLIGHT'
+from pathlib import Path
+from upgrade import check_legacy
 import sys
-with open(sys.argv[1]) as source:
-    records = json.load(source).get("computers", {})
-pending = [name for name, r in records.items() if r.get("desired") or r.get("journal")]
-if pending:
-    sys.exit("uninstall.sh: disconnect/restore remote sources first: " + ", ".join(pending)
-             + ". Use hypertile-ctl stream status --json for recovery actions.")
-PY
-fi
+check_legacy(Path(sys.argv[1]))
+PY_PREFLIGHT
 
 # Stop the writer before removing its code; retain recovery snapshots unless
 # --purge was requested. A missing/stopped service is harmless.
@@ -66,6 +59,17 @@ fi
 if [[ -x "$bin/hypertile-scenes" ]]; then
   "$bin/hypertile-scenes" stop >/dev/null 2>&1 || true
 fi
+
+# Keep pending host recovery tools intact and prevent legacy writer restarts.
+mkdir -p "$state/streams"
+exec 9>"$state/streams/writer.lock"
+flock -sn 9 || { echo "uninstall.sh: legacy controller is still running" >&2; exit 1; }
+PYTHONPATH="$src/session" python3 - "$state" <<'PY_CHECK'
+from pathlib import Path
+from upgrade import check_legacy
+import sys
+check_legacy(Path(sys.argv[1]))
+PY_CHECK
 
 # One backup per edited config file, overwritten on each edit.
 backup() {
@@ -142,20 +146,18 @@ for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts
   rm -f "$hypr/$f"
 done
 rm -f "$bin/hypertile-ctl"
-rm -f "$bin/hypertile-session" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/service.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/streams.py"
-rm -f "$bin/hypertile-scenes" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/scene_service.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/apps.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/ipc.py"
-rm -f "$bin/hypertile-stream" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/controller.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/mac_display.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/scenes.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/audio.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/quality.py" \
-  "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/browse.py"
-rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/windows_display.py"
-for f in Guard.ps1 Policy.ps1 Display.cs Test.ps1 Install.ps1; do
-  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/stream/windows/$f"
+PYTHONPATH="$src/session" python3 - "$bin" "${XDG_DATA_HOME:-$HOME/.local/share}" <<'PY_CLEANUP'
+from pathlib import Path
+from upgrade import cleanup
+import sys
+cleanup(Path(sys.argv[1]), Path(sys.argv[2]))
+PY_CLEANUP
+rm -f "$bin/hypertile-session" "$bin/hypertile-scenes"
+for module in service scene_recovery upgrade; do
+  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/$module.py"
+done
+for module in scene_service apps ipc scenes browse; do
+  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/scenes/$module.py"
 done
 echo "removed the engine files and hypertile-ctl"
 

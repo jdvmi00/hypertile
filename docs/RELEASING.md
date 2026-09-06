@@ -22,6 +22,9 @@ remote-stream and scene work is not part of this candidate.
 3. Push the feature branch and open a PR targeting `develop`.
 4. Wait for `test` and `windows-display-policy` to pass, then merge the PR.
 
+The `windows-display-policy` job runs the extracted policy suite from an immutable
+Remote Desktops commit on Windows; host code is no longer duplicated here.
+
 Both integration branches require passing checks on an up-to-date PR; no
 additional reviewer is required for this solo-maintainer repository. Force
 pushes and deletion are disabled. The extra lock on `main` prevents even a

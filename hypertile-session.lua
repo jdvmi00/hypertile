@@ -6,9 +6,7 @@ local prefix = modname:match("^(.-)hypertile%-session$") or ""
 local engine = require(prefix .. "hypertile")
 local json = require(prefix .. "hypertile-json")
 local M = {}
-local streams = {}
 local scene_content = {}
-local last_local = {}
 
 local function selector(ws)
   if ws.special then return ws.name end
@@ -18,13 +16,7 @@ end
 
 function M.snapshot()
   local out = { windows = json.array(), workspaces = json.array(), layouts = {}, monitors = json.array() }
-  local focused = hl.get_active_window()
-  if focused and focused.workspace and focused.class ~= "com.moonlight_stream.Moonlight" then
-    last_local[selector(focused.workspace)] = { address = focused.address, pid = focused.pid, stable_id = focused.stable_id }
-  end
-  out.streams = json.array()
   out.scene_content = scene_content
-  for _, source in pairs(streams) do out.streams[#out.streams + 1] = source end
   for _, mon in ipairs(hl.get_monitors()) do
     out.monitors[#out.monitors + 1] = { name = mon.name, x = mon.x, y = mon.y }
   end
@@ -53,10 +45,6 @@ function M.snapshot()
     if win.mapped and win.workspace then
       local name = win.workspace.tiled_layout:match("^lua:(.+)$")
       local live = name and engine.live[name]
-      local source
-      for id, s in pairs(streams) do
-        if s.address == win.address and s.pid == win.pid and s.stable_id == win.stable_id then source = id end
-      end
       local scene_app
       for workspace, scene in pairs(scene_content) do
         if workspace == selector(win.workspace) then
@@ -74,7 +62,7 @@ function M.snapshot()
         fullscreen = win.fullscreen, fullscreen_client = win.fullscreen_client,
         pin = live and live.state.pins[win.address], grouped = win.group ~= nil,
         pin_exclusive = live and live.state.exclusive_pins and live.state.exclusive_pins[win.address] or nil,
-        stream = source, scene_app = scene_app,
+        scene_app = scene_app,
       }
     end
   end
@@ -104,42 +92,6 @@ end
 local function dispatch(fn, args)
   local result = hl.dispatch(fn(args))
   if type(result) == "table" and result.error then error(result.error) end
-end
-
-local function stream_target(request)
-  for _, ws in ipairs(hl.get_workspaces()) do
-    if selector(ws) == request.workspace then
-      if ws.tiled_layout ~= request.layout then error("assignment-invalid: workspace layout changed") end
-      local live = engine.live[request.layout:match("^lua:(.+)$")]
-      if live and request.zone_id then
-        request.zone = live.compiled.zone_ids[request.zone_id]
-      end
-      if not live or not live.compiled.leaf_set[request.zone]
-        or live.compiled.leaf_opts[request.zone].spacer then error("assignment-invalid: zone is missing or a spacer") end
-      return ws, live
-    end
-  end
-  error("assignment-invalid: workspace is unavailable")
-end
-
-function M.stream_check(request)
-  local ws, live = stream_target(request)
-  local zones = {}
-  for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do
-    if name == request.zone then error("assignment-invalid: zone is intentionally empty") end
-    zones[name] = true
-  end
-  for _, s in pairs(streams) do
-    if s.computer ~= request.computer and s.workspace == request.workspace then
-      if s.zone == request.zone then error("zone already owned by " .. s.computer) end
-      zones[s.zone] = true
-    end
-  end
-  zones[request.zone] = true
-  local available = false
-  for _, name in ipairs(live.compiled.cycle) do if not zones[name] then available = true end end
-  if not available then error("assignment-invalid: leave one fill zone for local windows") end
-  return { workspace_id = ws.id, zone = request.zone, zone_id = live.compiled.leaf_opts[request.zone].id }
 end
 
 local function refresh_workspace(ws)
@@ -205,7 +157,7 @@ function M.scene_content_apply(request)
     assert(zone and live.compiled.leaf_set[zone], "scene zone no longer exists")
     source.zone = zone
     if source.type == "empty" then empty[zone], blocked[zone] = true, true end
-    if source.type == "stream" then blocked[zone] = true end
+    assert(source.type == "local" or source.type == "app" or source.type == "empty", "unsupported scene source type")
   end
   local available = false
   for _, zone in ipairs(live.compiled.cycle) do if not blocked[zone] then available = true end end
@@ -266,10 +218,6 @@ function M.scene_app_place(request)
   local w = matches[1]
   assert(w.address == request.address and w.stable_id == request.stable_id and w.pid == request.pid,
     "App window identity changed")
-  for _, source in pairs(streams) do
-    assert(source.address ~= w.address or source.stable_id ~= w.stable_id or source.pid ~= w.pid,
-      "Disconnect the legacy Hypertile stream before assigning this app")
-  end
   local pin = { address = w.address, stable_id = w.stable_id, pid = w.pid, zone = request.zone,
     before = live.state.pins[w.address], exclusive = (live.state.exclusive_pins or {})[w.address] }
   -- Mark consumed before dispatching. A lost IPC reply or later manual move
@@ -300,41 +248,6 @@ function M.scene_restore_pins(request)
   return true
 end
 
-function M.stream_shortcut(request)
-  local keys = { clipboard = "V", ["input-release"] = "Z", stats = "S" }
-  local key = assert(keys[request.action], "unknown stream shortcut")
-  local source = assert(streams[request.computer], "stream is not assigned")
-  for _, w in ipairs(hl.get_windows()) do
-    if w.address == source.address and w.stable_id == source.stable_id and w.pid == source.pid then
-      local address, stable_id, pid = w.address, w.stable_id, w.pid
-      local function still_owned()
-        for _, current in ipairs(hl.get_windows()) do
-          if current.address == address and current.stable_id == stable_id and current.pid == pid then return true end
-        end
-      end
-      local function send()
-        if not still_owned() then return end
-        dispatch(hl.dsp.send_key_state, { mods = "CTRL ALT SHIFT", key = key, state = "down", window = "address:" .. address })
-        hl.timer(function()
-          if still_owned() then dispatch(hl.dsp.send_key_state, { mods = "CTRL ALT SHIFT", key = key, state = "up", window = "address:" .. address }) end
-        end, { timeout = 50, type = "oneshot" })
-      end
-      -- Wayland clipboard offers and Moonlight keyboard capture require focus.
-      -- These controls are explicit actions; scene placement never takes focus.
-      dispatch(hl.dsp.focus, { window = "address:" .. address })
-      hl.timer(send, { timeout = 80, type = "oneshot" })
-      return true
-    end
-  end
-  error("stream has no ready window")
-end
-
-local function source_for(win)
-  for _, s in pairs(streams) do
-    if s.address == win.address and s.pid == win.pid and s.stable_id == win.stable_id then return s end
-  end
-end
-
 local function swap_windows(request)
   local found = {}
   for i, ref in ipairs(request.windows) do
@@ -354,8 +267,8 @@ local function swap_windows(request)
 end
 
 -- Resolve actual engine assignments, including rules, pins and reservations.
--- This runs before the controller journals the request; it changes nothing.
-function M.stream_swap_plan(request)
+-- Planning validates both windows without changing either pin.
+function M.swap_plan(request)
   local windows, ws, live = swap_windows(request)
   local by_address, targets = {}, {}
   for _, w in ipairs(hl.get_windows()) do
@@ -366,7 +279,6 @@ function M.stream_swap_plan(request)
   end
   assert(next(by_address) == nil, "swap unavailable: waiting for layout order")
   local reserved = {}
-  for name, owner in pairs((live.state.reservations or {})[tostring(ws.id)] or {}) do reserved[name] = owner end
   for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do reserved[name] = true end
   local buckets = engine.assign(live.compiled, targets, {
     pins = live.state.pins, exclusive_pins = live.state.exclusive_pins,
@@ -384,9 +296,8 @@ function M.stream_swap_plan(request)
       end
     end
     assert(zone, "swap unavailable: window has no zone")
-    local s = source_for(w)
     plan.windows[i] = { address = w.address, stable_id = w.stable_id, pid = w.pid,
-      computer = s and s.computer, before = zone, before_id = live.compiled.leaf_opts[zone].id,
+      before = zone, before_id = live.compiled.leaf_opts[zone].id,
       pin = live.state.pins[w.address],
       exclusive = live.state.exclusive_pins and live.state.exclusive_pins[w.address] or nil }
   end
@@ -399,11 +310,10 @@ function M.stream_swap_plan(request)
 end
 
 -- Absolute assignments make retry after a lost IPC reply safe. Validate the
--- entire exchange before changing either reservation; never focus or relaunch.
-function M.stream_swap_apply(plan)
+-- entire exchange before changing either pin; never focus or relaunch.
+function M.swap_apply(plan)
   local windows, ws, live = swap_windows(plan)
   assert(selector(ws) == plan.workspace and ws.tiled_layout == plan.layout, "swap unavailable: layout changed")
-  local owners = {}
   for i, w in ipairs(windows) do
     local ref = plan.windows[i]
     assert(w.pid == ref.pid, "swap unavailable: window identity changed")
@@ -412,233 +322,36 @@ function M.stream_swap_apply(plan)
     assert((not ref.zone_id or live.compiled.leaf_opts[ref.zone].id == ref.zone_id)
       and (not ref.before_id or (live.compiled.leaf_opts[ref.before] or {}).id == ref.before_id),
       "swap unavailable: zone identity changed")
-    local s = source_for(w)
-    assert((s and s.computer) == ref.computer, "swap unavailable: source ownership changed")
-    if s then
-      assert(s.workspace == plan.workspace and s.layout == plan.layout and (s.zone == ref.before or s.zone == ref.zone),
-        "swap unavailable: source assignment changed")
-      owners[s.computer] = true
-    else
-      local pin = live.state.pins[w.address]
-      assert(pin == ref.pin or pin == ref.zone, "swap unavailable: local pin changed")
-    end
-  end
-  for _, s in pairs(streams) do
-    if s.workspace == plan.workspace and not owners[s.computer] then
-      for _, ref in ipairs(plan.windows) do assert(s.zone ~= ref.zone, "swap unavailable: zone already owned") end
-    end
+    local pin = live.state.pins[w.address]
+    assert(pin == ref.pin or pin == ref.zone, "swap unavailable: pin changed")
   end
   local zones = {}
   for name in pairs((live.state.scene_empty or {})[tostring(ws.id)] or {}) do
     zones[name] = true
     for _, ref in ipairs(plan.windows) do assert(ref.zone ~= name, "swap unavailable: zone is intentionally empty") end
   end
-  for _, s in pairs(streams) do
-    if s.workspace == plan.workspace and not owners[s.computer] then zones[s.zone] = true end
-  end
-  for _, ref in ipairs(plan.windows) do if ref.computer then zones[ref.zone] = true end end
   local available = false
   for _, zone in ipairs(live.compiled.cycle) do if not zones[zone] then available = true end end
   assert(available, "swap unavailable: leave one fill zone for local windows")
   live.state.exclusive_pins = live.state.exclusive_pins or {}
-  local slots = (live.state.reservations or {})[tostring(ws.id)] or {}
-  for _, ref in ipairs(plan.windows) do if ref.computer then slots[streams[ref.computer].zone] = nil end end
   for _, ref in ipairs(plan.windows) do
     live.state.pins[ref.address] = ref.zone
-    live.state.exclusive_pins[ref.address] = not ref.computer or nil
-    if ref.computer then
-      streams[ref.computer].zone = ref.zone
-      streams[ref.computer].zone_id = ref.zone_id
-      slots[ref.zone] = ref.address
-    end
+    live.state.exclusive_pins[ref.address] = true
   end
   refresh_workspace(ws)
-  return true
-end
-
--- A target may disappear between planning and applying. Undo only values
--- still owned by this exchange, including an apply whose reply was lost.
-function M.stream_swap_cancel(plan)
-  local live = engine.live[plan.layout:match("^lua:(.+)$")]
-  if not live then return true end
-  local windows = {}
-  for _, w in ipairs(hl.get_windows()) do windows[w.address] = w end
-  local restored = {}
-  for _, ref in ipairs(plan.windows) do
-    local s = ref.computer and streams[ref.computer]
-    if s and s.address == ref.address and s.stable_id == ref.stable_id and s.pid == ref.pid
-      and s.workspace == plan.workspace and s.layout == plan.layout and (s.zone == ref.zone or s.zone == ref.before) then
-      local slots = live.state.reservations[tostring(s.workspace_id)]
-      slots[s.zone] = nil
-      restored[#restored + 1] = { source = s, ref = ref, slots = slots }
-    elseif not ref.computer then
-      local w = windows[ref.address]
-      if w and w.stable_id == ref.stable_id and w.pid == ref.pid and live.state.pins[ref.address] == ref.zone then
-        live.state.pins[ref.address] = ref.pin
-        if live.state.exclusive_pins then live.state.exclusive_pins[ref.address] = ref.exclusive end
-      end
-    end
-  end
-  for _, item in ipairs(restored) do
-    item.source.zone = item.ref.before
-    item.source.zone_id = item.ref.before_id
-    item.slots[item.ref.before] = item.ref.address
-    live.state.pins[item.ref.address] = item.ref.before
-  end
-  for _, ws in ipairs(hl.get_workspaces()) do if selector(ws) == plan.workspace then refresh_workspace(ws) end end
   return true
 end
 
 function M.swap(active, target)
   local live = engine.live[active.workspace.tiled_layout:match("^lua:(.+)$")]
-  local managed = source_for(active) or source_for(target)
-  if not managed and not live.state.pins[active.address] and not live.state.pins[target.address] then return false end
-  if managed then
-    -- The external controller persists intent. Do not wait for its IPC from
-    -- the compositor thread: it queries us while handling this command.
+  if not live.state.pins[active.address] and not live.state.pins[target.address] then return false end
+  local request = { windows = { active, target } }
+  local ok, err = pcall(function() M.swap_apply(M.swap_plan(request)) end)
+  if not ok then
     local function quote(v) return "'" .. tostring(v):gsub("'", "'\\''") .. "'" end
-    hl.exec_cmd("hypertile-stream swap " .. quote(active.address) .. " " .. quote(active.stable_id)
-      .. " " .. quote(target.address) .. " " .. quote(target.stable_id))
-  else
-    local request = { windows = { active, target } }
-    local ok, err = pcall(function() M.stream_swap_apply(M.stream_swap_plan(request)) end)
-    if not ok then
-      local function quote(v) return "'" .. tostring(v):gsub("'", "'\\''") .. "'" end
-      hl.exec_cmd("notify-send 'Hypertile swap' " .. quote(err))
-    end
+    hl.exec_cmd("notify-send 'Hypertile swap' " .. quote(err))
   end
   return true
-end
-
-function M.stream_release(request)
-  local old = streams[request.computer]
-  if not old then return true end
-  streams[request.computer] = nil
-  if hl.window_rule then
-    hl.window_rule({ name = "hypertile-stream-" .. request.computer, enabled = false })
-  end
-  for _, live in pairs(engine.live) do
-    local reservations = live.state.reservations or {}
-    local slots = reservations[tostring(old.workspace_id)]
-    if slots then slots[old.zone] = nil end
-    if old.address then live.state.pins[old.address] = nil end
-  end
-  for _, ws in ipairs(hl.get_workspaces()) do
-    if ws.id == old.workspace_id then refresh_workspace(ws) end
-  end
-  return true
-end
-
-function M.stream_assign(request)
-  local checked = M.stream_check(request)
-  local ws, live = stream_target(request)
-  local found
-  if request.address then
-    for _, w in ipairs(hl.get_windows()) do
-      if w.address == request.address and w.pid == request.pid and w.stable_id == request.stable_id
-        and w.class == "com.moonlight_stream.Moonlight" and w.title == request.title then found = w end
-    end
-    if not found then error("stream window identity changed") end
-  end
-  M.stream_release(request)
-  request.workspace_id = checked.workspace_id
-  streams[request.computer] = request
-  if hl.window_rule and request.title then
-    -- Launch rules can be consumed by Moonlight's temporary renderer window.
-    -- Cover the subsequent host-titled window while this source is assigned.
-    local title = request.title:gsub("([^%w _%-])", "\\%1")
-    hl.window_rule({ name = "hypertile-stream-" .. request.computer, enabled = true,
-      match = { class = "^com\\.moonlight_stream\\.Moonlight$", title = "^" .. title .. "$" },
-      workspace = request.workspace .. " silent", no_initial_focus = true,
-      suppress_event = "fullscreen maximize activate activatefocus fullscreenoutput" })
-  end
-  live.state.reservations = live.state.reservations or {}
-  local key = tostring(ws.id)
-  live.state.reservations[key] = live.state.reservations[key] or {}
-  live.state.reservations[key][request.zone] = request.address or true
-  if found then
-    -- Clear startup fullscreen once. Reconciliation must not undo a later
-    -- explicit compositor fullscreen action on the already placed window.
-    if not request.placed or selector(found.workspace) ~= request.workspace or found.floating then
-      M.place({ address = found.address, layout = request.layout,
-        saved = { workspace = request.workspace, pin = request.zone, floating = false } })
-    end
-    live.state.pins[found.address] = request.zone
-  end
-  refresh_workspace(ws)
-  return true
-end
-
-function M.stream_focus(request)
-  local s = streams[request.computer]
-  if not s or not s.address then error("stream has no ready window") end
-  for _, w in ipairs(hl.get_windows()) do
-    if w.address == s.address and w.pid == s.pid and w.stable_id == s.stable_id then
-      dispatch(hl.dsp.focus, { window = "address:" .. w.address })
-      return true
-    end
-  end
-  error("stream window has closed")
-end
-
-function M.stream_close(request)
-  local s = assert(streams[request.computer], "stream is not assigned")
-  for _, w in ipairs(hl.get_windows()) do
-    if w.address == s.address and w.pid == s.pid and w.stable_id == s.stable_id then
-      dispatch(hl.dsp.window.close, { window = "address:" .. w.address })
-      return true
-    end
-  end
-  return false -- Already closed; the controller still checks its owned process.
-end
-
-function M.stream_local(request)
-  local s = assert(streams[request.computer], "stream is not assigned")
-  local active = hl.get_active_window()
-  if not active or active.address ~= s.address or active.pid ~= s.pid or active.stable_id ~= s.stable_id then
-    return { released = false, reason = "The selected stream is not focused" }
-  end
-  local previous = last_local[s.workspace]
-  local target
-  for _, w in ipairs(hl.get_windows()) do
-    if w.mapped and not w.hidden and w.workspace and selector(w.workspace) == s.workspace
-      and w.class ~= "com.moonlight_stream.Moonlight" then
-      target = target or w
-      if previous and w.address == previous.address and w.pid == previous.pid and w.stable_id == previous.stable_id then
-        target = w
-        break
-      end
-    end
-  end
-  if not target then return { released = false, reason = "Open a local window or use Toggle capture" } end
-  hl.dispatch(hl.dsp.release_input_capture())
-  dispatch(hl.dsp.focus, { window = "address:" .. target.address })
-  return { released = true, focused_local = true }
-end
-
-function M.stream_launch(request)
-  M.stream_check(request)
-  -- exec preserves the PID through the small launcher and into Moonlight,
-  -- so Hyprland's launch rules apply to this process only.
-  local result = hl.dispatch(hl.dsp.exec_cmd(request.command, {
-    workspace = request.workspace .. " silent", no_initial_focus = true,
-    suppress_event = "fullscreen maximize activate activatefocus fullscreenoutput",
-  }))
-  if type(result) == "table" and result.error then error(result.error) end
-  return true
-end
-
-function M.stream_inhibit(request)
-  local s = streams[request.computer]
-  if not s or not s.address then return false end
-  for _, w in ipairs(hl.get_windows()) do
-    if w.address == s.address and w.pid == s.pid and w.stable_id == s.stable_id then
-      dispatch(hl.dsp.window.set_prop, { window = "address:" .. w.address, prop = "idle_inhibit",
-        value = request.enabled and "always" or "none" })
-      return true
-    end
-  end
-  return false
 end
 
 -- A layout that still exists keeps its current definition: the user may have

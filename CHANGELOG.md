@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Remote connections now belong to Remote Desktops. Remove Hypertile's legacy
+  controller, host adapters, display scripts, and remote controls. Scenes and
+  session recovery use ordinary installed apps; pinned swaps remain generic.
+  Upgrade checks preserve unresolved host recovery and user configuration.
+
 - Session recovery: batched automatic checkpoints with durable publication and
   previous generations; named sessions; protected partial restores; supported
   app relaunch; workspace/layout, native window order, pins, sizing, floating

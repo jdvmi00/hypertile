@@ -14,9 +14,17 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: Windows PowerShell display policy and journal
+      # The implementation now belongs to Remote Desktops. Keep the required
+      # native policy check on its immutable, validated extraction revision.
+      - uses: actions/checkout@v4
+        with:
+          repository: jdvmi00/remote-desktops
+          ref: 30d795c83164f812ec70a4374e68926e1cb39d9c
+          path: remote-desktops
+          persist-credentials: false
+      - name: Migrated Windows PowerShell display policy and journal
         shell: powershell
-        run: .\stream\windows\Test.ps1 -PolicyOnly
+        run: .\remote-desktops\remote_desktops\windows\Test.ps1 -PolicyOnly
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -29,7 +37,7 @@ jobs:
       - name: Scripts
         run: shellcheck install.sh uninstall.sh
       - name: Development helper
-        run: python3 test/dev.py
+        run: python3 test/dev.py && python3 test/upgrade.py
       - name: Engine
         run: lua test/harness.lua
       - name: Window navigation
@@ -38,12 +46,8 @@ jobs:
         run: lua test/bridge.lua
       - name: Session recovery
         run: python3 test/session.py && lua test/session.lua
-      - name: Remote streams
-        run: python3 test/stream.py && python3 test/windows_display.py && lua test/stream.lua
       - name: Scenes and content
-        run: python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && node test/content.js
-      - name: Stream quality and reconnect
-        run: python3 test/quality.py && lua test/quality.lua
+        run: python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && lua test/swap.lua && node test/content.js
       - name: Managed layout browsing
         run: python3 test/browse.py && node test/browse.js
       - name: Overlay geometry

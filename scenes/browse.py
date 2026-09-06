@@ -60,9 +60,6 @@ class Browser:
             scene = self.ctl.scenes.records.get(workspace, {})
             if scene.get("phase", "ready") not in ("ready", "partial", "restored", "needs-attention"):
                 raise ValueError("Wait for the scene to finish before browsing layouts")
-            sources = [r for r in self.ctl.records.values() if r["assignment"]["workspace"] == workspace]
-            if any(r["phase"] not in ("watching", "idle", "unresolved", "attention") for r in sources):
-                raise ValueError("Wait for the stream operation to finish before browsing layouts")
             base = {"layout": ws["layout"]}
             spec = snap.get("layouts", {}).get(ws["layout"].removeprefix("lua:"), {}).get("spec")
             if spec:
@@ -92,8 +89,6 @@ class Browser:
     def tick(self):
         for workspace, record in list(self.active.items()):
             ended = record.get("ending") or record["epoch"] != self.epoch or self.clock() >= record["deadline"]
-            sources = [r for r in self.ctl.records.values() if r["assignment"]["workspace"] == workspace]
-            ended = ended or any(r["phase"] == "watching" and not self.ctl.processes.pid(r) for r in sources)
             if ended:
                 self.end(workspace)
 
@@ -105,7 +100,3 @@ class Browser:
             workspace = request.get("workspace") or self.ctl.compositor.snapshot()["workspace"]
             if str(workspace) in self.active:
                 self.end(str(workspace))
-        elif command not in ("status", "quality", "probe", "stop"):
-            # Explicit stream changes and swaps must reconcile the real layout.
-            for workspace in list(self.active):
-                self.end(workspace)

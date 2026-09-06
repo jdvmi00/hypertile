@@ -179,7 +179,10 @@ service during recovery in the same compositor does not relaunch already
 attempted apps. Automatic saving resumes only after all saved windows have
 matched and settled, or after an explicit `resume`.
 
-Workspace [scenes](SCENES.md) are checkpointed as versioned definitions alongside
-stream references. The stream controller restores their content after the local
-workspace returns; it retains disconnect decisions independently of older
-checkpoints. Scene definitions do not include transient compositor window IDs.
+Workspace [scenes](SCENES.md) are checkpointed as versioned definitions. The
+independent scene service places their apps, including on an otherwise empty
+workspace. Moved or closed app assignments are omitted from recovery without
+changing saved scene defaults. Normal app recovery handles moved windows using
+their exact launcher identity. Old remote assignments generate a migration
+message and are never sent to a connection controller. Scene definitions do not
+include transient compositor window IDs.

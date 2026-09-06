@@ -1,4 +1,4 @@
-"""Session integration for independent scenes and preserved legacy stream recovery."""
+"""Session capture and recovery for generic app scenes."""
 import copy
 import json
 import os
@@ -8,25 +8,12 @@ import socket
 
 def capture(desktop):
     root = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "hypertile"
-    path = root / "streams/state.json"
-    try:
-        state = json.loads(path.read_text())
-    except FileNotFoundError:
-        state = {"version": 1, "computers": {}}
-    if state.get("version") != 1:
-        raise ValueError("unsupported stream state version; session capture paused")
     scene_path = root / "scenes/state.json"
-    scene_state = json.loads(scene_path.read_text()) if scene_path.exists() else state
+    scene_state = json.loads(scene_path.read_text()) if scene_path.exists() else {"version": 1}
     if scene_state.get("version") != 1:
         raise ValueError("unsupported scene state version; session capture paused")
     if scene_state.get("browse", {}).get("active"):
         raise ValueError("layout preview is active; retaining the last committed session checkpoint")
-    sources, tokens = [], set()
-    for r in state["computers"].values():
-        if r.get("token"):
-            tokens.add(("HYPERTILE_STREAM_TOKEN=" + r["token"]).encode())
-        if r["desired"]:
-            sources.append({"computer": r["computer"], "profile": r["profile"], **r["assignment"]})
     scene_refs, scene_windows = [], set()
     for workspace, record in scene_state.get("scenes", {}).items():
         if not record.get("document") or record.get("phase") in ("restored", "waiting-session"):
@@ -50,19 +37,9 @@ def capture(desktop):
                 elif candidates:
                     scene_windows.add(candidates[0]["address"])
         scene_refs.append({"workspace": workspace, "document": doc})
-    windows = []
-    for w in desktop["windows"]:
-        managed = bool(w.get("stream")) or w["address"] in scene_windows
-        if tokens and w.get("pid"):
-            try:
-                env = (Path("/proc") / str(w["pid"]) / "environ").read_bytes().split(b"\0")
-                managed = managed or bool(tokens.intersection(env))
-            except OSError:
-                pass
-        if not managed:
-            windows.append(w)
+    windows = [w for w in desktop["windows"] if w["address"] not in scene_windows]
     desktop["windows"] = windows
-    desktop["streams"] = sorted(sources, key=lambda s: s["computer"])
+    desktop.pop("streams", None)
     desktop.pop("scene_content", None)  # Compositor addresses are not scene definitions.
     desktop["scenes"] = scene_refs
     addresses = {w["address"] for w in windows}
@@ -74,7 +51,7 @@ def capture(desktop):
 
 
 def restore(sources, scenes=()):
-    warnings = []
+    warnings = ["Legacy remote assignments were not reopened. Migrate them to installed app sources."] if sources else []
     runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or f"/run/user/{os.getuid()}")
     # Keep source recovery available without coupling generic scenes to it.
     legacy = [r for r in scenes if any(s["type"] == "stream" for s in r["document"]["sources"].values())]
@@ -82,7 +59,6 @@ def restore(sources, scenes=()):
         warnings.append("Legacy stream scenes need migration to installed app sources; their saved definitions were kept.")
     scenes = [r for r in scenes if r not in legacy]
     for entry, payload, label in (
-        ("hypertile-stream", {"command": "session-restore", "sources": sources}, "Stream controller"),
         ("hypertile-scenes", {"command": "session-restore", "scenes": scenes}, "Scene service"),
     ):
         if not payload.get("sources") and not payload.get("scenes"):

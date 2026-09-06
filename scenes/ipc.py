@@ -1,4 +1,4 @@
-"""Private single-writer IPC shared by the independent scene and legacy stream services."""
+"""Private single-writer IPC for the scene service."""
 import fcntl
 import json
 import os
