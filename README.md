@@ -306,16 +306,20 @@ Two layouts ship:
 manifest.json          the Omarchy plugin manifest (kinds: overlay, bar-widget)
 plugin/                the shell plugin: Overlay.qml, Rail.qml (inspector), ZoneItem.qml,
                        Divider.qml, Thumb.qml, Card.qml, Chip.qml, Geometry.js (drawing),
-                       Editor.js (edits); LayoutWidget.qml (bar widget)
+                       Editor.js (edits); ContentPane.qml and Content.js (the Scenes tab);
+                       LayoutWidget.qml (bar widget)
 hypertile.lua          engine: spec -> layout provider (hot-swappable)
 hypertile-bridge.lua   bridge: load/serialize/JSON/save/preview/apply
 hypertile-json.lua     JSON encode/decode (pure Lua)
 hypertile-layouts.lua  loader: requires every ~/.config/hypr/layouts/*.lua
+hypertile-navigation.lua  gap-aware focus and swap for SUPER+arrows and SUPER+SHIFT+arrows
 hypertile-session.lua  compositor adapter: capture and restore window placement
 session/service.py    session watcher, durable snapshots, app launch and matching
+scenes/*.py            scenes service: saved scenes, the app catalog, one-shot placement
 layouts/*.lua          shipped layouts: ultrawide, quad
 bin/hypertile-ctl      CLI over the bridge
 bin/hypertile-session  session service entry point (also via hypertile-ctl session)
+bin/hypertile-scenes   scenes service entry point (also via hypertile-ctl scene)
 install.sh             puts the engine, CLI, layouts, keybinds, and menu entry in place
 uninstall.sh           takes them out again
 probe.lua              live probe (logs everything the API hands a layout)

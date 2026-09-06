@@ -1,6 +1,14 @@
 # Changelog
 
-## Unreleased
+## 1.1.0 (2026-09-06)
+
+- Scenes: save a workspace's layout together with what each zone holds: an
+  installed app, one open window, local windows in fill order, or Empty.
+  Applying a scene launches or reuses each app and places it once; you can
+  then move or close it freely. Scenes live in `~/.config/hypertile/scenes/`
+  and are managed from the overlay's Scenes tab or `hypertile-ctl scene`; an
+  independent `hypertile-scenes` service owns placement. See
+  [scenes and content](docs/SCENES.md).
 
 - Scenes tab redesign. The header names the workspace until a scene is
   applied, then the scene with how many apps are placed. Saved scenes are
@@ -14,10 +22,15 @@
   zones are listed by position ("Top left"). The catalog lists each app's
   icon and each saved scene's sources, and skips placeholder window classes.
 
-- Remote connections now belong to Remote Desktops. Remove Hypertile's legacy
-  controller, host adapters, display scripts, and remote controls. Scenes and
-  session recovery use ordinary installed apps; pinned swaps remain generic.
-  Upgrade checks preserve unresolved host recovery and user configuration.
+- Remote desktops: each computer's launcher from
+  [Remote Desktops](https://github.com/jdvmi00/remote-desktops) is an ordinary
+  app for Scenes and session recovery. Hypertile does not manage connections
+  or host displays. Upgrade checks preserve unresolved host recovery and user
+  configuration.
+
+- `SUPER+SHIFT+arrows` move a window into an empty slot of the layout as well
+  as swapping with a neighbour, so a lone app can travel around a sparse
+  layout. Explicit moves reveal collapsed slots until the layout is reset.
 
 - Session recovery: batched automatic checkpoints with durable publication and
   previous generations; named sessions; protected partial restores; supported
