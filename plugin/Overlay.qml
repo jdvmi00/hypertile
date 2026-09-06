@@ -49,10 +49,8 @@ Item {
   property var windows: []         // hypertile-ctl windows --json .windows
   property string defaultLayout: ""
   property bool contentMode: false      // the rail's Scenes tab: zones are selected, not browsed
-  property bool performanceOpen: false
-  property bool contentMore: false      // the selected stream's extra controls
   property var contentCatalog: null     // hypertile-ctl scene catalog --json
-  property bool catalogFailed: false    // no stream controller: scenes are unavailable, browsing is not
+  property bool catalogFailed: false    // no scene service: scenes are unavailable, browsing is not
   property int catalogFailures: 0
   property string catalogError: ""
   property bool namingScene: false
@@ -60,8 +58,6 @@ Item {
   property bool switchConfirmed: false
   readonly property bool managedContent: {
     if (!contentCatalog) return false
-    var streams = contentCatalog.streams || []
-    for (var i = 0; i < streams.length; i++) if (streams[i].desired && streams[i].assignment.workspace === workspaceId) return true
     return contentCatalog.current && ["none", "restored"].indexOf(contentCatalog.current.phase) === -1
   }
   property int viewIndex: 0
@@ -155,7 +151,7 @@ Item {
     var seen = {}, out = []
     for (var i = 0; i < windows.length; i++) {
       var w = windows[i]
-      if (String(w.workspace) === workspaceId && w.class && w.class !== "com.moonlight_stream.Moonlight" && !seen[w.class]) {
+      if (String(w.workspace) === workspaceId && w.class && !seen[w.class]) {
         seen[w.class] = true; out.push(w.class)
       }
     }
@@ -196,7 +192,7 @@ Item {
   //
   // The Scenes tab: what each zone of the workspace's layout holds (local
   // windows, a remote desktop, one app, or nothing) and the saved scenes.
-  // Assignments and scenes are the stream controller's; the overlay asks
+  // Assignments and scenes are the scene service's; the overlay asks
   // through hypertile-ctl scene and shows the catalog it re-reads while open.
 
   function contentFor(zone) { return Content.source(contentCatalog, workspaceId, zone, viewedIsActive) }
@@ -210,8 +206,6 @@ Item {
     pendingSwitch = null
     confirmingDelete = false
     choosingNew = false
-    contentMore = false
-    performanceOpen = false
     errorText = ""
     browseTimer.stop()
     revertBrowse()
@@ -260,12 +254,10 @@ Item {
 
   function deleteScene(name) { sceneAction("remove", name) }
 
-  function assignContent(type, computer, profile, app) {
+  function assignContent(type, app) {
     if (!selected || !viewedIsActive) { errorText = "Select a zone in the current layout"; return }
-    var what = type === "empty" ? "Empty" : app ? app : computer ? computer + " · " + profile : "Local windows"
+    var what = type === "empty" ? "Empty" : app ? app : "Local windows"
     var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", type, "--json"]
-    if (computer) args.push("--computer", computer)
-    if (profile) args.push("--profile", profile)
     if (app) args.push("--app-class", app)
     runCtl(args, "Putting " + what + " in " + selected + "…", "")
   }
@@ -278,22 +270,6 @@ Item {
     runCtl(args, "Opening " + app.name + " in " + selected + "…", "")
   }
 
-  // Focus-taking actions close the overlay (it holds the keyboard).
-  function streamAction(action, computer, closeOverlay) {
-    if (closeOverlay) {
-      Quickshell.execDetached([ctl, "stream", action, computer])
-      dismiss()
-      return
-    }
-    var status = action === "disconnect" ? "Disconnecting " + computer + "…"
-      : action === "reconnect" ? "Reconnecting " + computer + "…"
-      : action === "retry" ? "Retrying " + computer + "…"
-      : action === "restore" ? "Restoring the display of " + computer + "…"
-      : action === "measure" ? "Measuring " + computer + " in 30 s…"
-      : "Updating " + computer + "…"
-    runCtl(["stream", action, computer, "--json"], status, "")
-  }
-
   function selectContentNeighbor(dir) {
     if (!root.activeSpec) return
     var names = Editor.leafNames(root.activeSpec)
@@ -301,10 +277,6 @@ Item {
     if (root.selected === "") { root.selected = names[0]; return }
     var next = Editor.neighbor(root.activeSpec, root.area, root.selected, dir)
     if (next !== "") root.selected = next
-  }
-
-  function rateReadability(computer, value) {
-    runCtl(["stream", "readability", computer, value, "--json"], "Saving assessment…", "Readability recorded for this profile and view size")
   }
 
   // ------------------------------------------------------------ preferences
@@ -599,15 +571,15 @@ Item {
     runCtl(["apply", root.viewed.name, "--workspace", workspace, "--quiet"], "Using " + root.viewed.name + " on workspace " + workspace + "…", "Workspace " + workspace + " uses " + root.viewed.name)
   }
 
-  // Whether a workspace has content assigned to zones (a scene, a stream).
+  // Whether a workspace has content assigned to zones (a scene).
   function contentWorkspace(workspace) {
     if (!root.contentCatalog) return false
     if ((root.contentCatalog.active_workspaces || []).indexOf(workspace) !== -1) return true
-    return (root.contentCatalog.streams || []).some(function(s) { return s.desired && s.assignment.workspace === workspace })
+    return false
   }
 
   // Using another layout on a workspace with assigned content replaces the
-  // content (its streams disconnect), so it is asked about first.
+  // content (apps stay open), so it is asked about first.
   function askSwitch(workspaces, close) {
     root.applyQueue = []
     root.confirmingDelete = false
@@ -619,13 +591,8 @@ Item {
     var p = root.pendingSwitch
     if (!p) return ""
     var managed = p.workspaces.filter(function(w) { return contentWorkspace(w) })
-    var names = []
-    var streams = (root.contentCatalog && root.contentCatalog.streams) || []
-    for (var i = 0; i < streams.length; i++)
-      if (streams[i].desired && managed.indexOf(streams[i].assignment.workspace) !== -1) names.push(streams[i].computer)
     var s = managed.length === 1 ? "Workspace " + managed[0] + " has content assigned to its zones. " : "Workspaces " + managed.join(", ") + " have content assigned to their zones. "
-    s += names.length > 0 ? names.join(", ") + (names.length === 1 ? " disconnects" : " disconnect") + " and every zone goes back to local windows; local apps stay open."
-      : "Every zone goes back to local windows; local apps stay open."
+    s += "Every zone goes back to local windows; apps stay open."
     return s + " Save the arrangement as a scene first to come back to it."
   }
 
@@ -1145,9 +1112,9 @@ Item {
   }
 
   // The scene catalog: the workspace's scene, the saved scenes, the
-  // computers and the streams. Re-read every couple of seconds while open,
+  // installed apps. Re-read every couple of seconds while open,
   // so the states in the Scenes tab follow the controller. Without the
-  // stream controller (an older install) there are no scenes; the Scenes
+  // scene service (an older install) there are no scenes; the Scenes
   // tab says so, and nothing else is affected.
   Process {
     id: catalogProc
@@ -1574,10 +1541,8 @@ Item {
     function peek(on: bool): void { root.peeking = on }
     function refresh(): void { root.refresh() }
     function content(on: bool): void { root.showContent(on) }
-    function more(on: bool): void { root.contentMore = on }
-    function performance(on: bool): void { root.showContent(true); root.contentMore = on; root.performanceOpen = on }
-    function assign(kind: string, computer: string, profile: string): void { root.assignContent(kind, computer, profile) }
-    function assignApp(cls: string): void { root.assignContent("local", "", "", cls) }
+    function assign(kind: string): void { root.assignContent(kind) }
+    function assignApp(cls: string): void { root.assignContent("local", cls) }
     function scene(action: string, name: string): void { root.sceneAction(action, name) }
     function saveScene(name: string): void { root.saveScene(name) }
     function saveSceneAs(): void { root.startSceneSave() }
@@ -1631,7 +1596,7 @@ Item {
         undo: root.undoStack.length, status: root.statusText, error: root.errorText,
         workspaces: root.workspaces.length, windows: root.windows.length, defaultLayout: root.defaultLayout,
         committed: root.committedLayout, live: root.liveLayout, dockLeft: root.dockLeft, showKeys: root.showKeys,
-        area: root.area, contentMode: root.contentMode, performanceOpen: root.performanceOpen, contentMore: root.contentMore,
+        area: root.area, contentMode: root.contentMode,
         namingScene: root.namingScene, pendingSwitch: root.pendingSwitch, catalogFailed: root.catalogFailed,
         scene: root.contentCatalog ? root.contentCatalog.current : null })
     }

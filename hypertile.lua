@@ -355,7 +355,7 @@ function M.assign(compiled, targets, state)
           if not reserved[name] then fallback = name; break end
         end
       end
-      assert(fallback, "stream assignments must leave a local overflow zone")
+      assert(fallback, "empty zones must leave a window overflow zone")
       take(fallback, i)
     end
   end
@@ -493,7 +493,6 @@ function M.recalculate(compiled, ctx, state)
   local win = targets[1].window
   local workspace = win and win.workspace and tostring(win.workspace.id)
   local reserved = {}
-  for name, owner in pairs(state and state.reservations and state.reservations[workspace] or {}) do reserved[name] = owner end
   for name in pairs(state and state.scene_empty and state.scene_empty[workspace] or {}) do reserved[name] = true end
   state = setmetatable({ reserved = reserved }, { __index = state or {} })
   local buckets = M.assign(compiled, targets, state)

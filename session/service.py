@@ -19,7 +19,7 @@ import subprocess
 import sys
 import tempfile
 import time
-import streams
+import scene_recovery
 
 
 def atomic_json(path, value):
@@ -407,7 +407,7 @@ class Recovery:
         self.deadline = now + max(30, len(self.desktop["windows"]) * 3 + 10)
         self.settled = None
         compositor.call("prepare", self.desktop)
-        self.warnings.extend(streams.restore(self.desktop.get("streams", []), self.desktop.get("scenes", [])))
+        self.warnings.extend(scene_recovery.restore(self.desktop.get("streams", []), self.desktop.get("scenes", [])))
 
     def progress(self):
         return {"matches": self.matches, "launched": sorted(self.launched)}
@@ -532,7 +532,7 @@ class Service:
 
     def record(self):
         return {"version": 1, "instance": self.compositor.instance, "saved_at": time.time(),
-                "desktop": self.launchers.capture(streams.capture(self.compositor.snapshot()))}
+                "desktop": self.launchers.capture(scene_recovery.capture(self.compositor.snapshot()))}
 
     def status(self):
         value = {"instance": self.compositor.instance, "mode": self.mode, "error": self.error}

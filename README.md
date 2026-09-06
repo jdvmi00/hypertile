@@ -377,8 +377,10 @@ not own remote connections or host display settings.
 Use the overlay’s **Scenes** tab or `hypertile-ctl scene` to assign apps, local
 windows, or Empty, then save the arrangement. See [scenes and content](docs/SCENES.md)
 for setup, migration from legacy stream sources, and recovery behavior.
-The [legacy stream tools](docs/STREAMS.md) remain available to restore existing
-host journals while migrating to Remote Desktops.
+Remote connections and host recovery now belong to
+[Remote Desktops](https://github.com/jdvmi00/remote-desktops). Upgrade checks
+require legacy connections to be disconnected and restored before removing
+their old runtime files; saved configuration and journals are preserved.
 
 ## License
 

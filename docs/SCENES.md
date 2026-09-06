@@ -146,17 +146,16 @@ Existing `type: "stream"` scene files and legacy host recovery journals are
 preserved. They are not automatically converted: install each computer's
 Remote Desktops launcher, disconnect/restore legacy Hypertile streams, and
 replace those sources with `type: "app"` entries. Legacy stream scenes appear
-invalid until migrated. A live legacy stream on a workspace blocks new scene
-changes there. Runtime installation also requires disconnecting/restoring legacy
-sources first, so replacing the old service cannot orphan their recovery.
+invalid until migrated. Upgrade and uninstall refuse to remove recovery tools
+while any legacy connection is desired or has a pending host journal, including
+when its controller is stopped. Finish recovery with the previously installed
+version before upgrading. Configuration and state files are kept.
 
-The old `hypertile-stream` CLI remains available for legacy connection recovery;
-it is no longer auto-started by the layout loader and its daemon does not apply
-old scenes. `hypertile-stream scene ...` forwards to the independent service.
-Legacy stream profile changes require disconnecting and reconnecting with
-`--profile`. See [legacy stream recovery](STREAMS.md) for preserved journals and
-restoration tools. The old stream-specific overlay controls are not offered by
-the new app catalog; connection controls belong to Remote Desktops.
+Hypertile no longer installs `hypertile-stream`, host adapters, Windows display
+scripts, connection controls, or quality measurements. The standalone Scenes
+service lives under `scenes/`; it only manages layouts and app placement.
+Connection, input capture, audio, and host display controls belong to
+[Remote Desktops](https://github.com/jdvmi00/remote-desktops).
 
 ## Validation
 
@@ -171,4 +170,9 @@ during the check and resumed afterward. The installed plugin was not replaced.
 Automated tests cover exact/ambiguous matches, interrupted launches and placement
 replies, app-only session recovery, cancelled/superseded operations, XDG launcher
 precedence, socket/lock isolation, and preservation of manual moves/closes.
-The Windows laptop has not been validated live through this integration.
+Both MacBook and the Windows work laptop were subsequently validated live with
+Remote Desktops launchers and the saved two-app scene. Workspace movement,
+launcher reuse, explicit scene reapplication, and Windows reconnection passed;
+the owner confirmed video, mouse, and keyboard on both computers. These checks
+preceded removal of the legacy code; removal is covered by the generic app,
+scene, session, swap, preview, and upgrade regression suites.

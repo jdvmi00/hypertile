@@ -8,7 +8,7 @@ import "Editor.js" as Editor
 // the workspace's layout holds, and the selected zone with the choices
 // for it. The header above it (the scene's name and state, Save and
 // Restore) is the rail's own. Every change goes through hypertile-ctl
-// scene/stream; the catalog is re-read every couple of seconds while the
+// scene; the catalog is re-read every couple of seconds while the
 // overlay is open, so the states here follow the controller.
 Column {
   id: pane
@@ -16,7 +16,6 @@ Column {
   readonly property var catalog: overlay.contentCatalog || ({})
   readonly property var scene: catalog.current || ({})
   readonly property var scenes: catalog.scenes || []
-  readonly property var computers: catalog.computers || []
   readonly property bool ready: overlay.contentCatalog !== null && !overlay.catalogFailed
   readonly property bool usable: ready && overlay.viewedIsActive
   // The zones in fill order, as the numerals on the screen read them.
@@ -32,11 +31,6 @@ Column {
   }
   readonly property var sel: overlay.selectedZone
   readonly property var source: overlay.contentFor(overlay.selected)
-  readonly property var runtime: (source && source.runtime) ? source.runtime : ({})
-  readonly property var controls: Content.streamControls(runtime)
-  readonly property bool isStream: source !== null && source.type === "stream"
-  readonly property var quality: runtime.quality || ({})
-  readonly property var measurement: (quality.current || {}).measurement || ({})
   readonly property string appliedScene: (scene.document && scene.document.name && ["none", "restored"].indexOf(scene.phase) === -1) ? scene.document.name : ""
   readonly property color fg: overlay.foreground
   readonly property color accent: overlay.accent
@@ -49,7 +43,7 @@ Column {
   // Another zone: back to the short view of it.
   Connections {
     target: pane.overlay
-    function onSelectedChanged() { pane.details = false; pane.overlay.contentMore = false; pane.overlay.performanceOpen = false }
+    function onSelectedChanged() { pane.details = false }
   }
 
   // ---------------------------------------------------------- pieces
@@ -275,7 +269,7 @@ Column {
 
   Muted {
     visible: pane.overlay.catalogFailed
-    text: "Scenes need Hypertile's stream controller, which is not installed. Run install.sh from the plugin directory, then open the overlay again."
+    text: "Scenes need Hypertile's scene service, which is not installed. Run install.sh from the plugin directory, then open the overlay again."
   }
   Muted {
     visible: !pane.overlay.catalogFailed && pane.overlay.contentCatalog === null
@@ -425,96 +419,7 @@ Column {
         width: pane.width
         spacing: Style.spacing.xxs
         Body { text: Content.label(pane.source); font.bold: true }
-        Muted { text: Content.detail(pane.source); urgent: Content.state(pane.source).urgent && !pane.isStream }
-        Muted { visible: pane.isStream && !!pane.source.error; text: pane.isStream ? (pane.source.error || "") : ""; urgent: true }
-      }
-
-      // ---- a stream: what to do with it
-      Flow {
-        visible: pane.isStream
-        width: pane.width
-        spacing: Style.spacing.sm
-        Action { text: "Focus"; tooltipText: "Focus the remote desktop and close"; enabled: !pane.overlay.busy && pane.controls.focus; onClicked: pane.overlay.streamAction("focus", pane.source.computer, true) }
-        Action { text: "Disconnect"; visible: pane.controls.disconnect; tooltipText: "Close the view; the zone goes back to local windows"; onClicked: pane.overlay.streamAction("disconnect", pane.source.computer) }
-        Action {
-          text: "Reconnect"
-          tooltipText: "Open the remote desktop in this zone"
-          enabled: !pane.overlay.busy && pane.controls.reconnect !== ""
-          onClicked: {
-            if (pane.controls.reconnect === "connect")
-              pane.overlay.assignContent("stream", pane.source.computer, pane.source.profile)
-            else pane.overlay.streamAction("reconnect", pane.source.computer)
-          }
-        }
-        Action { text: "Retry"; visible: pane.controls.retry; onClicked: pane.overlay.streamAction("retry", pane.source.computer) }
-        Action { text: "Restore display"; visible: pane.controls.restore; tooltipText: "Put the host's display settings back"; onClicked: pane.overlay.streamAction("restore", pane.source.computer) }
-      }
-
-      Disclosure {
-        visible: pane.isStream
-        text: "MORE CONTROLS"
-        open: pane.overlay.contentMore
-        onToggled: pane.overlay.contentMore = !pane.overlay.contentMore
-      }
-
-      Column {
-        visible: pane.isStream && pane.overlay.contentMore
-        width: pane.width
-        spacing: Style.spacing.md
-
-        Flow {
-          width: pane.width
-          spacing: Style.spacing.sm
-          Action { text: "Toggle capture"; tooltipText: "Ctrl+Alt+Shift+Z in the stream"; enabled: !pane.overlay.busy && !!pane.runtime.window; onClicked: pane.overlay.streamAction("input-release", pane.source.computer, true) }
-          Action { text: "Type clipboard"; tooltipText: "Type your local clipboard into the app focused on this computer"; enabled: !pane.overlay.busy && !!pane.runtime.window && (pane.runtime.clipboard || {}).state !== "unsupported"; onClicked: pane.overlay.streamAction("clipboard", pane.source.computer, true) }
-          Action { text: "Statistics"; tooltipText: "Moonlight's on-screen statistics"; enabled: !pane.overlay.busy && !!pane.runtime.window; onClicked: pane.overlay.streamAction("stats", pane.source.computer, true) }
-          Action { text: "Focus a local window"; tooltipText: "Leave the remote desktop for a local window on this workspace"; enabled: !pane.overlay.busy && !!pane.runtime.window; onClicked: pane.overlay.streamAction("local", pane.source.computer, true) }
-        }
-        Muted {
-          text: (pane.runtime.requested || {}).system_keys === "always"
-            ? "Command and Windows keys go to this computer while captured; toggle capture to use local shortcuts."
-            : "Command and Windows keys stay local; a profile with system keys sends them to this computer."
-        }
-        Muted { visible: !!(pane.runtime.clipboard || {}).reason; text: (pane.runtime.clipboard || {}).reason || "" }
-
-        Flow {
-          width: pane.width
-          spacing: Style.spacing.sm
-          Action { text: "Performance"; selected: pane.overlay.performanceOpen; onClicked: pane.overlay.performanceOpen = !pane.overlay.performanceOpen }
-          Action { text: "Raw status"; selected: pane.details; onClicked: pane.details = !pane.details }
-        }
-
-        Column {
-          visible: pane.overlay.performanceOpen
-          width: pane.width
-          spacing: Style.spacing.sm
-          Muted { text: Content.performance(pane.quality) }
-          Action {
-            text: pane.measurement.status === "recording" ? "Measuring; reconnects in 30 s" : "Measure in 30 s"
-            tooltipText: "Reconnects the view after 30 seconds to read Moonlight's decoder summary; host apps stay open"
-            enabled: !pane.overlay.busy && !!pane.runtime.window && !!(pane.quality.current || {}).quality_parser && pane.measurement.status !== "recording"
-            onClicked: pane.overlay.streamAction("measure", pane.source.computer)
-          }
-          Muted { visible: !!pane.quality.collection_reason; text: pane.quality.collection_reason || "" }
-          Label { text: "How does text look at this size?" }
-          Flow {
-            width: pane.width
-            spacing: Style.spacing.sm
-            Repeater {
-              model: [{ label: "Readable", value: "readable" }, { label: "Too small", value: "too-small" }, { label: "Blurry", value: "blurry" }]
-              Action {
-                required property var modelData
-                text: modelData.label
-                selected: pane.quality.readability === modelData.value
-                enabled: !pane.overlay.busy && !!pane.runtime.window
-                onClicked: pane.overlay.rateReadability(pane.source.computer, modelData.value)
-              }
-            }
-          }
-          Muted { text: "Timing measures when the window is ready, not its first frame; end-to-end latency is not available." }
-        }
-
-        Muted { visible: pane.details; text: JSON.stringify(pane.runtime, null, 2) }
+        Muted { text: Content.detail(pane.source); urgent: Content.state(pane.source).urgent }
       }
 
       Muted { visible: pane.sel !== null && pane.sel.spacer === true; text: "A spacer never holds windows." }
@@ -548,26 +453,6 @@ Column {
         }
       }
 
-      Repeater {
-        model: pane.computers
-        Column {
-          id: computer
-          required property var modelData
-          width: pane.width
-          spacing: Style.spacing.xxs
-          Label { text: computer.modelData.computer; topPadding: Style.spacing.xs; bottomPadding: Style.spacing.xxs }
-          Repeater {
-            model: computer.modelData.profiles
-            ListRow {
-              required property var modelData
-              text: modelData.name
-              trait: Content.traits(modelData)
-              current: pane.isStream && pane.source.computer === computer.modelData.computer && pane.source.profile === modelData.name
-              onClicked: pane.overlay.assignContent("stream", computer.modelData.computer, modelData.name)
-            }
-          }
-        }
-      }
       Column {
         width: pane.width
         spacing: Style.spacing.xxs
@@ -600,7 +485,7 @@ Column {
             text: modelData
             trait: "one window"
             current: pane.source !== null && pane.source.type === "local" && pane.source.app_class === modelData
-            onClicked: pane.overlay.assignContent("local", "", "", modelData)
+            onClicked: pane.overlay.assignContent("local", modelData)
           }
         }
       }

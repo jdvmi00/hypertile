@@ -15,6 +15,8 @@ import tempfile
 import time
 
 ROOT = Path(__file__).resolve().parent
+sys.path.insert(0, str(ROOT / "session"))
+from upgrade import check_legacy, obsolete, cleanup
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
 DATA = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share")
 STATE = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "hypertile"
@@ -56,9 +58,8 @@ def groups():
     return {
         "lua": sorted(ROOT.glob("hypertile*.lua")),
         "cli": [ROOT / "bin/hypertile-ctl"],
-        "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "bin").glob("hypertile-stream")), *sorted((ROOT / "bin").glob("hypertile-scenes")),
-                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "stream").glob("*.py")),
-                    *sorted((ROOT / "stream/windows").glob("*.ps1")), *sorted((ROOT / "stream/windows").glob("*.cs"))],
+        "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "bin").glob("hypertile-scenes")),
+                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "scenes").glob("*.py"))],
         "shell": [ROOT / "manifest.json", *sorted(p for p in (ROOT / "plugin").rglob("*") if p.is_file())],
     }
 
@@ -73,7 +74,7 @@ def destination(path):
     relative = path.relative_to(ROOT)
     if relative.parts[0] == "bin":
         return BIN / path.name
-    if relative.parts[0] in ("session", "stream"):
+    if relative.parts[0] in ("session", "scenes"):
         return DATA / "hypertile" / relative
     return CONFIG / "hypr" / path.name
 
@@ -94,8 +95,7 @@ def validate(sources):
     lua = sources["lua"] + sources["cli"] + sorted((ROOT / "layouts").glob("*.lua"))
     run("lua", "-", *lua, input="for _, path in ipairs(arg) do assert(loadfile(path)) end\n")
     for path in sources["session"] + [ROOT / "dev"]:
-        if path.suffix not in (".ps1", ".cs"):
-            compile(path.read_bytes(), str(path), "exec")
+        compile(path.read_bytes(), str(path), "exec")
     run("omarchy", "plugin", "validate", ROOT)
     qmlformat = shutil.which("qmlformat") or "/usr/lib/qt6/bin/qmlformat"
     if Path(qmlformat).is_file():
@@ -182,7 +182,7 @@ def stopped_session():
                 run(BIN / "hypertile-scenes", "stop", timeout=10)
                 wait_for(scene_available, "scene service to stop")
         stream_lock = None
-        if (BIN / "hypertile-stream").exists():
+        if (BIN / "hypertile-stream").exists() or (STATE / "streams/state.json").exists():
             path = STATE / "streams/writer.lock"
             path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             stream_lock = stack.enter_context(path.open("a"))
@@ -202,6 +202,7 @@ def stopped_session():
                     raise RuntimeError("disconnect/restore legacy Hypertile streams before applying runtime changes")
                 run(BIN / "hypertile-stream", "stop", timeout=55)
                 wait_for(stream_available, "stream controller to stop")
+        check_legacy(STATE)
         path = STATE / "sessions/writer.lock"
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         with path.open("a") as lock:
@@ -298,6 +299,13 @@ def apply(force):
                             saved.parent.mkdir(parents=True, exist_ok=True)
                             shutil.copy2(target, saved)
                         atomic_write(target, content, 0o755 if path.relative_to(ROOT).parts[0] == "bin" else 0o644)
+                if "session" in changed:
+                    for target in obsolete(BIN, DATA):
+                        if target.exists():
+                            saved = backup / "retired" / (Path("bin") / target.name if target.parent == BIN else target.relative_to(DATA))
+                            saved.parent.mkdir(parents=True, exist_ok=True)
+                            shutil.copy2(target, saved)
+                    cleanup(BIN, DATA)
                 if "lua" in changed:
                     reload_lua()
             finally:

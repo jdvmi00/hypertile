@@ -18,7 +18,7 @@ from apps import DesktopApps
 from scene_service import SceneController
 from service import Launchers, match_windows
 from ipc import daemon, request
-import streams
+import scene_recovery
 
 
 class Desktop(DesktopApps):
@@ -113,7 +113,7 @@ class AppTests(unittest.TestCase):
         self.assertEqual(source["app_title"], "MacBook - Moonlight")
         self.assertEqual(source["app_class"], "com.moonlight_stream.Moonlight")
         self.assertEqual(self.command("catalog")["apps"][0]["name"], "MacBook")
-        self.assertEqual(self.command("catalog")["computers"], [])
+        self.assertNotIn("computers", self.command("catalog"))
         self.assertFalse(self.desktop.launched)
 
     def test_standalone_service_does_not_take_stream_lock_or_read_computers(self):
@@ -123,7 +123,7 @@ class AppTests(unittest.TestCase):
         with (legacy / "writer.lock").open("a") as lock:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             ctl = self.controller()
-            self.assertFalse(ctl.records)
+            self.assertFalse(ctl.scenes.records)
             ctl.tick()
         self.assertEqual((legacy / "state.json").read_text(), "not a scene journal")
 
@@ -223,11 +223,11 @@ class AppTests(unittest.TestCase):
     def test_session_checkpoint_uses_one_launcher_and_preserves_manual_departure(self):
         window = self.window()
         self.start()
-        captured = streams.capture(self.comp.snapshot())
+        captured = scene_recovery.capture(self.comp.snapshot())
         self.assertNotIn("macbook", [w["address"] for w in captured["windows"]])
         self.assertEqual(captured["scenes"][0]["document"]["sources"]["z-right"]["desktop_id"], self.desktop_file.name)
         window.update(workspace="2", pin=None)
-        captured = streams.capture(self.comp.snapshot())
+        captured = scene_recovery.capture(self.comp.snapshot())
         self.assertIn("macbook", [w["address"] for w in captured["windows"]])
         self.assertEqual(captured["scenes"][0]["document"]["sources"], {})
         recipe = Launchers({}).recipe(window)
@@ -245,7 +245,7 @@ class AppTests(unittest.TestCase):
         self.ctl.state["browse"]["active"]["1"] = {"token": "preview"}
         self.ctl.persist()
         with self.assertRaisesRegex(ValueError, "layout preview"):
-            streams.capture(self.comp.snapshot())
+            scene_recovery.capture(self.comp.snapshot())
 
     def test_missing_empty_workspace_can_return_with_the_app(self):
         self.start()
@@ -288,7 +288,7 @@ class AppTests(unittest.TestCase):
         self.window()
         self.start()
         self.window(address="extra")
-        captured = streams.capture(self.comp.snapshot())
+        captured = scene_recovery.capture(self.comp.snapshot())
         self.assertEqual([w["address"] for w in captured["windows"]], ["extra"])
         self.assertIn("z-right", captured["scenes"][0]["document"]["sources"])
 
@@ -360,12 +360,6 @@ class AppTests(unittest.TestCase):
         self.assertEqual(launch.call_args.args[0], ["gio", "launch", str(self.desktop_file)])
         self.assertNotIn("shell", launch.call_args.kwargs)
 
-    def test_legacy_stream_workspace_is_rejected_before_any_write(self):
-        self.save()
-        self.comp.desktop["streams"] = [{"workspace": "1"}]
-        with self.assertRaisesRegex(ValueError, "Disconnect legacy"):
-            self.command("apply", name="work")
-        self.assertFalse(self.ctl.scenes.records)
 
 
 if __name__ == "__main__":

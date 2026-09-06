@@ -151,7 +151,7 @@ class AppPlacement:
                 continue
             state = states.setdefault(key, {"status": "pending"})
             if state["status"] in ("pending", "waiting-window"):
-                found = [w for w in snap["windows"] if matches(w, source) and not w.get("stream")]
+                found = [w for w in snap["windows"] if matches(w, source)]
                 if len(found) > 1:
                     state.update(status="needs-attention", error="More than one matching window is open; close extras or use an exact title")
                 elif found:

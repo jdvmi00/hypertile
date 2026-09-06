@@ -189,7 +189,7 @@ Item {
         foreground: zone.fg
         fontFamily: zone.overlay.fontFamily
         fontSize: zone.overlay.uiFontSmall
-        strong: zone.source !== null && zone.source.type === "stream"
+        strong: zone.source !== null && zone.source.type === "app"
         anchors.verticalCenter: parent.verticalCenter
       }
     }
