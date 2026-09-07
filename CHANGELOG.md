@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.1.1 (2026-09-07)
+
+- Remove repository agent instructions from the installable plugin tree in
+  response to marketplace review. Maintainer instructions are kept outside
+  the plugin checkout. Runtime behavior is unchanged.
+
 ## 1.1.0 (2026-09-06)
 
 - Scenes: save a workspace's layout together with what each zone holds: an
