@@ -54,6 +54,8 @@ jobs:
         run: node test/geometry.js
       - name: Overlay editor
         run: node test/editor.js
+      - name: Installable tree excludes agent instructions
+        run: test -z "$(git ls-files | grep -Ei '(^|/)(AGENTS|CLAUDE|GEMINI)\.md$' || true)"
       - name: Plugin manifest
         run: |
           jq -e '.schemaVersion == 1 and (.entryPoints | to_entries | all(.value as $p | ($p | test("^[^/].*") and (contains("..") | not))))' manifest.json

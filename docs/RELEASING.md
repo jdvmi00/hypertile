@@ -3,13 +3,17 @@
 ## Current candidate
 
 - Repository/default branch: `jdvmi00/hypertile`, `main`.
-- Candidate: `25552c2a0ace46d74bff91390811c0ff73671b85`, the `1.1.0` release
-  (the merge of PR #7 into `main`), tagged `v1.1.0`. `main` is locked at that
-  commit.
-- Submission: https://github.com/omacom/omarchy-plugin-marketplace/issues/4893
-  (initial listing, pending). It supersedes the earlier candidate
-  `1ba0f8a30526f2148ff46885d67991862ae90f00` (manifest 1.0.1, marker tag
-  `marketplace-1ba0f8a`); leave that tag and the older `v1.0.1` tag alone.
+- Release: `1.1.1`, tagged `v1.1.1` after promotion. The tag and the
+  maintainer notes on the submission record the exact promoted commit;
+  do not add a commit to `main` merely to record its own SHA.
+- Submission: https://github.com/omacom/omarchy-plugin-marketplace/issues/5181
+  (initial listing, pending). Issue #4893 is closed and superseded.
+- Previous candidate: `25552c2a0ace46d74bff91390811c0ff73671b85` (`v1.1.0`).
+  Version 1.1.1 removes `AGENTS.md` from the installable tree. Preserve all
+  published tags, including `v1.1.0`, `v1.0.1`, and `marketplace-1ba0f8a`.
+- Keep agent instruction files outside the repository and all installed
+  plugin contents. The complete repository tree is installed by the plugin
+  manager; an ignore rule alone does not remove tracked or local files.
 
 `main` is locked, including for administrators. It remains GitHub's default
 branch because marketplace validation and upstream installation resolve it.
@@ -33,7 +37,7 @@ passing development PR from changing the candidate accidentally.
 
 ## Finish the current submission
 
-1. Verify remote `main` still equals the candidate above and both its
+1. Resolve the release tag to its full SHA, verify remote `main` matches, and confirm both its
    checks passed.
 2. Update the existing submission's maintainer notes to describe this exact
    tree, including session recovery, background service, application launch,
@@ -71,7 +75,7 @@ instruction before replacing this specifically selected SHA.
 5. For an already listed plugin, use the marketplace's Plugin verification
    form, action **Verify and publish a newer upstream commit**, plugin ID
    `jmartin.hypertile`, repository root URL, and full current `main` SHA.
-   For an initial listing still pending, update #4893 instead.
+   For an initial listing still pending, update #5181 instead.
 6. Wait for fresh compatibility and baseline reports, then maintainer approval
    and successful publication, all covering that same SHA. Keep `main` frozen
    throughout; continue development elsewhere.
