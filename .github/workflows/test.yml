@@ -41,7 +41,7 @@ jobs:
       - name: Installer and uninstaller
         run: python3 test/install.py
       - name: Engine
-        run: lua test/harness.lua
+        run: lua test/harness.lua && lua test/loader.lua
       - name: Window navigation
         run: lua test/navigation.lua
       - name: Bridge and CLI

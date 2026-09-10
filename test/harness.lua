@@ -471,6 +471,22 @@ do
   rejects({ columns = { { name = "a" } }, fill = { "b" } }, "unknown slot", "fill with unknown slot rejected")
   rejects({ columns = { { name = "a" } }, fill = {} }, "fill must name", "an empty fill list is rejected")
   rejects({ columns = { { name = "a" } }, cycle = {} }, "cycle must name", "an empty cycle list is rejected")
+  for _, field in ipairs({ "fill", "cycle" }) do
+    for _, bad in ipairs({ "a", false, 1, { [2] = "a" }, { "a", extra = "a" }, { true } }) do
+      rejects({ name = "a", [field] = bad }, field .. " must be an array", field .. " rejects malformed arrays")
+    end
+  end
+  for _, field in ipairs({ "class", "title" }) do
+    for _, pattern in ipairs({ "C++ [IDE", "abc%", "abc%f", "abc%b(", "abc(", "abc)", "abc%1", "(abc%1)" }) do
+      rejects({ name = "a", rules = { { slot = "a", [field] = pattern } } },
+        "invalid rule " .. field .. " pattern", field .. " rejects " .. pattern)
+    end
+    rejects({ name = "a", rules = { { slot = "a", [field] = 1 } } }, "must be a Lua pattern string", "non-string rule rejected")
+  end
+  for _, pattern in ipairs({ "^C%+%+ %[IDE%]$", "%f[%a]abc", "%b()", "(abc)%1", "[]a]+", "[^]a]+", "()abc" }) do
+    local ok, err = pcall(hypertile.compile, { name = "a", rules = { { slot = "a", class = pattern } } })
+    check(ok, "valid pattern accepted: " .. pattern .. " " .. tostring(err))
+  end
   rejects({ columns = { { name = "a", w = 0 }, { name = "b" } } }, "size must be", "a zero weight is rejected")
   rejects({ columns = { { name = "a", w = -1 }, { name = "b" } } }, "size must be", "a negative weight is rejected")
   rejects({ columns = { { name = "a" } }, empty = "bogus" }, "empty must be one of", "an unknown empty policy is rejected")

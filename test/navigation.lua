@@ -43,6 +43,10 @@ nav.swap("u")
 assert(dispatched == nil, "no neighbor does nothing")
 nav.focus("l")
 assert(dispatched.focus and dispatched.window == "address:left", "focus same neighbor by address")
+dispatched, a.fullscreen = nil, nil
+nav.focus("l")
+assert(dispatched and dispatched.window == "address:left", "missing fullscreen means ordinary tiled window")
+a.fullscreen = 0
 dispatched = nil
 nav.focus("u")
 assert(dispatched == nil, "focus does not wrap")
@@ -161,3 +165,17 @@ assert(dispatched and dispatched.target == "address:other", "retain swaps within
 nav.swap("r")
 assert(zone(app) == "b" and zone(other) == "a", "move out of a stack into an empty slot")
 print("stack navigation: all checks passed")
+
+-- The slot can change between navigation's snapshot and the move itself.
+local move_to_empty = session.move_to_empty
+local notification
+hl.exec_cmd = function(command) notification = command end
+session.move_to_empty = function() error("move unavailable: zone isn't empty") end
+apps = { app }
+recalculate()
+local prior_zone = zone(app)
+assert(pcall(nav.swap, "l"), "failed empty-slot move does not escape key callback")
+assert(notification and notification:find("Hypertile move", 1, true)
+  and notification:find("move unavailable", 1, true), "failed move explains the error")
+assert(zone(app) == prior_zone, "failed move leaves window in place")
+session.move_to_empty = move_to_empty

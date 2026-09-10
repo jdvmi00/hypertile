@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Layout cycling handles CLI paths with spaces or apostrophes and serializes
+  concurrent requests and commits per workspace. Atomic writes use separate
+  temporary files so overlapping writers cannot publish each other's data.
+- Invalid saved layouts show their validation errors in the catalog, stay out
+  of the cycle, and cannot be applied. A broken layout file no longer aborts
+  the rest of the compositor config. Fill/cycle lists and rule patterns are
+  validated before window placement.
+- Reading or changing the default layout handles nested tables, comments,
+  and quoted strings in `general`; computed layout expressions remain manual.
+  Directional navigation handles missing fullscreen fields and reports a
+  failed move into an empty slot without throwing out of the key callback.
 - Install and uninstall preserve the first config backups. Keybind removal
   handles blank lines and older installations, and retains the runtime if a
   custom navigation reference remains. Updates finish copying the daemon

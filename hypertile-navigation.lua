@@ -45,7 +45,7 @@ local function navigate(direction, swap)
     local dispatcher = swap and hl.dsp.window.swap or hl.dsp.focus
     return hl.dispatch(dispatcher({ direction = direction }))
   end
-  if active.fullscreen ~= 0 then return end
+  if (active.fullscreen or 0) ~= 0 then return end
   if swap then
     local session = require("hypr.hypertile-session")
     local source, slots = session.navigation_slots(active)
@@ -61,7 +61,12 @@ local function navigate(direction, swap)
       local destination = M.neighbor(source, slots, direction)
       if not destination then return end
       if #destination.windows == 0 then
-        return session.move_to_empty(active, destination.zone)
+        local ok, result = pcall(session.move_to_empty, active, destination.zone)
+        if not ok then
+          hl.exec_cmd("notify-send 'Hypertile move' '" .. tostring(result):gsub("'", "'\\''") .. "'")
+          return
+        end
+        return result
       end
       -- Use an actual occupant for swaps, including slots with a stack.
       local target = destination.windows[1]
