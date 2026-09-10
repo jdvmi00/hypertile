@@ -105,6 +105,33 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         self.assertEqual(remaining, original.splitlines() + ['o.bind("SUPER + U", "User", "keep-me")'])
         self.assertEqual(self.backup(self.bindings).read_text(), original)
 
+    def test_reinstall_with_session_recovery_disabled_and_no_daemon(self):
+        self.run_script("install.sh")
+        config = self.config / "hypertile/session.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('{"enabled": false}\n')
+        self.run_script("install.sh")
+        self.assertEqual(json.loads(config.read_text()), {"enabled": False})
+
+    def test_disabled_config_still_requires_stopping_a_live_session(self):
+        self.run_script("install.sh")
+        config = self.config / "hypertile/session.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('{"enabled": false}\n')
+        entry = self.home / ".local/bin/hypertile-session"
+        entry.write_text('''#!/usr/bin/env bash
+if [[ "$1" == status ]]; then
+  echo '{"instance":"test","mode":"watching"}'
+else
+  echo 'session stop refused' >&2
+  exit 1
+fi
+''')
+        before = entry.read_bytes()
+        result = self.run_script("install.sh", success=False)
+        self.assertIn("session stop refused", result.stderr)
+        self.assertEqual(entry.read_bytes(), before)
+
     def test_legacy_blocks_with_internal_blanks_keep_adjacent_user_lines(self):
         original = self.bindings.read_text().rstrip()
         self.bindings.write_text(original + '''
@@ -173,7 +200,7 @@ o.bind("SUPER + U", "User", "keep-me")
             for source in (ROOT / service).glob("*.py"):
                 (self.data / "hypertile" / service / source.name).write_text("# stale runtime\n")
             executable = self.home / ".local/bin" / ("hypertile-" + service)
-            executable.write_text('#!/usr/bin/env bash\nexit 0\n')
+            executable.write_text('#!/usr/bin/env bash\necho \'{"instance":"test","mode":"watching"}\'\n')
         self.run_script("install.sh")
 
     def test_purge_removes_scenes_and_caches_only_when_requested(self):

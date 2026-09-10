@@ -99,6 +99,10 @@ for name in ("hypertile-scenes", "hypertile-session"):
     if entry.exists():
         status = subprocess.run([str(entry), "status"], env=env, capture_output=True, timeout=5)
         if status.returncode == 0:
+            # A disabled session reports success without a running daemon.
+            # Use its live status, since config may have changed while it ran.
+            if name == "hypertile-session" and json.loads(status.stdout).get("mode") == "disabled":
+                continue
             subprocess.run([str(entry), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
 PY_SERVICES
 
