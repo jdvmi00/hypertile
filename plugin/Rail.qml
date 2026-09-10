@@ -87,15 +87,19 @@ Card {
       return Content.sceneMeta(rail.scene, overlay.viewed ? overlay.viewed.name : "", overlay.workspaceId)
     }
     if (overlay.editing) {
+      if (overlay.managedContent) return "Preview off: assigned content stays put" + (overlay.draftIsNew ? " · save, then choose Use" : " · saving applies")
       var s = overlay.workspaceId !== "" ? "Previewing on workspace " + overlay.workspaceId : "Previewing"
       if (overlay.draftIsNew) s += "  ·  new layout"
       return s
     }
     if (!overlay.viewed) return "No layouts in ~/.config/hypr/layouts yet"
     var m = ""
-    if (overlay.viewedIsActive) m = "In use on workspace " + overlay.current.workspace.id
-    else if (overlay.managedContent && overlay.current && overlay.current.workspace) m = "Workspace " + overlay.current.workspace.id + " keeps its windows in place: it has assigned content"
-    else if (overlay.current && overlay.current.workspace) m = "Workspace " + overlay.current.workspace.id + " uses " + String(overlay.current.workspace.layout).replace(/^lua:/, "")
+    if (overlay.workspaceId !== "") {
+      if (overlay.liveLayout !== "" && overlay.liveLayout !== overlay.committedLayout)
+        m = "Previewing on workspace " + overlay.workspaceId + " · Enter keeps it, Esc puts " + overlay.committedLayout.replace(/^lua:/, "") + " back"
+      else if (overlay.viewedIsActive) m = "In use on workspace " + overlay.workspaceId
+      else m = "Workspace " + overlay.workspaceId + " uses " + overlay.committedLayout.replace(/^lua:/, "")
+    }
     if (overlay.viewedIsDefault) m += (m !== "" ? "  ·  " : "") + "default layout"
     if (!overlay.viewedInCycle) m += (m !== "" ? "  ·  " : "") + "not in the SUPER+L cycle"
     return m
@@ -238,6 +242,12 @@ Card {
     property real step: 0.05
     property bool integer: false
     property real value: 0
+    property bool undoStarted: false
+    function changeValue(value, released) {
+      if (!undoStarted) { undoStarted = true; dragStarted() }
+      changed(value)
+      if (released) undoStarted = false
+    }
     signal dragStarted()
     signal changed(real value)   // every step of a drag, and its end
     signal reset()
@@ -274,9 +284,9 @@ Card {
       value: sf.value
       trackHeight: Math.max(4, Math.round(overlay.uiFontSmall * 0.28))
       knobSize: Math.max(14, Math.round(overlay.uiFontSmall * 0.85))
-      onDraggingChanged: if (dragging) sf.dragStarted()
-      onMoved: function(v) { sf.changed(v) }
-      onReleased: function(v) { sf.changed(v) }
+      onDraggingChanged: if (dragging) sf.undoStarted = false
+      onMoved: function(v) { sf.changeValue(v, false) }
+      onReleased: function(v) { sf.changeValue(v, true) }
     }
   }
 
@@ -600,14 +610,14 @@ Card {
 
       // ---- View mode: a layout switch over assigned content replaces it.
       Prompt {
-        visible: !overlay.editing && overlay.pendingSwitch !== null && overlay.viewed !== null
+        visible: !overlay.editing && overlay.pendingSwitch !== null
         warning: true
-        PromptTitle { text: "Use " + (overlay.viewed ? overlay.viewed.name : "") + " anyway?" }
+        PromptTitle { text: "Use " + (overlay.pendingSwitch ? overlay.pendingSwitch.layoutName : "") + " anyway?" }
         Muted { width: parent.width; text: overlay.switchSummary() }
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
-          Action { text: "Use " + (overlay.viewed ? overlay.viewed.name : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
+          Action { text: "Use " + (overlay.pendingSwitch ? overlay.pendingSwitch.layoutName : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
           Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.pendingSwitch = null }
         }
       }

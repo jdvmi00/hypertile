@@ -476,7 +476,13 @@ Column {
 
   Muted {
     visible: pane.overlay.catalogFailed
-    text: "Scenes need Hypertile's scene service, which is not installed. Run install.sh from the plugin directory, then open the overlay again."
+    text: pane.overlay.catalogError || "The workspace catalog is unavailable. Try again."
+    urgent: true
+  }
+  Action {
+    visible: pane.overlay.catalogFailed
+    text: "Retry"
+    onClicked: pane.overlay.retryCatalog()
   }
   Muted {
     visible: !pane.overlay.catalogFailed && pane.overlay.contentCatalog === null
@@ -484,7 +490,9 @@ Column {
   }
   Muted {
     visible: pane.ready && !pane.overlay.viewedIsActive
-    text: "Workspace " + pane.overlay.workspaceId + " is not on a Hypertile layout. Pick one under Layouts first; then its zones can hold content."
+    text: pane.overlay.committedLayout.indexOf("lua:") === 0
+      ? "Showing another layout. Select " + pane.overlay.committedLayout.slice(4) + " under Layouts to edit this workspace's content."
+      : "Workspace " + pane.overlay.workspaceId + " is not on a Hypertile layout. Pick one under Layouts first; then its zones can hold content."
   }
 
   // ------------------------------------------------------ saved scenes

@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Copying a layout cannot overwrite its source under the same name. Saving a
+  new layout on assigned content asks before using it; discarding managed
+  edits leaves the workspace untouched.
+- Overlay refreshes preserve queued browsing, dismissal cancels it immediately,
+  and scene updates cannot mark a leased preview as the saved layout. Failed
+  or unreadable catalogs release browsing promptly; hung requests time out
+  after five seconds with a visible error and Retry action.
+- Successful command warnings no longer become errors. Errors include context,
+  wrap to fit the screen, expire after six seconds, and clear on successful
+  actions. Headers describe managed edits and previews accurately; losing
+  keyboard focus clears peek mode, and slider clicks/wheel changes support undo.
 - Layout cycling handles CLI paths with spaces or apostrophes and serializes
   concurrent requests and commits per workspace. Atomic writes use separate
   temporary files so overlapping writers cannot publish each other's data.
