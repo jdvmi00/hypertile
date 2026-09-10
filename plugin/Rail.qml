@@ -4,6 +4,7 @@ import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
 import "Content.js" as Content
+import "Session.js" as Session
 
 // The inspector rail: the name and actions of what is being looked at on
 // top, then the sections for the current mode. The Layouts tab shows the
@@ -621,6 +622,34 @@ Card {
           spacing: Style.spacing.sm
           Action { text: "Use " + (overlay.pendingSwitch ? overlay.pendingSwitch.layoutName : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
           Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.pendingSwitch = null }
+        }
+      }
+
+      Column {
+        width: column.width
+        spacing: Style.spacing.sm
+        visible: Session.attention(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked)
+          || !!(overlay.sessionStatus && overlay.sessionStatus.unmatched && overlay.sessionStatus.unmatched.length)
+        Muted { width: parent.width; text: Session.summary(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked) }
+        Muted {
+          width: parent.width
+          visible: !!(overlay.sessionStatus && overlay.sessionStatus.saving && overlay.sessionStatus.saving.since)
+          text: visible ? "Paused since " + new Date(overlay.sessionStatus.saving.since * 1000).toLocaleString() : ""
+        }
+        Flow {
+          width: parent.width
+          spacing: Style.spacing.sm
+          Action { visible: Session.canResume(overlay.sessionStatus); text: "Resume saving"; tooltipText: "Accept the current desktop and resume saving; pending scene delivery keeps retrying"; enabled: !overlay.busy; onClicked: overlay.resumeSession() }
+          Action { visible: !!(overlay.sessionStatus && overlay.sessionStatus.unmatched && overlay.sessionStatus.unmatched.length); text: overlay.showSessionDetails ? "Hide unmatched" : "Show unmatched"; onClicked: overlay.showSessionDetails = !overlay.showSessionDetails }
+        }
+        Column {
+          width: parent.width
+          visible: overlay.showSessionDetails
+          spacing: Style.spacing.xs
+          Repeater {
+            model: overlay.sessionStatus ? (overlay.sessionStatus.unmatched || []) : []
+            Muted { required property var modelData; width: column.width; text: modelData.class + (modelData.title ? " — " + modelData.title : "") + ": " + modelData.reason }
+          }
         }
       }
 

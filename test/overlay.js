@@ -204,3 +204,12 @@ console.log("overlay safeguards and feedback: all checks passed")
   assert.equal(sent[2], "Scene dismissed; layout kept")
   assert.equal(context.commitOnRefresh, true)
 }
+
+{
+  const {root, context} = fixture()
+  let sent
+  context.runCtl = (...args) => {sent = args; return true}
+  root.resumeSession()
+  assert.deepEqual(clone(sent[0]), ["session", "resume"])
+  assert.equal(sent[2], "Session saving resumed")
+}

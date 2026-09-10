@@ -65,6 +65,8 @@ class Browser:
             if spec:
                 base["spec"] = copy.deepcopy(spec)
             record = {"token": token, "base": base, "shown": [ws["layout"]],
+                      "windows": [{k: w[k] for k in ("address", "stable_id", "pid", "pin", "pin_exclusive") if k in w}
+                                  for w in snap["windows"] if w["workspace"] == workspace],
                       "instance": self.ctl.compositor.instance, "epoch": self.epoch}
             self.active[workspace] = record
         record["deadline"] = self.clock() + 10
@@ -85,6 +87,7 @@ class Browser:
         record = self.active.get(workspace)
         if record and record["token"] == token and not record.get("ending") and record["epoch"] == self.epoch:
             record["deadline"] = self.clock() + 10
+            self.ctl.persist()  # The independent session writer reads this deadline.
 
     def tick(self):
         for workspace, record in list(self.active.items()):

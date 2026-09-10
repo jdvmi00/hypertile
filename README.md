@@ -110,10 +110,12 @@ restore their own tabs/documents; terminal commands are not replayed.
 
 Use the guarded Omarchy menu actions or `hypertile-ctl session logout`,
 `reboot`, or `shutdown` so the snapshot is saved before applications close.
-`hypertile-ctl session status` reports progress and unmatched windows. A partial
-restore protects the original snapshot until you retry or explicitly accept
-the current desktop with `hypertile-ctl session resume`; a notification says
-so, and again at logout while saving is still paused.
+`hypertile-ctl session status` reports progress and unmatched windows. Apps
+with no launch recipe are skipped without holding anything up. A partial
+restore (an app that failed to launch or whose window never appeared) protects
+the original snapshot until you retry or explicitly accept the current desktop
+with `hypertile-ctl session resume`; a notification says so, and again at
+logout while saving is still paused.
 
 `hypertile-ctl session save work` saves a named session; `session restore work`
 returns to it. See [session recovery](docs/SESSIONS.md) for app recipes,
@@ -210,6 +212,10 @@ it:
 | `viewed`, `draft`, `state` | read back the viewed name, the draft, or the whole state as JSON |
 
 ## Bar widget
+
+An **!** badge means session saving needs attention. The tooltip explains why;
+open the overlay to see unmatched windows or resume saving after a partial
+restore or freeze. See [Session recovery](docs/SESSIONS.md).
 
 The plugin's second kind: the layout icon and the name of the layout on
 this monitor's active workspace, one instance per monitor. Click opens the

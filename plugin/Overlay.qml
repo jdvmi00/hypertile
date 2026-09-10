@@ -44,6 +44,15 @@ Item {
 
   property bool opened: false
   property bool dismissing: false
+  SessionStatus { id: sessionReader; ctl: root.ctl; polling: root.opened && !root.dismissing }
+  readonly property var sessionStatus: sessionReader.data
+  readonly property bool sessionAvailable: sessionReader.available
+  readonly property bool sessionChecked: sessionReader.checked
+  property bool showSessionDetails: false
+
+  function resumeSession() {
+    runCtl(["session", "resume"], "Resuming session saving…", "Session saving resumed")
+  }
   property var current: null       // hypertile-ctl current --json
   property var layouts: []         // hypertile-ctl list --json .layouts
   property var workspaces: []      // hypertile-ctl workspaces --json .workspaces
@@ -1315,6 +1324,7 @@ Item {
     id: ctlProc
     stdout: StdioCollector { waitForEnd: true }
     onFinished: function(code, status) {
+      sessionReader.refresh()
       root.busy = false
       if (code !== 0 || status !== 0) {
         root.commitOnRefresh = false

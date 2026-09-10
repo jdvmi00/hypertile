@@ -60,6 +60,8 @@ class BrowseTests(unittest.TestCase):
         self.start()
         self.now += 8
         self.command("catalog", browse_token="overlay")
+        durable = json.loads((self.ctl.root / "state.json").read_text())
+        self.assertEqual(durable["browse"]["active"]["1"]["deadline"], self.now + 10)
         self.now += 8
         self.tick()
         self.assertIn("1", self.ctl.browser.active)

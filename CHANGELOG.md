@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- Scene recovery requests are queued durably and retried until acknowledged.
+  Undelivered assignments remain in checkpoints, including after a session
+  service restart; Freeze pauses delivery and Resume re-enables it.
+- An abandoned layout preview no longer silently prevents session checkpoints.
+  After its lease expires, capture uses the committed layout and eligible
+  original pins, preserves unrelated changes, and reports the remaining
+  on-screen preview. Heartbeats now publish their renewed deadline on disk.
+- The bar marks session-saving problems with an attention badge. The overlay
+  shows the pause time, unmatched windows, and Resume saving; it also reports
+  pending scene delivery, expired previews, and an unavailable session service.
+  Capture errors stay visible until a checkpoint succeeds.
+- Session recovery no longer pauses saving after every login because a window
+  had no launch recipe. Such windows could never be restored, so the restore
+  completes, saving resumes, a low-priority notification names the apps that
+  were not reopened, and `session status` keeps listing them. A failed launch
+  or an unmatched window still ends in `partial` mode.
+- The guarded logout, reboot and shutdown actions proceed when
+  `~/.config/hypertile/session.json` is malformed instead of exiting before
+  handing over to Omarchy.
 - Scenes waiting for session recovery time out after 45 seconds with Retry and
   Dismiss actions. Waiting no longer blocks layout browsing. Dismiss releases
   assignments while keeping the layout and open apps; late recovery messages

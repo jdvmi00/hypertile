@@ -407,7 +407,7 @@ class Recovery:
         self.deadline = now + max(30, len(self.desktop["windows"]) * 3 + 10)
         self.settled = None
         compositor.call("prepare", self.desktop)
-        self.warnings.extend(scene_recovery.restore(self.desktop.get("streams", []), self.desktop.get("scenes", [])))
+        self.warnings.extend(scene_recovery.definitions(self.desktop.get("streams", []), self.desktop.get("scenes", []))[1])
 
     def progress(self):
         return {"matches": self.matches, "launched": sorted(self.launched)}
@@ -452,7 +452,11 @@ class Recovery:
             self.settled = self.settled or now
             if now - self.settled >= 2:
                 self.finish()
-                return "complete" if not pending else "partial"
+                # A window with no launch recipe could never be restored, so
+                # it does not make the restore partial: saving resumes and
+                # status keeps naming it. A failed launch still does, since an
+                # explicit retry can bring that window back.
+                return "complete" if all(self.hopeless[w["address"]] == "no launch recipe" for w in pending) else "partial"
         else:
             self.settled = None
         if now >= self.deadline:
@@ -529,13 +533,28 @@ class Service:
         self.progress = {}
         self.persisted_status = None
         self.selector = selectors.DefaultSelector()
+        self.scene_delivery = scene_recovery.Delivery(store.root / "pending-scenes.json", compositor.instance, atomic_json)
+        self.capture_warning = None
+        self.paused_since = None
 
     def record(self):
+        warnings = []
+        desktop = scene_recovery.capture(self.compositor.snapshot(), self.compositor.instance, warnings=warnings)
+        desktop = self.scene_delivery.preserve(desktop)
+        self.capture_warning = " ".join(dict.fromkeys(warnings)) or None
         return {"version": 1, "instance": self.compositor.instance, "saved_at": time.time(),
-                "desktop": self.launchers.capture(scene_recovery.capture(self.compositor.snapshot()))}
+                "desktop": self.launchers.capture(desktop)}
 
     def status(self):
         value = {"instance": self.compositor.instance, "mode": self.mode, "error": self.error}
+        paused = self.mode != "watching" or bool(self.error)
+        if paused:
+            self.paused_since = self.paused_since or time.time()
+        else:
+            self.paused_since = None
+        value["saving"] = {"paused": paused, "since": self.paused_since, "warning": self.capture_warning,
+                           "can_resume": self.mode in ("partial", "frozen")}
+        value["scene_delivery"] = self.scene_delivery.status()
         if self.recovery:
             value.update(self.recovery.report())
         value["progress"] = self.progress
@@ -547,14 +566,18 @@ class Service:
     def checkpoint(self):
         if self.mode != "watching":
             return
-        record = self.record()
-        if record["desktop"] != self.last:
-            self.store.checkpoint(record)
-            self.last = record["desktop"]
-        self.dirty_since = self.changed_at = None
-        if self.error:
-            self.error = None
+        try:
+            record = self.record()
+            if record["desktop"] != self.last:
+                self.store.checkpoint(record)
+                self.last = record["desktop"]
+        except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as error:
+            self.error = str(error)
             self.status()
+            raise
+        self.dirty_since = self.changed_at = None
+        self.error = None
+        self.status()
 
     def restore(self, record, progress=None):
         if self.mode == "restoring":
@@ -570,7 +593,9 @@ class Service:
             self.progress = value
             self.status()
         try:
+            self.scene_delivery.enqueue(record["desktop"].get("streams", []), record["desktop"].get("scenes", []))
             self.recovery = Recovery(record, self.compositor, self.launchers, time.monotonic(), persist, self.progress)
+            self.scene_delivery.tick(time.monotonic())
         except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as error:
             self.mode = "partial"
             self.error = str(error)
@@ -602,6 +627,8 @@ class Service:
         if not isinstance(previous, dict):
             previous = {}
         same = previous.get("instance") == self.compositor.instance
+        if same:
+            self.paused_since = previous.get("saving", {}).get("since")
         note = None
         if previous.get("mode") in ("restoring", "partial"):
             try:
@@ -615,6 +642,7 @@ class Service:
         if record and record["instance"] != self.compositor.instance:
             self.restore(record)
         elif previous.get("mode") == "frozen" and same:
+            self.scene_delivery.load()
             self.mode = "frozen"
             self.status()
         else:
@@ -653,6 +681,7 @@ class Service:
             # During partial restoration, preserve the original source.
             saved = self.mode == "watching"
             self.checkpoint()
+            self.scene_delivery.pause(True)
             if self.mode == "restoring":
                 self.mode = "partial"
             elif self.mode != "partial":
@@ -661,6 +690,7 @@ class Service:
         if command == "resume":
             if self.mode == "restoring":
                 raise ValueError("wait for restoration to finish before accepting the current desktop")
+            self.scene_delivery.pause(False)
             self.mode, self.recovery = "watching", None
             self.progress = {}
             self.error = None
@@ -767,24 +797,30 @@ class Service:
                     if self.recovery:
                         self.recovery.reap()
                     try:
+                        if self.mode != "frozen":
+                            self.scene_delivery.tick(now)
+                            self.status()
                         if self.mode == "restoring":
                             result = self.recovery.tick(now)
                             if result != "restoring":
                                 self.mode = "watching" if result == "complete" else "partial"
                                 self.checkpoint()
                                 self.status()
+                                report = self.recovery.report()
                                 if result == "partial":
-                                    report = self.recovery.report()
                                     notify("Session restore incomplete",
                                            f"{report['total'] - report['matched']} of {report['total']} windows were not "
                                            "restored. Automatic saving is paused; see hypertile-ctl session status.")
+                                elif report["unmatched"]:
+                                    skipped = sorted({w["class"] for w in report["unmatched"]})
+                                    notify("Session restored",
+                                           f"{len(report['unmatched'])} of {report['total']} windows have no launch recipe "
+                                           f"and were not reopened ({', '.join(skipped)}). Saving continues.", urgency="low")
                         elif self.mode == "watching":
                             due = self.changed_at is not None and (now - self.changed_at >= 1 or now - self.dirty_since >= 5)
                             if due or now >= next_reconcile:
                                 self.checkpoint()
                                 next_reconcile = now + 5
-                        if self.mode == "watching":
-                            self.error = None
                     except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as error:
                         self.error = str(error)
                         # Leave the disk source untouched on capture/restore errors.
@@ -810,7 +846,7 @@ def paths():
 
 def request(runtime, command, name=None):
     with socket.socket(socket.AF_UNIX) as client:
-        client.settimeout(15)
+        client.settimeout(2 if command == "status" else 15)
         client.connect(str(runtime / "control.sock"))
         client.sendall(json.dumps({"command": command, "name": name}).encode() + b"\n")
         raw = b""
@@ -836,12 +872,24 @@ def main():
         if power_action:
             try:
                 disabled = read_json(config_path).get("enabled", True) is False
-            except FileNotFoundError:
-                disabled = False
+            except (OSError, ValueError, AttributeError):
+                disabled = False  # A missing or malformed config never blocks logout.
             if disabled:
                 os.execvp("omarchy", ["omarchy", "system", args.command])
         if not power_action:
-            print(json.dumps(request(runtime, args.command, args.name), indent=2))
+            try:
+                value = request(runtime, args.command, args.name)
+            except (OSError, RuntimeError):
+                if args.command != "status":
+                    raise
+                try:
+                    disabled = read_json(config_path).get("enabled", True) is False
+                except (OSError, ValueError, AttributeError):
+                    disabled = False
+                if not disabled:
+                    raise
+                value = {"mode": "disabled"}
+            print(json.dumps(value, indent=2))
             return
         # No application closes until the durable snapshot/freeze is ACKed. A
         # service that cannot answer must never leave the user unable to log
@@ -852,12 +900,13 @@ def main():
             notify("Desktop session not saved", f"session service unavailable ({error}); "
                    f"{args.command} continues without a snapshot", urgency="critical")
         else:
-            if not value.get("saved"):
+            if not isinstance(value, dict) or not value.get("saved"):
                 reasons = {"partial": "an incomplete restore still protects the previous snapshot",
                            "frozen": "the session was frozen earlier and later changes were not saved",
                            "restoring": "a restore is still running"}
+                mode = value.get("mode") if isinstance(value, dict) else None
                 notify("Desktop session not saved",
-                       reasons.get(value.get("mode"), "automatic saving is paused")
+                       reasons.get(mode, "automatic saving is paused")
                        + "; hypertile-ctl session resume re-enables saving", urgency="critical")
         os.execvp("omarchy", ["omarchy", "system", args.command])
     os.umask(0o077)

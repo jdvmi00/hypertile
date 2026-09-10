@@ -355,6 +355,22 @@ class AppTests(unittest.TestCase):
         self.assertEqual((self.ctl.scenes.path("work")).read_bytes(), saved)
         self.assertEqual(len(self.comp.desktop["windows"]), 1)
 
+    def test_retried_session_delivery_does_not_restart_accepted_placement(self):
+        self.save()
+        refs = [{"workspace": "1", "document": self.command("show", name="work")}]
+        self.ctl.command({"command": "session-restore", "scenes": refs})
+        self.tick(3)
+        operation = self.ctl.scenes.records["1"]["operation"]
+        self.ctl.command({"command": "session-restore", "scenes": refs})
+        self.tick(3)
+        self.assertEqual(self.ctl.scenes.records["1"]["operation"], operation)
+        self.assertEqual(self.desktop.launched, [self.desktop_file.name])
+        self.window()
+        self.tick()
+        self.ctl.command({"command": "session-restore", "scenes": refs})
+        self.tick()
+        self.assertEqual(len(self.placements()), 1)
+
     def test_daemon_survives_a_failing_tick_and_reports_it(self):
         root, runtime = self.root / "ipc/scenes", self.root / "ipc/runtime"
         class Flaky(SceneController):

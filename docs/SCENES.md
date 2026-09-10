@@ -65,7 +65,9 @@ are kept, so you can choose one again later.
 
 Layout browsing previews the geometry and restores the committed layout when
 you leave the preview. The lease expires after ten seconds without a heartbeat.
-Session capture waits until the preview ends. Choosing a different layout
+Session capture waits until the preview ends or expires. After a writer crash,
+expired previews are checkpointed using their committed layout, with a warning
+in the bar and overlay until the on-screen preview is cleaned up. Choosing a different layout
 replaces the assignments with local content; open apps keep running.
 
 ## CLI
