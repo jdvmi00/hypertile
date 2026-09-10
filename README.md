@@ -53,8 +53,9 @@ everything else in place, and is the one to run again after every update:
   slots marked Empty are skipped. Moving into a collapsed slot reveals the full
   layout on that workspace until the layout is reset.
 
-Every config file it edits is first copied to `<file>.hypertile.bak`. It
-then reloads Hyprland and checks `hyprctl configerrors`. Update with:
+Every config file it edits is first copied to `<file>.hypertile.bak` if that
+backup does not exist. Later installs and uninstalls preserve that first backup.
+The installer then reloads Hyprland and checks `hyprctl configerrors`. Update with:
 
 ```bash
 omarchy plugin update jmartin.hypertile
@@ -70,8 +71,11 @@ omarchy plugin remove jmartin.hypertile
 
 The uninstaller removes what the installer added, sets the default layout
 back to dwindle if it pointed at a hypertile layout, and keeps your layouts
-(`~/.config/hypr/layouts/`) and state (`~/.local/state/hypertile/`) unless
-told otherwise.
+(`~/.config/hypr/layouts/`), state (`~/.local/state/hypertile/`), and saved scenes
+(`~/.config/hypertile/scenes.json`) unless `--purge` is given. Purging also removes
+the services' Python caches; session settings are kept. If a
+custom binding still references `hypertile-navigation`, uninstall retains the
+runtime files and asks you to remove that reference before running it again.
 
 ## Using it
 

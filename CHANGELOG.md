@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Install and uninstall preserve the first config backups. Keybind removal
+  handles blank lines and older installations, and retains the runtime if a
+  custom navigation reference remains. Updates finish copying the daemon
+  runtime before Lua changes can restart it; `uninstall.sh --purge` also
+  removes saved scenes and Python caches.
+
 ## 1.1.1 (2026-09-07)
 
 - Remove repository agent instructions from the installable plugin tree in

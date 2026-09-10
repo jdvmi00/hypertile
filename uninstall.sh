@@ -2,11 +2,11 @@
 # Undo install.sh: the engine files and the loader require line in
 # ~/.config/hypr, the CLI, the keybinds and the menu entry it added, and the
 # shell plugin's bar entry. Workspaces fall back to Hyprland's default layout.
-# Every config file it edits is first copied to <file>.hypertile.bak.
+# Config backups at <file>.hypertile.bak are created only when absent.
 #
 # Kept unless --purge is given: your layouts (~/.config/hypr/layouts/) and
 # hypertile's state (~/.local/state/hypertile/: workspace rules, overlay
-# preferences).
+# preferences), and saved scenes (~/.config/hypertile/scenes.json).
 #
 # The plugin directory itself is removed only when it is a plain copy made by
 # install.sh. A git checkout made by `omarchy plugin add` is left for
@@ -71,9 +71,11 @@ import sys
 check_legacy(Path(sys.argv[1]))
 PY_CHECK
 
-# One backup per edited config file, overwritten on each edit.
+# Preserve the original pre-install backup, including on repeated uninstalls.
 backup() {
-  cp "$1" "$1.hypertile.bak"
+  if [[ ! -e "$1.hypertile.bak" ]]; then
+    cp "$1" "$1.hypertile.bak"
+  fi
 }
 
 # The default layout may point at a hypertile layout; put it back on dwindle
@@ -93,25 +95,49 @@ if [[ -e "$main" ]] && grep -q 'require("hypr.hypertile-layouts")' "$main"; then
   echo "removed the loader require from hyprland.lua"
 fi
 
-# Keybind blocks: each is a paragraph whose first line starts with
-# "-- hypertile" (see install.sh).
+# Remove marked blocks and the known blocks written by older installers.
 bindings="$hypr/bindings.lua"
 if [[ -e "$bindings" ]] && grep -q '^-- hypertile' "$bindings"; then
   backup "$bindings"
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$bindings" <<'PY'
 import sys
+import re
 path = sys.argv[1]
 text = open(path).read()
-paras = text.split("\n\n")
-kept = [p for p in paras if not p.lstrip("\n").startswith("-- hypertile")]
-out = "\n\n".join(kept).rstrip("\n") + "\n"
-open(path, "w").write(out)
+text = re.sub(r'^-- hypertile: begin [^\n]+\n(?:(?!^-- hypertile: begin ).)*?'
+              r'^-- hypertile: end[^\S\n]*(?:\n|$)',
+              '', text, flags=re.M | re.S)
+# Match only the original installer-owned lines, allowing blank lines within
+# each block. A user line after a block must survive even without a separator.
+legacy = [
+    ['-- hypertile: focus and swap across gaps, replacing Omarchy\'s directional bindings.',
+     'require("hypr.hypertile-navigation").bind()'],
+    ['-- hypertile: fullscreen layout overlay (browse with arrows, Enter uses and closes).',
+     'o.bind("SUPER + ALT + L", "Layouts overlay", "omarchy-shell shell toggle jmartin.hypertile")'],
+    ['-- hypertile: cycle the workspace through every saved layout, then dwindle.',
+     "-- The shell flashes the new layout's name.", 'hl.unbind("SUPER + L")',
+     'o.bind("SUPER + L", "Toggle workspace layout", "hypertile-ctl cycle")'],
+    ['-- hypertile: cycle the other way.',
+     'o.bind("SUPER + SHIFT + L", "Toggle workspace layout (back)", "hypertile-ctl cycle --reverse")'],
+]
+for block in legacy:
+    pattern = r'\n(?:[ \t]*\n)*'.join(re.escape(line) for line in block)
+    text = re.sub('^' + pattern + r'(?:\n|$)', '', text, flags=re.M)
+open(path, "w").write(text)
 PY
     echo "removed the hypertile keybinds from bindings.lua (Omarchy's SUPER+L is back)"
   else
     echo "note: python3 not found; remove the '-- hypertile' blocks from $bindings by hand"
   fi
+fi
+
+# Keep the module and its dependencies if an edited or custom binding still
+# refers to it. Removing the runtime would break subsequent config reloads.
+if [[ -e "$bindings" ]] && grep -q 'hypertile-navigation' "$bindings"; then
+  echo "uninstall.sh: $bindings still references hypertile-navigation; runtime files retained." >&2
+  echo "Remove that reference and run uninstall.sh again." >&2
+  exit 1
 fi
 
 # Menu entry.
@@ -163,9 +189,13 @@ echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then
   rm -rf "$hypr/layouts" "$state"
-  echo "removed $hypr/layouts and $state"
+  rm -f "$config/hypertile/scenes.json"
+  for service in session scenes; do
+    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/$service/__pycache__"
+  done
+  echo "removed layouts, state, saved scenes, and Python caches"
 else
-  echo "kept $hypr/layouts and $state (use --purge to remove them)"
+  echo "kept layouts, state, and saved scenes (use --purge to remove them)"
 fi
 
 # Shell plugin.

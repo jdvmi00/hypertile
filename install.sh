@@ -22,8 +22,9 @@
 #
 # Then makes sure hyprland.lua requires the loader, reloads, and checks for
 # config errors. Every config file it edits is first copied to
-# <file>.hypertile.bak. Existing layout files are never overwritten. Safe to
-# run again after `omarchy plugin update jmartin.hypertile` or a git pull.
+# <file>.hypertile.bak if that backup does not exist. Existing layout files
+# are never overwritten. Safe to run again after
+# `omarchy plugin update jmartin.hypertile` or a git pull.
 #
 # Usage: ./install.sh [--no-keybinds] [--no-menu]
 
@@ -115,14 +116,15 @@ PY_CHECK
 
 mkdir -p "$hypr/layouts" "$bin" "$state"
 
-# One backup per edited config file, overwritten on each edit.
+# Preserve the first backup across edits and repeated installs/uninstalls.
 backup() {
-  cp "$1" "$1.hypertile.bak"
+  if [[ ! -e "$1.hypertile.bak" ]]; then
+    cp "$1" "$1.hypertile.bak"
+  fi
 }
 
-for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
-  install -m 0644 "$src/$f" "$hypr/$f"
-done
+# Finish the daemon runtime before touching Lua files watched by Hyprland:
+# any of those writes can reload the loader and start the services again.
 install -m 0755 "$src/bin/hypertile-ctl" "$bin/hypertile-ctl"
 install -m 0755 "$src/bin/hypertile-session" "$bin/hypertile-session"
 install -m 0755 "$src/bin/hypertile-scenes" "$bin/hypertile-scenes"
@@ -139,6 +141,10 @@ from upgrade import cleanup
 import sys
 cleanup(Path(sys.argv[1]), Path(sys.argv[2]))
 PY_CLEANUP
+
+for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
+  install -m 0644 "$src/$f" "$hypr/$f"
+done
 
 for f in "$src"/layouts/*.lua; do
   name="$(basename "$f")"
@@ -249,9 +255,9 @@ fi
 # actions; explicit user overrides retain ownership. Guarded commands freeze
 # the durable session before delegating to Omarchy.
 if (( want_menu )) && [[ -e "$menu_ext" ]]; then
+  backup "$menu_ext"
   python3 - "$menu_ext" <<'PY'
 import re
-import shutil
 import sys
 path = sys.argv[1]
 text = open(path).read().rstrip()
@@ -267,7 +273,6 @@ if entries:
     lines = [line for line in head.splitlines() if line.strip() and not line.strip().startswith("//")]
     if lines and not lines[-1].rstrip().endswith(("{", ",")):
         head += ","
-    shutil.copy2(path, path + ".hypertile.bak")
     open(path, "w").write(head + "\n" + ",\n".join(entries) + "\n}\n")
 PY
 fi
@@ -276,16 +281,18 @@ fi
 # Each skipped if already present. SUPER+ALT+L toggles the overlay; SUPER+L
 # cycles the workspace's layout, replacing Omarchy's dwindle/scrolling toggle,
 # which cannot return to a hypertile layout; SUPER+SHIFT+L cycles the other
-# way. Every block starts with a "-- hypertile" comment so uninstall.sh can
-# find it again.
+# way. Explicit begin/end markers let uninstall.sh find whole blocks even
+# when blank lines are added inside them.
 bindings="$hypr/bindings.lua"
 if (( want_keybinds )) && [[ -e "$bindings" ]]; then
   if ! grep -q 'require("hypr.hypertile-navigation")' "$bindings"; then
     backup "$bindings"
     cat >>"$bindings" <<'LUA'
 
--- hypertile: focus and swap across gaps, replacing Omarchy's directional bindings.
+-- hypertile: begin navigation
+-- Focus and swap across gaps, replacing Omarchy's directional bindings.
 require("hypr.hypertile-navigation").bind()
+-- hypertile: end
 LUA
     echo "bound SUPER+arrows and SUPER+SHIFT+arrows to gap-aware focus and swaps (replaces stock directional bindings)"
   fi
@@ -293,8 +300,10 @@ LUA
     backup "$bindings"
     cat >>"$bindings" <<LUA
 
--- hypertile: fullscreen layout overlay (browse with arrows, Enter uses and closes).
+-- hypertile: begin overlay
+-- Fullscreen layout overlay (browse with arrows, Enter uses and closes).
 o.bind("SUPER + ALT + L", "Layouts overlay", "omarchy-shell shell toggle $plugin_id")
+-- hypertile: end
 LUA
     echo "bound SUPER+ALT+L to the overlay"
   fi
@@ -304,10 +313,12 @@ LUA
     backup "$bindings"
     cat >>"$bindings" <<'LUA'
 
--- hypertile: cycle the workspace through every saved layout, then dwindle.
+-- hypertile: begin cycle
+-- Cycle the workspace through every saved layout, then dwindle.
 -- The shell flashes the new layout's name.
 hl.unbind("SUPER + L")
 o.bind("SUPER + L", "Toggle workspace layout", "hypertile-ctl cycle")
+-- hypertile: end
 LUA
     echo "bound SUPER+L to cycle layouts"
   fi
@@ -315,8 +326,10 @@ LUA
     backup "$bindings"
     cat >>"$bindings" <<'LUA'
 
--- hypertile: cycle the other way.
+-- hypertile: begin reverse-cycle
+-- Cycle the other way.
 o.bind("SUPER + SHIFT + L", "Toggle workspace layout (back)", "hypertile-ctl cycle --reverse")
+-- hypertile: end
 LUA
     echo "bound SUPER+SHIFT+L to cycle layouts backwards"
   fi
