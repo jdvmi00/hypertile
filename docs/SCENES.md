@@ -121,7 +121,8 @@ change focus; the app's own launcher may activate its window.
 
 ## Format and stable references
 
-Definitions live in `~/.config/hypertile/scenes/NAME.json`, mode 0600. Save this
+Definitions live in `$XDG_CONFIG_HOME/hypertile/scenes/NAME.json`
+(default `~/.config/hypertile/scenes/NAME.json`), mode 0600. Save this
 input using `scene save work --file scene.json`, substituting your layout/zones:
 
 ```json

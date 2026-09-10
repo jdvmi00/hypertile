@@ -1,7 +1,11 @@
 # Changelog
 
-## Unreleased
+## 1.1.2 (2026-09-10)
 
+- Refresh the local Hyprland size-ack backport recipe for Arch's 0.56.2-2
+  packaging and Omarchy 4.0.3. The documented 0.56.2-2.1 rebuild preserves the
+  Glaze compatibility change and records source, package, and isolated runtime
+  verification. Hypertile's installer does not install this compositor backport.
 - Overlay panels, badges, and zone labels use opaque text backgrounds. Neutral
   text colors adjust to the theme for readable contrast, and thumbnail numbers
   keep the caption size or hide when they cannot fit. Keyboard help wraps within
@@ -43,14 +47,6 @@
   shows the pause time, unmatched windows, and Resume saving; it also reports
   pending scene delivery, expired previews, and an unavailable session service.
   Capture errors stay visible until a checkpoint succeeds.
-- Session recovery no longer pauses saving after every login because a window
-  had no launch recipe. Such windows could never be restored, so the restore
-  completes, saving resumes, a low-priority notification names the apps that
-  were not reopened, and `session status` keeps listing them. A failed launch
-  or an unmatched window still ends in `partial` mode.
-- The guarded logout, reboot and shutdown actions proceed when
-  `~/.config/hypertile/session.json` is malformed instead of exiting before
-  handing over to Omarchy.
 - Scenes waiting for session recovery time out after 45 seconds with Retry and
   Dismiss actions. Waiting no longer blocks layout browsing. Dismiss releases
   assignments while keeping the layout and open apps; late recovery messages
@@ -89,6 +85,17 @@
   custom navigation reference remains. Updates finish copying the daemon
   runtime before Lua changes can restart it; `uninstall.sh --purge` also
   removes saved scenes and Python caches.
+- Session recovery no longer pauses saving after every login because a window
+  had no launch recipe. Such windows could never be restored, so the restore
+  completes, saving resumes, a low-priority notification names the apps that
+  were not reopened, and `session status` keeps listing them. A failed launch
+  or an unmatched window still ends in `partial` mode.
+- The guarded logout, reboot and shutdown actions proceed when
+  `~/.config/hypertile/session.json` is malformed instead of exiting before
+  handing over to Omarchy.
+- The overlay keeps the latest layout selection while the scene catalog is
+  still loading and previews it once the catalog has loaded or failed, instead
+  of dropping arrow presses made in the first moments after opening.
 
 ## 1.1.1 (2026-09-07)
 

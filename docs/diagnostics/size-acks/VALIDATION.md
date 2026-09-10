@@ -49,3 +49,38 @@ The deterministic compiled-handler check does not reproduce the full visual
 Chrome save/reload race. After starting the normal desktop with the new binary,
 repeat that workflow and check for recurrence. Follow the
 [operations guide](../../HYPRLAND-SIZING-BUG.md) for updates and retirement.
+
+## Rebuild after Omarchy 4.0.3 update, 2026-09-08
+
+Built and installed `hyprland 0.56.2-2.1`, replacing official `0.56.2-2`.
+The official package's detached signature verified successfully. Its recorded
+PKGBUILD SHA-256 matched the exact Arch `0.56.2-2` recipe:
+`284b4e4fe5f2f2806accd92b3f39db45832bc1d61284da744456f8ad8f43cf36`.
+The recipe still uses the same verified 0.56.2 source archive and does not
+include the sizing fix. The new local recipe preserves its Glaze compatibility
+change and was compiled from a fresh source extraction against updated libraries.
+
+- The patch applied with zero fuzz; source regression: original 1,189/4,950
+  failures, backport 0/4,950 failures.
+- The staged compositor passed the isolated headless test with a real Wayland
+  client and the compiled `onAck` diagnostic. The diagnostic unloaded and the
+  test processes exited.
+- The staged, packaged, and installed executables have identical SHA-256 values.
+- `pacman -Qkk hyprland`: 644 files, zero altered. No missing dynamic libraries.
+- The status checker confirms the package marker and tracked libraries match;
+  its only remaining issue is the running desktop's old executable.
+- Activation and the normal desktop layout-switch/save check remain pending
+  until Jim saves his work and starts a new desktop session. No session restart
+  was performed as part of installation.
+
+Artifacts and build/test logs are in
+`~/.local/state/hypertile/backport/build-0.56.2-2.1/`. The signed official
+`0.56.2-2` package and signature are retained in `backport/rollback/`.
+
+```text
+hyprland-0.56.2-2.1-x86_64.pkg.tar.zst
+54c6b73d4bac8b2499c77ef47287bf3a37d686078f5c7f177d629aab389c1d34
+
+usr/bin/Hyprland
+535fee8ae2ef11fb4d6eac61a2e199c54b57492c78ae08c53bdb885f0a3e4dc6
+```

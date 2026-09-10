@@ -10,8 +10,10 @@ layout on each monitor, `SUPER+L` cycles through your layouts, and a CLI
 does everything the overlay does from a script.
 
 Requires Omarchy 4 (the Lua Hyprland config and the Omarchy shell);
-developed against Hyprland 0.56.2 / Omarchy 4.0.2. `lua`, `jq`, and Python 3 ship
-with Omarchy.
+developed against Hyprland 0.56.2 / Omarchy 4.0.3. Local validation uses the
+`0.56.2-2.1` size-ack backport described in the
+[sizing diagnostics](docs/HYPRLAND-SIZING-BUG.md); it is installed separately.
+`lua`, `jq`, and Python 3 ship with Omarchy.
 
 ![Browsing layouts with the arrow keys while the windows follow, then dragging a divider in edit mode](docs/demo.gif)
 
@@ -365,7 +367,8 @@ manifest.json          the Omarchy plugin manifest (kinds: overlay, bar-widget)
 plugin/                the shell plugin: Overlay.qml, Rail.qml (inspector), ZoneItem.qml,
                        Divider.qml, Thumb.qml, Card.qml, Chip.qml, Geometry.js (drawing),
                        Editor.js (edits); ContentPane.qml and Content.js (the Scenes tab);
-                       LayoutWidget.qml (bar widget)
+                       LayoutWidget.qml (bar widget); SessionStatus.qml and Session.js
+                       (session status); Readability.js (text contrast)
 hypertile.lua          engine: spec -> layout provider (hot-swappable)
 hypertile-bridge.lua   bridge: load/serialize/JSON/save/preview/apply
 hypertile-json.lua     JSON encode/decode (pure Lua)
@@ -373,14 +376,18 @@ hypertile-layouts.lua  loader: requires every ~/.config/hypr/layouts/*.lua
 hypertile-navigation.lua  gap-aware focus and swap for SUPER+arrows and SUPER+SHIFT+arrows
 hypertile-session.lua  compositor adapter: capture and restore window placement
 session/service.py    session watcher, durable snapshots, app launch and matching
+session/scene_recovery.py  checkpoint and delivery of scene assignments across restarts
+session/upgrade.py    preserve daemon state while replacing installed runtime files
 scenes/*.py            scenes service: saved scenes, the app catalog, one-shot placement
 layouts/*.lua          shipped layouts: ultrawide, quad
 bin/hypertile-ctl      CLI over the bridge
 bin/hypertile-session  session service entry point (also via hypertile-ctl session)
 bin/hypertile-scenes   scenes service entry point (also via hypertile-ctl scene)
+dev                    link the checkout, check changes, and reload affected components
 install.sh             puts the engine, CLI, layouts, keybinds, and menu entry in place
 uninstall.sh           takes them out again
 probe.lua              live probe (logs everything the API hands a layout)
+docs/README.md         development workflow, testing, and backup/recovery paths
 docs/INTERNALS.md      what the compositor API does and does not do, what shapes the overlay,
                        and the stale-window forensics
 CHANGELOG.md           release notes

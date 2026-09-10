@@ -1,24 +1,34 @@
 # Releases and marketplace approval
 
-## Current candidate
+## Current release preparation
 
-- Repository/default branch: `jdvmi00/hypertile`, `main`.
-- Release: `1.1.1`, tagged `v1.1.1` after promotion. The tag and the
-  maintainer notes on the submission record the exact promoted commit;
-  do not add a commit to `main` merely to record its own SHA.
-- Submission: https://github.com/omacom/omarchy-plugin-marketplace/issues/5181
-  (initial listing, pending). Issue #4893 is closed and superseded.
-- Previous candidate: `25552c2a0ace46d74bff91390811c0ff73671b85` (`v1.1.0`).
-  Version 1.1.1 removes `AGENTS.md` from the installable tree. Preserve all
-  published tags, including `v1.1.0`, `v1.0.1`, and `marketplace-1ba0f8a`.
-- Keep agent instruction files outside the repository and all installed
-  plugin contents. The complete repository tree is installed by the plugin
-  manager; an ignore rule alone does not remove tracked or local files.
+- Prepared version: **1.1.2**, a fixes release covering the September 10 review.
+  Scene recovery, session saving, layout validation/browsing, installer backups,
+  overlay input/feedback/readability, and documentation are included. The feature
+  proposals from the review are deferred; none is included in this release.
+- Published version: **1.1.1**, tag `v1.1.1`, at
+  `7e1171579fccbf3ae5493742d843028f4e60b1da`. Remote `main` still points there
+  and remains the default branch, locked including for administrators.
+- Marketplace state checked on **2026-09-10**: the registry's
+  `listingValidatedCommit` is the same 1.1.1 SHA. Initial submission
+  [#5181](https://github.com/omacom/omarchy-plugin-marketplace/issues/5181)
+  is closed and listed; registry publication was recorded on September 8.
+  Issue #4893 is superseded. The next publication is an **update verification**,
+  not an edit to the initial submission.
+- Prepare and review 1.1.2 on `develop` before a release PR targets `main`.
+  The September 10 changelog date is the planned release date; update it before
+  promotion if publication moves to another day. No 1.1.2 tag or marketplace
+  snapshot exists until the promotion steps below complete.
+- Preserve published tags, including `v1.1.1`, `v1.1.0`, `v1.0.1`, and
+  `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
+  installed plugin contents. CI rejects tracked instruction files; an ignore
+  rule alone does not remove local files from a linked installation.
 
-`main` is locked, including for administrators. It remains GitHub's default
-branch because marketplace validation and upstream installation resolve it.
-Ongoing development belongs on `develop` and feature branches. Scenes and
-session recovery are part of this candidate.
+The recorded development environment is Omarchy `4.0.3-1` with the separately
+installed Hyprland `0.56.2-2.1` size-ack backport. Its rebuild and isolated
+validation are documented under `docs/diagnostics/size-acks/`; release preparation
+does not install or rebuild the compositor. Saved scene definitions remain
+individual files under `$XDG_CONFIG_HOME/hypertile/scenes/`, not `scenes.json`.
 
 ## Development
 
@@ -35,32 +45,12 @@ additional reviewer is required for this solo-maintainer repository. Force
 pushes and deletion are disabled. The extra lock on `main` prevents even a
 passing development PR from changing the candidate accidentally.
 
-## Finish the current submission
-
-1. Resolve the release tag to its full SHA, verify remote `main` matches, and confirm both its
-   checks passed.
-2. Update the existing submission's maintainer notes to describe this exact
-   tree, including session recovery, background service, application launch,
-   and menu/config changes. Remove stale claims such as no background service.
-   Preserve the issue form headings and checklist. Editing the issue triggers
-   marketplace validation; do not open a duplicate initial submission.
-3. Wait for both the marketplace compatibility report and automated security
-   baseline to identify the full candidate SHA (the visible report may
-   abbreviate it). Resolve reported blockers before requesting re-review.
-4. Ask a marketplace maintainer to review the current evidence and apply
-   `approved-and-verified`. Installer capabilities may require manual review.
-5. Verify publication completed and the listing snapshot equals the candidate.
-   A green local CI run, candidate tag, or retained approval label alone does
-   not demonstrate publication. Leave `main` locked after publication.
-
-Any code fix would create a different candidate. Obtain the owner's explicit
-instruction before replacing this specifically selected SHA.
-
-## Subsequent releases
+## Promote the prepared release
 
 1. Obtain an explicit release instruction. Prepare the complete release on
-   a branch from `develop`: bump the manifest version beyond `1.0.1`, finish
-   changelog/README/dependency and installer disclosures, and pass all CI.
+   a branch from `develop`: bump the manifest version beyond the latest published
+   version, finish changelog/README/dependency and installer disclosures, and pass
+   all CI.
 2. Merge the preparation into `develop`; open the release PR into `main`.
    Review the complete diff and wait for both required checks on the current
    revision. Do not include unfinished development features.
@@ -72,10 +62,10 @@ instruction before replacing this specifically selected SHA.
 4. Confirm CI on the resulting `main` SHA passes. Tag that exact SHA with the
    matching new version and publish matching GitHub release notes. Never move
    an existing release tag. Do not call the release marketplace-verified yet.
-5. For an already listed plugin, use the marketplace's Plugin verification
+5. For this already listed plugin, use the marketplace's Plugin verification
    form, action **Verify and publish a newer upstream commit**, plugin ID
    `jmartin.hypertile`, repository root URL, and full current `main` SHA.
-   For an initial listing still pending, update #5181 instead.
+   Keep the closed initial submission #5181 as historical evidence.
 6. Wait for fresh compatibility and baseline reports, then maintainer approval
    and successful publication, all covering that same SHA. Keep `main` frozen
    throughout; continue development elsewhere.

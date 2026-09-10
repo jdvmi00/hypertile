@@ -121,7 +121,7 @@ To repeat against a staged package built with the recipe (from the Hypertile
 checkout, within a Wayland session):
 
 ```bash
-backport_dir="$HOME/.local/state/hypertile/backport/build"
+backport_dir="$HOME/.local/state/hypertile/backport/build-0.56.2-2.1"
 staged="$backport_dir/pkg/hyprland/usr"
 g++ -std=c++23 -shared -fPIC -O2 \
   -I"$staged/include" -I"$staged/include/hyprland/protocols" \
