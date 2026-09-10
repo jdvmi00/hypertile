@@ -335,6 +335,7 @@ Item {
     root.catalogError = ""
     var old = root.contentCatalog ? root.contentCatalog.current : null
     root.contentCatalog = doc
+    if (!root.busy) root.finishSceneFeedback(doc.current)
     if (old && doc.current && (old.phase !== doc.current.phase || JSON.stringify(old.document) !== JSON.stringify(doc.current.document))) {
       // A leased preview is not a persisted layout change.
       root.sceneCommitOnRefresh = root.liveLayout === root.committedLayout
@@ -346,7 +347,7 @@ Item {
     var args = ["scene", action]
     if (name) args.push(name)
     args.push("--workspace", workspace ? String(workspace) : workspaceId, "--json")
-    var status = action === "apply" ? "Applying " + name + "…"
+    var status = action === "apply" ? "Using " + name + "…"
       : action === "restore" ? "Restoring the previous arrangement…"
       : action === "save" ? "Saving " + name + "…"
       : action === "remove" ? "Deleting " + name + "…"
@@ -354,8 +355,12 @@ Item {
       : action === "dismiss" ? "Dismissing the scene…"
       : "Updating the scene…"
     var done = action === "save" ? "Saved " + name : action === "remove" ? "Deleted " + name
-      : action === "dismiss" ? "Scene dismissed; layout kept" : ""
+      : action === "dismiss" ? "Scene dismissed; layout kept"
+      : action === "apply" ? "Using " + name
+      : action === "restore" ? "Previous arrangement restored"
+      : action === "retry" ? "Content checked" : ""
     if (runCtl(args, status, done)) {
+      if (["apply", "restore", "retry"].indexOf(action) !== -1) root.sceneFeedback = {done: done, operation: "", zone: ""}
       browseTimer.stop()
       commitOnRefresh = true
     }
@@ -384,10 +389,11 @@ Item {
 
   function assignContent(type, app) {
     if (!selected || !viewedIsActive) { errorText = "Select a zone in the current layout"; return }
-    var what = type === "empty" ? "Empty" : app ? app : "Local windows"
+    var what = type === "empty" ? "Empty" : app ? nameForClass(app, contentCatalog ? contentCatalog.apps : []) : "Local windows"
     var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", type, "--json"]
     if (app) args.push("--app-class", app)
-    runCtl(args, "Putting " + what + " in " + selected + "…", "")
+    if (runCtl(args, "Putting " + what + " in " + zoneLabel(selected) + "…", "Content update requested"))
+      root.sceneFeedback = {done: "Put " + what + " in " + zoneLabel(selected), operation: "", zone: selected}
   }
 
   function assignApp(app) {
@@ -395,7 +401,8 @@ Item {
     var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", "app",
       "--desktop-id", app.desktop_id, "--app-class", app.app_class, "--json"]
     if (app.app_title) args.push("--app-title", app.app_title)
-    runCtl(args, "Opening " + app.name + " in " + selected + "…", "")
+    if (runCtl(args, "Opening " + app.name + " in " + zoneLabel(selected) + "…", "App placement requested"))
+      root.sceneFeedback = {done: "Put " + app.name + " in " + zoneLabel(selected), operation: "", zone: selected}
   }
 
   function selectContentNeighbor(dir) {
@@ -460,6 +467,7 @@ Item {
 
   function close() {
     root.dismissing = true
+    root.sceneFeedback = null
     revertBrowse()
     root.opened = false
     root.editing = false
@@ -473,6 +481,7 @@ Item {
 
   function dismiss() {
     root.dismissing = true
+    root.sceneFeedback = null
     revertBrowse()
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "jmartin.hypertile")
@@ -691,10 +700,28 @@ Item {
   }
 
   // One hypertile-ctl call at a time; false when one is already running.
+  property var sceneFeedback: null
+  function finishSceneFeedback(record) {
+    var feedback = root.sceneFeedback
+    if (!feedback || !record || !feedback.operation || record.operation !== feedback.operation) return
+    var message = Content.actionFeedback(record, feedback.done, feedback.zone)
+    root.statusText = message
+    if (["ready", "restored", "partial", "needs-attention"].indexOf(record.phase) !== -1) root.sceneFeedback = null
+  }
+  function acceptSceneAction(text) {
+    if (!root.sceneFeedback) return
+    var record = null
+    try { record = JSON.parse(text) } catch (e) {}
+    root.statusText = "Scene update requested"
+    if (!record || !record.operation) { root.sceneFeedback = null; return }
+    root.sceneFeedback.operation = record.operation
+    root.finishSceneFeedback(record)
+  }
   property string ctlDone: ""
   function runCtl(args, status, done) {
     if (root.busy) return false
     root.busy = true
+    root.sceneFeedback = null
     root.errorText = ""
     root.statusText = status
     root.ctlDone = done === undefined ? "" : done
@@ -1322,11 +1349,12 @@ Item {
   // refreshes when done.
   CtlProcess {
     id: ctlProc
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector { id: ctlOutput; waitForEnd: true }
     onFinished: function(code, status) {
       sessionReader.refresh()
       root.busy = false
       if (code !== 0 || status !== 0) {
+        root.sceneFeedback = null
         root.commitOnRefresh = false
         root.dismissAfterApply = false
         root.applyQueue = []
@@ -1336,6 +1364,7 @@ Item {
         return
       }
       root.statusText = root.ctlDone
+      root.acceptSceneAction(ctlOutput.text)
       if (root.applyQueue.length > 0) {
         var next = root.applyQueue.slice()
         var id = next.shift()
@@ -1388,6 +1417,8 @@ Item {
     }
 
     if (k === Qt.Key_Question || (shift && k === Qt.Key_Slash)) { setPref("showKeys", !root.showKeys); return true }
+
+    if (root.contentMode && !root.editing && !root.pendingSwitch && root.selected === "" && rail.handleSceneKey(event)) return true
 
     if (k === Qt.Key_Escape) {
       if (root.pendingSwitch) { root.pendingSwitch = null; return true }
@@ -1464,7 +1495,7 @@ Item {
         : (k === Qt.Key_Up || (plain && k === Qt.Key_K)) ? "up"
         : (k === Qt.Key_Down || (plain && k === Qt.Key_J)) ? "down" : ""
       if (dir !== "" && (k === Qt.Key_Left || k === Qt.Key_Right || k === Qt.Key_Up || k === Qt.Key_Down)) { selectContentNeighbor(dir); return true }
-      if (plain && k >= Qt.Key_1 && k <= Qt.Key_9) { selectContentNumber(k - Qt.Key_0); return true }
+      if (plain && rail.searchText === "" && k >= Qt.Key_1 && k <= Qt.Key_9) { selectContentNumber(k - Qt.Key_0); return true }
       // A printable key with a zone selected starts a search in the
       // picker, wherever the focus was (after a save, a click on chrome).
       if (plain && root.selected !== "" && root.viewedIsActive && event.text.length === 1 && event.text.trim() !== "") { rail.typeSearch(event.text); return true }

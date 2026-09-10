@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Saved scenes support arrow-key selection, Enter to use, and Delete with
+  confirmation. The selected card exposes its delete control and scrolls into
+  view. App searches accept leading digits, keep the query between zones, and
+  forward `?` to keyboard help.
+- Scenes use consistent Use/In use wording and report action progress and
+  completion. Placement feedback follows the acknowledged operation and cannot
+  mistake a stale catalog result or a pending app for completed placement.
 - Renaming a scene zone preserves eligible app pins by stable zone identity,
   without another launch or move. Manual departures remain untouched, and
   checkpoints retain assignments while the rename is being reconciled.

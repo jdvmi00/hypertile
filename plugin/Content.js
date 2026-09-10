@@ -6,7 +6,7 @@ var STATUS = {
   "waiting-session": "Waiting for session recovery", "waiting-window": "Opening app…",
   moved: "Moved", closed: "Closed", ready: "Ready", restored: "Previous arrangement restored",
   partial: "Some content needs attention", stopping: "Clearing previous placement…",
-  layout: "Applying layout…", connecting: "Placing apps…", "needs-attention": "Needs attention",
+  layout: "Using layout…", connecting: "Placing apps…", "needs-attention": "Needs attention",
   pending: "Pending", "waiting-workspace": "Waiting for the workspace", "restore-builtin": "Restoring…"
 }
 
@@ -209,4 +209,15 @@ function positionLabels(zones, area) {
   }
   for (var name in labels) if (counts[labels[name]] > 1) labels[name] = ""
   return labels
+}
+
+// Action acknowledgements can precede placement by several catalog polls.
+function actionFeedback(record, done, zone) {
+  if (record.phase === "restored") return done
+  if (record.phase === "ready") {
+    var source = (record.sources || []).find(function(s) { return s.zone === zone })
+    if (zone && source && source.status !== "ready") return status(source.status)
+    return done
+  }
+  return status(record.phase) || "Scene update requested"
 }

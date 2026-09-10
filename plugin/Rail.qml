@@ -22,6 +22,7 @@ Card {
   // that drive it from the overlay and its IPC.
   readonly property string searchText: contentPane.query
   readonly property int matchCount: contentPane.matchCount
+  function handleSceneKey(event) { return contentPane.handleSceneKey(event) }
   function focusSearch() { contentPane.focusSearch() }
   function setSearch(text) { contentPane.setQuery(text) }
   function typeSearch(text) { contentPane.typeSearch(text) }
@@ -73,7 +74,7 @@ Card {
   readonly property var keyHints: {
     if (overlay.naming || overlay.namingScene) return [["Enter", "save"], ["Esc", "cancel"]]
     if (overlay.renaming) return [["Enter", "rename"], ["Esc", "cancel"]]
-    if (overlay.contentMode) return [["click / ← → ↑ ↓", "select zone"], ["Tab", "next zone"], ["1 – 9", "zone by number"], ["type", "search apps"], ["↑ ↓", "pick a match"], ["Enter", "assign the match, else close"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
+    if (overlay.contentMode) return [["↑ ↓ (no zone)", "select scene"], ["Enter / Delete", "use / delete selected scene"], ["click / ← →", "select zone"], ["Tab", "next zone (keep search)"], ["1 – 9 (outside search)", "zone by number"], ["type", "search apps"], ["↑ ↓ (search)", "pick a match"], ["Enter (search)", "assign match"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
     if (overlay.numbering) return [["click", "next in order"], ["click again", "stack"], ["Backspace", "undo"], ["Enter", "done"]]
     if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w", "save"], ["Esc", "leave"], ["?", "hide keys"]]
     return [["← →", "browse (the windows follow)"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
@@ -654,7 +655,18 @@ Card {
       }
 
       // ---- The Scenes tab: saved scenes, what each zone holds, the selected zone.
-      ContentPane { id: contentPane; visible: rail.scenesTab; width: column.width; overlay: rail.overlay }
+      ContentPane {
+        id: contentPane
+        visible: rail.scenesTab
+        width: column.width
+        overlay: rail.overlay
+        onRevealItem: function(item) {
+          var top = item.mapToItem(column, 0, 0).y
+          var bottom = top + item.height
+          if (top < scroller.contentY) scroller.contentY = top
+          else if (bottom > scroller.contentY + scroller.height) scroller.contentY = bottom - scroller.height
+        }
+      }
 
       // ---- Edit mode: unsaved changes.
       Prompt {

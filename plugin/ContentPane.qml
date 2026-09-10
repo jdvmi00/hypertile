@@ -19,12 +19,15 @@ Column {
   // pointer is over) survive a poll.
   property var scenes: []
   property var apps: []
+  property string selectedScene: ""
+  signal revealItem(var item)
   onCatalogChanged: syncLists()
   Component.onCompleted: syncLists()
   function syncLists() {
     syncOpenRows()
     var nextScenes = catalog.scenes || []
     if (JSON.stringify(nextScenes) !== JSON.stringify(scenes)) scenes = nextScenes
+    if (!scenes.some(function(s) { return s.name === selectedScene })) selectedScene = ""
     var nextApps = catalog.apps || []
     if (JSON.stringify(nextApps) !== JSON.stringify(apps)) apps = nextApps
   }
@@ -49,6 +52,7 @@ Column {
   readonly property string family: overlay.fontFamily
   readonly property int iconSize: Math.round(overlay.uiFontSmall * 1.4)
   property string deleting: ""      // the saved scene a delete is being confirmed for
+  onDeletingChanged: if (deleting !== "") Qt.callLater(function() { pane.revealItem(deletePrompt) })
 
   // ---- the picker: what is typed, and the rows that match it, in the
   // order they are listed (Enter takes the hot one).
@@ -100,8 +104,49 @@ Column {
     return out
   }
 
+  function moveScene(delta) {
+    if (!ready || !scenes.length) return
+    var index = scenes.findIndex(function(s) { return s.name === selectedScene })
+    index = index < 0 ? (delta > 0 ? 0 : scenes.length - 1) : (index + delta + scenes.length) % scenes.length
+    selectedScene = scenes[index].name
+    deleting = ""
+    var item = sceneCards.itemAt(index)
+    if (item) pane.revealItem(item)
+  }
+  function pickScene() {
+    var entry = scenes.find(function(s) { return s.name === selectedScene })
+    if (!entry || !ready || overlay.busy) return
+    if (!entry.valid) { overlay.errorText = entry.error || "This scene cannot be used"; return }
+    if (appliedScene === entry.name && !scene.modified) { overlay.statusText = "Already using " + entry.name; return }
+    overlay.sceneAction("apply", entry.name)
+  }
+  function handleSceneKey(event) {
+    if (deleting !== "") {
+      if (event.key === Qt.Key_Escape) deleting = ""
+      else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter) && !overlay.busy) {
+        overlay.deleteScene(deleting)
+        deleting = ""
+      }
+      return true
+    }
+    if (ready && scenes.length && (event.key === Qt.Key_Up || event.key === Qt.Key_Down)) { moveScene(event.key === Qt.Key_Down ? 1 : -1); return true }
+    if (selectedScene !== "" && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) { pickScene(); return true }
+    if (event.key === Qt.Key_Delete && selectedScene !== "" && ready && !overlay.busy) { deleting = selectedScene; return true }
+    return false
+  }
+  function handleSearchKey(event) {
+    var k = event.key
+    if (k === Qt.Key_Question || (k === Qt.Key_Slash && (event.modifiers & Qt.ShiftModifier))) return overlay.handleKey(event)
+    if (k === Qt.Key_Escape && query !== "") { searchField.text = ""; return true }
+    if ((k === Qt.Key_Return || k === Qt.Key_Enter) && searching) { pickMatch(); return true }
+    if (k === Qt.Key_Down && searching) { hot = Math.min(hot + 1, Math.max(0, matches.length - 1)); return true }
+    if (k === Qt.Key_Up && searching) { hot = Math.max(hot - 1, 0); return true }
+    if ((k === Qt.Key_Left || k === Qt.Key_Right) && query !== "") return false
+    if ([Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab, Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right].indexOf(k) !== -1) return overlay.handleKey(event)
+    return false
+  }
   function focusSearch() {
-    Qt.callLater(function() { if (searchField.visible) { searchField.forceActiveFocus(); searchField.selectAll() } })
+    Qt.callLater(function() { if (searchField.visible) { searchField.forceActiveFocus(); searchField.cursorPosition = searchField.text.length } })
   }
   function setQuery(text) { searchField.text = String(text || ""); pane.focusSearch() }
   // A key typed while the overlay's key handler had the focus: the search
@@ -141,11 +186,11 @@ Column {
 
   spacing: Style.spacing.xl
 
-  // Another zone: the picker starts clean and takes the keys.
+  // Keep the query when moving between zones; deselection starts a new search.
   Connections {
     target: pane.overlay
     function onSelectedChanged() {
-      searchField.text = ""
+      if (pane.overlay.selected === "") { searchField.text = ""; if (pane.overlay.contentMode) pane.overlay.focusKeys() }
       pane.overlay.hoverMatch = null
       if (pane.overlay.contentMode && pane.overlay.selected !== "" && pane.usable) pane.focusSearch()
     }
@@ -348,7 +393,7 @@ Column {
 
   // A saved scene, drawn like a layout in the LAYOUTS list: a picture of
   // its layout with the apps it places, its name, and what it holds.
-  // Clicking applies it; the delete shows on hover and confirms inline.
+  // Click or Enter uses it; the selected card exposes Delete.
   component SceneCard: Rectangle {
     id: card
     required property var modelData
@@ -356,6 +401,7 @@ Column {
     // The Repeater hands delegates a converted copy; the original entry
     // keeps its plain arrays for the thumbnail.
     readonly property var entry: pane.scenes[index] || modelData
+    readonly property bool highlighted: pane.overlay.selected === "" && pane.selectedScene === entry.name
     readonly property bool applied: pane.appliedScene === entry.name
     readonly property bool valid: entry.valid === true
     readonly property bool modified: applied && pane.scene.modified === true
@@ -363,9 +409,9 @@ Column {
     readonly property var sources: entry.sources || []
     readonly property bool canApply: valid && !(applied && !modified) && !pane.overlay.busy
     readonly property string meta: {
-      if (!valid) return entry.error || "This scene cannot be applied"
+      if (!valid) return entry.error || "This scene cannot be used"
       var bits = []
-      if (applied) bits.push(modified ? "applied  ·  modified" : "applied")
+      if (applied) bits.push(modified ? "in use  ·  modified" : "in use")
       var names = Content.summary(Content.appNames(sources), 2)
       bits.push(names !== "" ? names : "local windows")
       bits.push(String(entry.layout || ""))
@@ -375,8 +421,8 @@ Column {
     implicitHeight: cardRow.implicitHeight + Style.spacing.sm * 2
     height: implicitHeight
     radius: pane.overlay.radiusControl
-    color: applied ? Util.alpha(pane.accent, 0.14) : (cardHover.containsMouse ? Util.alpha(pane.fg, 0.06) : "transparent")
-    border.width: applied ? 1 : 0
+    color: applied ? Util.alpha(pane.accent, 0.14) : ((highlighted || cardHover.containsMouse) ? Util.alpha(pane.fg, 0.06) : "transparent")
+    border.width: (applied || highlighted) ? 1 : 0
     border.color: Util.alpha(pane.accent, 0.6)
     Behavior on color { ColorAnimation { duration: pane.overlay.motionFast } }
 
@@ -385,7 +431,7 @@ Column {
       anchors.fill: parent
       hoverEnabled: true
       cursorShape: card.canApply ? Qt.PointingHandCursor : Qt.ArrowCursor
-      onClicked: if (card.canApply) pane.overlay.sceneAction("apply", card.entry.name)
+      onClicked: { pane.selectedScene = card.entry.name; pane.overlay.selected = ""; pane.overlay.focusKeys(); if (card.canApply) pane.pickScene() }
     }
     Row {
       id: cardRow
@@ -435,10 +481,10 @@ Column {
       anchors.right: parent.right
       anchors.rightMargin: Style.spacing.xs
       anchors.verticalCenter: parent.verticalCenter
-      opacity: (cardHover.containsMouse || hot || pane.deleting === card.entry.name) ? 1 : 0
+      opacity: (card.highlighted || cardHover.containsMouse || hot || pane.deleting === card.entry.name) ? 1 : 0
       Behavior on opacity { NumberAnimation { duration: pane.overlay.motionFast } }
       tooltipText: "Delete this scene"
-      onClicked: pane.deleting = card.entry.name
+      onClicked: { pane.selectedScene = card.entry.name; pane.overlay.selected = ""; pane.overlay.focusKeys(); pane.deleting = card.entry.name }
     }
   }
 
@@ -505,12 +551,14 @@ Column {
       width: pane.width
       spacing: Style.spacing.xs
       Repeater {
+        id: sceneCards
         model: pane.scenes
         SceneCard {}
       }
     }
 
     Prompt {
+      id: deletePrompt
       visible: pane.deleting !== ""
       warning: true
       PromptTitle { text: "Delete scene " + pane.deleting + "?" }
@@ -631,16 +679,7 @@ Column {
       // Esc clears, Enter takes the hot match, ↑ ↓ move it; everything
       // else the overlay would do with these keys still happens.
       Keys.onPressed: function(event) {
-        var k = event.key
-        if (k === Qt.Key_Escape && text !== "") { text = ""; event.accepted = true; return }
-        if (text === "" && k >= Qt.Key_1 && k <= Qt.Key_9 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) { pane.overlay.selectContentNumber(k - Qt.Key_0); event.accepted = true; return }
-        if ((k === Qt.Key_Return || k === Qt.Key_Enter) && pane.searching) { pane.pickMatch(); event.accepted = true; return }
-        if (k === Qt.Key_Down && pane.searching) { pane.hot = Math.min(pane.hot + 1, Math.max(0, pane.matches.length - 1)); event.accepted = true; return }
-        if (k === Qt.Key_Up && pane.searching) { pane.hot = Math.max(pane.hot - 1, 0); event.accepted = true; return }
-        if ((k === Qt.Key_Left || k === Qt.Key_Right) && text !== "") return
-        if ([Qt.Key_Escape, Qt.Key_Return, Qt.Key_Enter, Qt.Key_Tab, Qt.Key_Up, Qt.Key_Down, Qt.Key_Left, Qt.Key_Right].indexOf(k) !== -1) {
-          if (pane.overlay.handleKey(event)) event.accepted = true
-        }
+        if (pane.handleSearchKey(event)) event.accepted = true
       }
     }
 

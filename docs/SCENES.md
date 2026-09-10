@@ -29,19 +29,26 @@ a packaging placeholder are left out. A card's **Change…** and **Clear** do
 the same from the screen, and a card that needs attention is outlined and
 offers **Retry**.
 
+While the search has focus, digits are ordinary text (for example, `1Password`).
+Tab selects the next zone and keeps the query; `?` toggles keyboard help.
+With no zone selected, ↑ ↓ select a saved scene, Enter uses it, and Delete
+asks before removing its file. The selected scene scrolls into view and shows
+its delete control. Progress messages follow the controller until content is
+placed or needs attention.
+
 Applications declaring `StartupWMClass` are available immediately. For other
 apps, an open window whose class equals the desktop ID without `.desktop`
 provides the identity. Apps without either can be configured through the CLI
 with an explicit class and optional exact title.
 
-The header names the workspace until a scene is applied, then the scene, with
+The header names the workspace until a scene is in use, then the scene, with
 the layout, the workspace, and how many apps are placed. **Scenes** lists the
 saved scenes as cards: the layout with the apps it places drawn in their
-zones, and what it holds. Click a card to apply it; the delete appears on hover
-and confirms inline.
+zones, and what it holds. Click a card to use it; the delete appears on hover
+or keyboard selection and confirms inline.
 
-**Save as scene…** stores the current definition. **Apply** requests that saved
-arrangement again, including apps you moved or closed. **Retry** explicitly
+**Save as…** stores the current definition. Using a saved scene requests its
+arrangement, including apps you moved or closed. **Retry** explicitly
 rechecks placement and may retry a failed/timed-out launch. Closing an app or
 moving it yourself leaves its source marked *Closed* or *Moved*. Changes to the
 saved definition happen only when you save.

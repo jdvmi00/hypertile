@@ -25,7 +25,7 @@ function fixture() {
   }
   Object.defineProperty(root, "viewed", {get() {return this.layouts[this.viewIndex] || null}})
   const context = {
-    root, Editor: editor, Qt: {callLater(fn) {later.push(fn)}},
+    root, Editor: editor, Content: (() => {const c = {}; vm.runInNewContext(fs.readFileSync("plugin/Content.js", "utf8"), c); return c})(), Qt: {callLater(fn) {later.push(fn)}},
     Quickshell: {execDetached(args) {calls.push(clone(args))}},
     browseProc: {running: false}, currentProc: {running: false}, listProc: {running: false},
     catalogProc: {running: false}, ctlProc: {running: false}, previewProc: {running: false},
@@ -212,4 +212,40 @@ console.log("overlay safeguards and feedback: all checks passed")
   root.resumeSession()
   assert.deepEqual(clone(sent[0]), ["session", "resume"])
   assert.equal(sent[2], "Session saving resumed")
+}
+
+// Acknowledgement is not completion, and stale catalog operations cannot finish a new request.
+{
+  const {root} = fixture()
+  root.sceneFeedback = {done: "Using work", zone: "", operation: ""}
+  root.acceptSceneAction(JSON.stringify({operation: "new", phase: "connecting"}))
+  assert.equal(root.statusText, "Placing apps…")
+  root.finishSceneFeedback({operation: "old", phase: "ready"})
+  assert.equal(root.statusText, "Placing apps…")
+  root.finishSceneFeedback({operation: "new", phase: "ready"})
+  assert.equal(root.statusText, "Using work")
+  assert.equal(root.sceneFeedback, null)
+  root.sceneFeedback = {done: "Using work", operation: ""}
+  root.acceptSceneAction("broken")
+  assert.equal(root.statusText, "Scene update requested")
+  assert.equal(root.sceneFeedback, null)
+}
+
+// Scene navigation wins only with no zone and no higher-priority confirmation.
+{
+  const {root, context} = fixture()
+  let next = 1
+  for (const m of qml.matchAll(/Qt\.(Key_\w+|\w+Modifier)/g)) if (!(m[1] in context.Qt)) context.Qt[m[1]] = next++
+  const routed = []
+  context.rail = {searchText: '', handleSceneKey: e => {routed.push('scene'); return true}, typeSearch: text => routed.push(text)}
+  Object.assign(root, {contentMode: true, selected: '', viewedIsActive: true})
+  const event = key => ({key: context.Qt[key], modifiers: 0, text: '', isAutoRepeat: false})
+  root.handleKey(event('Key_Down')); assert.deepEqual(routed, ['scene'])
+  root.pendingSwitch = {layoutName: 'wide'}
+  root.handleKey(event('Key_Down')); assert.equal(routed.length, 1)
+  root.pendingSwitch = null; root.selected = 'left'
+  context.selectContentNeighbor = dir => routed.push(dir)
+  root.handleKey(event('Key_Down')); assert.equal(routed.pop(), 'down')
+  context.rail.searchText = 'App'
+  root.handleKey({...event('Key_1'), text: '1'}); assert.equal(routed.pop(), '1')
 }
