@@ -192,3 +192,15 @@ for (const draftIsNew of [false, true]) {
   assert.doesNotThrow(header)
 }
 console.log("overlay safeguards and feedback: all checks passed")
+
+// Dismiss follows the scene CLI path and reports that the layout was kept.
+{
+  const {root, context} = fixture()
+  let sent
+  context.runCtl = (...args) => {sent = args; return true}
+  context.workspaceId = "1"
+  root.sceneAction("dismiss")
+  assert.deepEqual(clone(sent[0]), ["scene", "dismiss", "--workspace", "1", "--json"])
+  assert.equal(sent[2], "Scene dismissed; layout kept")
+  assert.equal(context.commitOnRefresh, true)
+}

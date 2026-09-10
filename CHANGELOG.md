@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Scenes waiting for session recovery time out after 45 seconds with Retry and
+  Dismiss actions. Waiting no longer blocks layout browsing. Dismiss releases
+  assignments while keeping the layout and open apps; late recovery messages
+  cannot recreate the record during the same login. The overlay marks deleted
+  scene definitions and explains which apps Retry may open or reuse.
+- Stopping the Scenes service, including SIGTERM, attempts to restore active
+  layout previews. A compositor failure no longer keeps the writer lock held;
+  unsuccessful restorations remain on disk for the next writer to recover.
+- The Scenes service survives a compositor error during its periodic check
+  (it previously exited with an internal error); `scene status` reports the
+  last failure until a check succeeds.
 - Copying a layout cannot overwrite its source under the same name. Saving a
   new layout on assigned content asks before using it; discarding managed
   edits leaves the workspace untouched.

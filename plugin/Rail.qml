@@ -536,6 +536,7 @@ Card {
 
         Muted { text: rail.metaText; visible: text !== "" }
         Muted { visible: rail.scenesTab && rail.scene !== null && !!rail.scene.error; text: rail.scene ? (rail.scene.error || "") : ""; color: Color.urgent }
+        Muted { visible: rail.scenesTab && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: Content.retrySummary(rail.scene) }
 
         Flow {
           width: parent.width
@@ -552,7 +553,8 @@ Card {
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.sceneNamed; text: "Save"; tooltipText: rail.sceneModified ? "Save the changes to " + rail.scene.document.name : "Saved"; enabled: rail.sceneModified && !overlay.busy; onClicked: overlay.saveScene(rail.scene.document.name) }
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.contentReady; text: rail.sceneNamed ? "Save as…" : "Save as scene…"; tooltipText: "Save this workspace's layout and content under a name"; enabled: !overlay.busy; onClicked: overlay.startSceneSave() }
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && rail.scene.can_restore === true && ["restored", "none"].indexOf(rail.scene.phase) === -1; text: "Restore previous"; tooltipText: "Put back the layout and content the workspace had before the scene"; enabled: !overlay.busy; onClicked: overlay.sceneAction("restore") }
-          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: "Retry"; tooltipText: "Check the pending content again"; enabled: !overlay.busy; onClicked: overlay.sceneAction("retry") }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: "Retry"; tooltipText: Content.retrySummary(rail.scene); enabled: !overlay.busy; onClicked: overlay.sceneAction("retry") }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && rail.scene.can_dismiss === true; text: "Dismiss"; tooltipText: "Forget this scene and release its zone assignments; keep the layout and open apps"; enabled: !overlay.busy; onClicked: overlay.sceneAction("dismiss") }
           // naming a scene
           Action { visible: overlay.namingScene; text: "Save"; onClicked: overlay.confirmSceneName() }
           Action { visible: overlay.namingScene; text: "Cancel"; onClicked: { overlay.namingScene = false; overlay.errorText = ""; overlay.focusKeys() } }

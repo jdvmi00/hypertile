@@ -197,6 +197,9 @@ class Manager:
             return {"phase": "none", "sources": [], "document": None}
         out = {k: copy.deepcopy(record[k]) for k in ("document", "workspace", "generation", "operation", "phase", "error", "modified", "results") if k in record}
         out["can_restore"] = bool(record.get("baseline"))
+        out["can_dismiss"] = record.get("phase") in ("needs-attention", "waiting-session")
+        saved_name = record.get("document", {}).get("name")
+        out["deleted"] = bool(saved_name and not self.path(saved_name).exists())
         out["sources"] = []
         for key, source in record.get("document", {}).get("sources", {}).items():
             item = {**source, "zone_id": key}
@@ -273,6 +276,19 @@ class Manager:
         if action == "validate":
             doc, _ = self.resolve(request["document"])
             return {"valid": True, "document": doc}
+        if action == "dismiss":
+            workspace = str(request.get("workspace") or self.ctl.compositor.snapshot()["workspace"])
+            active = self.records.get(workspace)
+            check(active and self.public(active)["can_dismiss"], "Only a waiting or failed scene can be dismissed")
+            # Clear compositor reservations and placement ownership before
+            # forgetting the record. No layout change or app termination.
+            self.ctl.compositor.call("scene_clear", {"workspace": workspace})
+            del self.records[workspace]
+            dismissed = self.ctl.state.setdefault("dismissed", [])
+            if workspace not in dismissed:
+                dismissed.append(workspace)
+            self.ctl.persist()
+            return {"dismissed": workspace}
         snap = self.ctl.compositor.snapshot()
         requested_workspace = str(request.get("workspace") or snap["workspace"])
         workspace = requested_workspace if action == "current" and requested_workspace in self.records else self.workspace(request, snap)
@@ -285,7 +301,7 @@ class Manager:
             self.ctl.browser.heartbeat(workspace, request.get("browse_token"))
             return {"version": 1, "current": self.public(self.records.get(workspace)),
                     "scenes": self.command({"action": "list"})["scenes"],
-                    "active_workspaces": [w for w, r in self.records.items() if r["phase"] != "restored"],
+                    "active_workspaces": [w for w, r in self.records.items() if r["phase"] not in ("restored", "waiting-session")],
                     "apps": self.apps.desktop.catalog(snap["windows"]),
                     "monitor_inputs": [], "workspace": workspace}
         if action == "save":
@@ -341,7 +357,9 @@ class Manager:
     def restore_refs(self, refs):
         for ref in refs:
             workspace = str(ref.get("workspace", ""))
-            if (workspace in self.records and self.records[workspace]["phase"] != "waiting-session") or not re.fullmatch(r"[1-9][0-9]*", workspace):
+            record = self.records.get(workspace, {})
+            waiting = record.get("phase") == "waiting-session" or record.get("recovery_timeout")
+            if workspace in self.ctl.state.get("dismissed", []) or (record and not waiting) or not re.fullmatch(r"[1-9][0-9]*", workspace):
                 continue
             self.records[workspace] = {"workspace": workspace, "document": copy.deepcopy(ref["document"]),
                 "phase": "waiting-workspace", "generation": 0, "operation": uuid.uuid4().hex,
@@ -359,14 +377,19 @@ class Manager:
 
     def step(self, record):
         phase, workspace = record["phase"], record["workspace"]
+        if phase == "waiting-session":
+            if self.ctl.now() >= record["deadline"]:
+                record.update(phase="needs-attention", recovery_timeout=True,
+                              error="This scene could not be put back after login. Session recovery did not arrive; retry or dismiss it.")
+            return
         if phase == "waiting-workspace":
             snap = self.ctl.compositor.snapshot()
             if any(w["selector"] == workspace for w in snap["workspaces"]) or (self.has_apps(record["document"])):
                 self.start(record["document"], workspace, snap)
             elif self.ctl.now() > record["deadline"]:
-                record.update(phase="needs-attention", error="Workspace did not return during session recovery")
+                record.update(phase="needs-attention", error="This scene could not be put back after login. Its workspace did not return; retry or dismiss it.")
             return
-        if phase in ("restored", "needs-attention", "waiting-session"):
+        if phase in ("restored", "needs-attention"):
             return
         if phase in ("stopping", "restore-builtin"):
             self.ctl.compositor.call("scene_clear", {"workspace": workspace})

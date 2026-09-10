@@ -128,4 +128,88 @@ class SceneTests(unittest.TestCase):
         self.assertNotIn("layout_id", source)
         self.assertNotEqual(result["columns"][0]["id"], result["columns"][1]["id"])
 
+    def test_missing_session_times_out_across_service_restart_and_accepts_late_refs(self):
+        self.ready()
+        document = self.command("current")["document"]
+        self.comp.instance = "two"
+        self.ctl = self.controller()
+        self.assertEqual(self.command("current")["phase"], "waiting-session")
+        self.assertNotIn("1", self.command("catalog")["active_workspaces"])
+        self.assertTrue(self.command("current")["can_dismiss"])
+        self.assertEqual(self.ctl.tick_interval(), 1)
+        self.now += 44
+        self.ctl = self.controller()
+        self.tick()
+        self.assertEqual(self.command("current")["phase"], "waiting-session")
+        self.now += 1
+        self.tick()
+        current = self.command("current")
+        self.assertEqual(current["phase"], "needs-attention")
+        self.assertIn("could not be put back after login", current["error"])
+        self.assertFalse(current["can_restore"])
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.tick(3)
+        self.assertEqual(self.command("current")["phase"], "ready")
+
+    def test_old_waiting_records_receive_a_deadline_once(self):
+        self.ready()
+        record = self.ctl.scenes.records["1"]
+        record["phase"] = "waiting-session"
+        record.pop("deadline", None)
+        self.ctl.persist()
+        self.ctl = self.controller()
+        self.assertEqual(self.ctl.scenes.records["1"]["deadline"], 145)
+        self.now = 146
+        self.ctl = self.controller()
+        self.tick()
+        self.assertEqual(self.command("current")["phase"], "needs-attention")
+
+    def test_dismiss_deleted_scene_keeps_layout_and_blocks_late_recovery(self):
+        self.ready()
+        document = self.command("current")["document"]
+        self.command("remove", name="work")
+        record = self.ctl.scenes.records["1"]
+        record.update(phase="needs-attention")
+        record.pop("baseline", None)
+        self.assertTrue(self.command("current")["deleted"])
+        before = len(self.comp.calls)
+        self.command("dismiss")
+        self.assertEqual(self.comp.calls[before:], [("scene_clear", {"workspace": "1"})])
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "lua:quad")
+        self.assertEqual(self.command("current")["phase"], "none")
+        self.ctl = self.controller()
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.tick(3)
+        self.assertNotIn("1", self.ctl.scenes.records)
+        # A new login can restore scenes again; dismissal only supersedes
+        # recovery requests from this compositor session.
+        self.comp.instance = "three"
+        self.ctl = self.controller()
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.assertIn("1", self.ctl.scenes.records)
+
+    def test_dismiss_missing_workspace_and_failed_clear(self):
+        self.ready()
+        with self.assertRaisesRegex(ValueError, "Only a waiting or failed"):
+            self.command("dismiss")
+        self.ctl.scenes.records["1"]["phase"] = "needs-attention"
+        self.comp.desktop["workspaces"] = []
+        with patch.object(self.comp, "call", side_effect=RuntimeError("compositor unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "compositor unavailable"):
+                self.command("dismiss")
+        self.assertIn("1", self.ctl.scenes.records)
+        self.command("dismiss")
+        self.assertNotIn("1", self.ctl.scenes.records)
+
+    def test_missing_workspace_recovery_has_an_actionable_error(self):
+        self.save()
+        document = self.command("show", name="work")
+        self.comp.desktop["workspaces"] = []
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.now += 46
+        self.tick()
+        current = self.command("current")
+        self.assertIn("Its workspace did not return", current["error"])
+        self.assertTrue(current["can_dismiss"])
+
 if __name__ == "__main__": unittest.main()

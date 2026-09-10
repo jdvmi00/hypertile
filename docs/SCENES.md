@@ -52,6 +52,17 @@ workspace. Changing scenes or cancelling an in-progress scene stops pending
 placement; an app already launched may still open normally. Empty/fill behavior
 and the layout's application rules continue to apply to other windows.
 
+If session recovery does not arrive within 45 seconds after login, the scene
+shows **Needs attention** and offers **Retry** or **Dismiss**. Waiting for
+session recovery does not block layout browsing. The header marks a missing
+saved definition as **Deleted scene** and explains which apps Retry may open
+or reuse from the retained definition.
+
+**Dismiss** forgets a waiting or failed scene and releases its zone assignments.
+It keeps the current layout and leaves apps open. A late session recovery
+message cannot bring that record back during the same login; saved scene files
+are kept, so you can choose one again later.
+
 Layout browsing previews the geometry and restores the committed layout when
 you leave the preview. The lease expires after ten seconds without a heartbeat.
 Session capture waits until the preview ends. Choosing a different layout
@@ -69,6 +80,7 @@ hypertile-ctl scene apply work --workspace 1
 hypertile-ctl scene current --workspace 1 --json
 hypertile-ctl scene retry --workspace 1
 hypertile-ctl scene restore --workspace 1
+hypertile-ctl scene dismiss --workspace 1
 ```
 
 For an app without declared identity, add `--app-class org.example.App` and,

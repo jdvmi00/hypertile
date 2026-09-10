@@ -343,6 +343,58 @@ class AppTests(unittest.TestCase):
                     proc.terminate()
                     proc.join(3)
 
+    def test_dismiss_stops_late_app_placement_and_keeps_saved_scene(self):
+        self.start()
+        saved = (self.ctl.scenes.path("work")).read_bytes()
+        self.ctl.scenes.records["1"]["phase"] = "needs-attention"
+        self.command("dismiss")
+        self.window()
+        self.tick(3)
+        self.assertEqual(self.placements(), [])
+        self.assertEqual(self.desktop.launched, [self.desktop_file.name])
+        self.assertEqual((self.ctl.scenes.path("work")).read_bytes(), saved)
+        self.assertEqual(len(self.comp.desktop["windows"]), 1)
+
+    def test_daemon_survives_a_failing_tick_and_reports_it(self):
+        root, runtime = self.root / "ipc/scenes", self.root / "ipc/runtime"
+        class Flaky(SceneController):
+            failures = 2
+            def tick(self):
+                if Flaky.failures:
+                    Flaky.failures -= 1
+                    raise RuntimeError("injected compositor outage")
+                super().tick()
+        with patch.dict(os.environ, HYPRLAND_INSTANCE_SIGNATURE="fake-scenes"):
+            proc = multiprocessing.get_context("fork").Process(target=daemon, args=(root, runtime, self.ctl.config, Flaky))
+            proc.start()
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        status = request(runtime, {"command": "status"}, timeout=.2)
+                        if status.get("error"):
+                            break
+                    except (OSError, ValueError):
+                        pass
+                    time.sleep(.02)
+                else:
+                    self.fail("the failing tick was not reported")
+                self.assertEqual(status["error"], "injected compositor outage")
+                # Scene commands force a tick each; once the outage is over the
+                # tick succeeds and the error clears.
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and request(runtime, {"command": "status"}, timeout=1).get("error"):
+                    request(runtime, {"command": "scene", "action": "list"}, timeout=1)
+                    time.sleep(.02)
+                self.assertIsNone(request(runtime, {"command": "status"}, timeout=1)["error"])
+                request(runtime, {"command": "stop"}, timeout=1)
+                proc.join(3)
+                self.assertEqual(proc.exitcode, 0)
+            finally:
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(3)
+
     def test_launcher_validation_and_xdg_precedence(self):
         with self.assertRaisesRegex(ValueError, "not a path"):
             self.desktop.resolve({"desktop_id": "../evil.desktop"})

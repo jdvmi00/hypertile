@@ -90,12 +90,20 @@ def daemon(root, runtime, config, factory):
                                 client.sendall(json.dumps(result).encode() + b"\n")
                             except OSError:
                                 pass  # Intent remains durable if the CLI disconnects.
-                    if time.monotonic() >= next_tick:
+                    if controller.running and time.monotonic() >= next_tick:
                         try:
                             controller.tick()
-                        except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
-                            # A compositor outage must not erase sources or launch duplicates.
-                            controller.applied.clear()
+                        except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired) as error:
+                            # A compositor outage must not stop the service: state
+                            # is only written atomically after a whole tick, so a
+                            # failed tick leaves sources and launch intent as they
+                            # were. Report it and try again on the next tick.
+                            controller.error = str(error)
+                        else:
+                            controller.error = None
                         next_tick = time.monotonic() + controller.tick_interval()
             finally:
-                path.unlink(missing_ok=True)
+                try:
+                    controller.shutdown()
+                finally:
+                    path.unlink(missing_ok=True)

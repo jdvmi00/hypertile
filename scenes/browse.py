@@ -58,7 +58,7 @@ class Browser:
             if not ws:
                 raise ValueError("Preview workspace no longer exists")
             scene = self.ctl.scenes.records.get(workspace, {})
-            if scene.get("phase", "ready") not in ("ready", "partial", "restored", "needs-attention"):
+            if scene.get("phase", "ready") not in ("ready", "partial", "restored", "needs-attention", "waiting-session"):
                 raise ValueError("Wait for the scene to finish before browsing layouts")
             base = {"layout": ws["layout"]}
             spec = snap.get("layouts", {}).get(ws["layout"].removeprefix("lua:"), {}).get("spec")

@@ -29,6 +29,15 @@ assert.strictEqual(C.sceneMeta({ phase: "ready" }, "quad", "1"), "quad  ·  work
 assert.strictEqual(C.sceneMeta({ phase: "none" }, "quad", "1"), "quad  ·  local windows in every zone")
 assert.strictEqual(C.sceneMeta({ phase: "restored" }, "quad", "1"), "quad  ·  Previous arrangement restored")
 assert.strictEqual(C.sceneMeta(null, "", ""), "")
+assert.strictEqual(C.managed(null), false)
+assert.strictEqual(C.managed({phase: "none"}), false)
+assert.strictEqual(C.managed({phase: "restored"}), false)
+assert.strictEqual(C.managed({phase: "waiting-session"}), false)
+assert.strictEqual(C.managed({phase: "needs-attention"}), true)
+assert.strictEqual(C.managed({phase: "ready"}), true)
+assert.match(C.sceneMeta({phase: "needs-attention", deleted: true}, "quad", "1"), /Deleted scene/)
+assert.match(C.retrySummary({sources: []}), /opens no apps/)
+assert.match(C.retrySummary({sources: [{type: "app", app_name: "MacBook"}, {type: "local", app_class: "foot"}]}), /opens or reuses MacBook\./)
 const placing = { phase: "connecting", sources: [
   { type: "app", zone: "a", status: "ready" }, { type: "app", zone: "b", status: "waiting-window" },
   { type: "local", zone: "c", app_class: "x", status: "needs-attention" }, { type: "local", zone: "d" }, { type: "empty", zone: "e" }] }

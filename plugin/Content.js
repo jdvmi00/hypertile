@@ -20,6 +20,17 @@ function troubled(value) {
   return ["partial", "needs-attention"].indexOf(value) !== -1
 }
 
+function managed(scene) {
+  return !!(scene && scene.phase && ["none", "restored", "waiting-session"].indexOf(scene.phase) === -1)
+}
+
+function retrySummary(scene) {
+  var apps = ((scene && scene.sources) || []).filter(function(s) { return s.type === "app" })
+  var names = appNames(apps)
+  return names.length ? "Retry uses this scene's layout and opens or reuses " + names.join(", ") + "."
+    : "Retry uses this scene's layout and zone assignments. It opens no apps."
+}
+
 // The content assigned to a zone from the active scene. Null means the zone holds local windows by fill order.
 function source(catalog, workspace, zone, active) {
   if (!active || !catalog) return null
@@ -126,6 +137,7 @@ function sceneMeta(scene, layout, workspace) {
     return bits.join("  ·  ")
   }
   if (workspace) bits.push("workspace " + workspace)
+  if (scene.deleted) bits.push("Deleted scene")
   var p = sceneProgress(scene)
   if (p !== "") bits.push(p)
   return bits.join("  ·  ")

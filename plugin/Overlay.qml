@@ -61,7 +61,7 @@ Item {
   property bool switchConfirmed: false
   readonly property bool managedContent: {
     if (!contentCatalog) return false
-    return contentCatalog.current && ["none", "restored"].indexOf(contentCatalog.current.phase) === -1
+    return Content.managed(contentCatalog.current)
   }
   property int viewIndex: 0
   property string errorText: ""
@@ -342,8 +342,10 @@ Item {
       : action === "save" ? "Saving " + name + "…"
       : action === "remove" ? "Deleting " + name + "…"
       : action === "retry" ? "Checking the pending content…"
+      : action === "dismiss" ? "Dismissing the scene…"
       : "Updating the scene…"
-    var done = action === "save" ? "Saved " + name : action === "remove" ? "Deleted " + name : ""
+    var done = action === "save" ? "Saved " + name : action === "remove" ? "Deleted " + name
+      : action === "dismiss" ? "Scene dismissed; layout kept" : ""
     if (runCtl(args, status, done)) {
       browseTimer.stop()
       commitOnRefresh = true
