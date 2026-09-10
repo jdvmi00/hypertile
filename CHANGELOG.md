@@ -15,10 +15,17 @@
 - Using a saved scene asks before replacing unsaved scene changes. Cancel
   keeps the arrangement; confirmation uses the originally selected scene.
   Clicking outside the zones deselects first, then closes Scenes.
-- Layout controls keep Rename/Delete together and show In use as a status chip.
-  Workspace rows keep window counts visible, single-slot fill order has clear
-  wording, and large zone numerals have an opaque backing. Header status badges
-  no longer overlap the tabs, and long monitor controls fit within the rail.
+- Layout controls fit on one row: the header's status line says when the
+  layout is in use, Use reads as the default action, and workspace rows show
+  In use as a chip. Workspace rows keep window counts visible, single-slot fill
+  order has clear wording, and large zone numerals have an opaque backing.
+  Header status badges no longer overlap the tabs, and long monitor controls
+  fit within the rail.
+- Rail polish: the session-saving notice is one tinted card with a short
+  "Paused since" time; slider overrides reset with a Reset button; aspect
+  presets wrap instead of running off the rail; Delete zone sits at the end of
+  the zone form as a quiet destructive action; section details read as
+  information rather than links; the keys panel gives wide shortcuts room.
 - Saved scenes support arrow-key selection, Enter to use, and Delete with
   confirmation. The selected card exposes its delete control and scrolls into
   view. App searches accept leading digits, keep the query between zones, and

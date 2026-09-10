@@ -48,6 +48,16 @@ Card {
     Qt.callLater(function() { nameField.forceActiveFocus(); nameField.selectAll() })
   }
 
+  // "Paused since 5:17 PM" today, with the date once it is older.
+  function sinceText(seconds) {
+    var d = new Date(Number(seconds) * 1000)
+    var now = new Date()
+    var sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+    var when = Qt.formatTime(d, "HH:mm")
+    if (!sameDay) when = Qt.formatDate(d, Locale.ShortFormat) + " " + when
+    return "Paused since " + when
+  }
+
   function focusWidth() {
     Qt.callLater(function() { widthField.field.field.forceActiveFocus(); widthField.field.field.selectAll() })
   }
@@ -199,10 +209,9 @@ Card {
       id: shDetail
       textFormat: Text.PlainText
       text: sh.detail
-      color: rail.accent
+      color: rail.overlay.mutedForeground
       font.family: rail.family
-      font.pixelSize: overlay.uiFontSmall
-      font.bold: true
+      font.pixelSize: overlay.uiCaption
       elide: Text.ElideRight
       width: Math.min(implicitWidth, parent.width - shTitle.implicitWidth - Style.spacing.lg * 2)
       anchors.right: parent.right
@@ -251,7 +260,8 @@ Card {
     property string label: ""
     property string valueText: ""
     property bool overridden: false
-    property string resetLabel: "global"
+    property string resetLabel: "Reset"
+    property string resetHint: "Back to the global value"
     property real minimum: 0
     property real maximum: 1
     property real step: 0.05
@@ -286,7 +296,7 @@ Card {
           font.bold: true
           anchors.verticalCenter: parent.verticalCenter
         }
-        Action { visible: sf.overridden; text: sf.resetLabel; tooltipText: "Back to the default"; fontSize: overlay.uiCaption; onClicked: sf.reset() }
+        Action { visible: sf.overridden; text: sf.resetLabel; tooltipText: sf.resetHint; fontSize: overlay.uiCaption; onClicked: sf.reset() }
       }
     }
     PanelSlider {
@@ -316,17 +326,20 @@ Card {
     descriptionSize: overlay.uiCaption
   }
 
-  // A row of exclusive choices; the selected one reads as pressed.
-  component Choice: Row {
+  // A row of exclusive choices; the selected one reads as pressed. Wraps
+  // when the options outgrow the rail (the aspect presets do).
+  component Choice: Flow {
     id: choice
     property var options: []
     property string value: ""
     signal changed(string value)
+    width: column.width
     spacing: Style.spacing.md
     Repeater {
       model: choice.options
       Action {
         required property var modelData
+        horizontalPadding: Style.spacing.lg
         text: modelData.label
         selected: String(modelData.value) === choice.value
         onClicked: choice.changed(String(modelData.value))
@@ -342,7 +355,7 @@ Card {
     implicitHeight: Math.max(keyBox.height, hintText.implicitHeight)
     Rectangle {
       id: keyBox
-      width: Math.min(keyText.implicitWidth + Style.space(10), hint.width * 0.5)
+      width: Math.min(keyText.implicitWidth + Style.space(10), hint.width * 0.62)
       height: keyText.implicitHeight + Style.space(4)
       radius: overlay.radiusControl
       color: Util.alpha(rail.fg, 0.08)
@@ -499,7 +512,7 @@ Card {
               text: "?"
               selected: overlay.showKeys
               bordered: false
-              fontSize: overlay.uiCaption
+              fontSize: overlay.uiFontSmall
               tooltipText: overlay.showKeys ? "Hide the keys (?)" : "Show the keys (?)"
               onClicked: overlay.setPref("showKeys", !overlay.showKeys)
               anchors.verticalCenter: parent.verticalCenter
@@ -507,7 +520,7 @@ Card {
             Action {
               text: overlay.dockLeft ? "⇥" : "⇤"
               bordered: false
-              fontSize: overlay.uiCaption
+              fontSize: overlay.uiFontSmall
               tooltipText: overlay.dockLeft ? "Dock the rail on the right" : "Dock the rail on the left"
               onClicked: overlay.setPref("dockLeft", !overlay.dockLeft)
               anchors.verticalCenter: parent.verticalCenter
@@ -582,8 +595,7 @@ Card {
           topPadding: Style.spacing.xs
 
           // the Layouts tab
-          Chip { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && overlay.viewedIsActive; text: "In use"; foreground: rail.accent; fontFamily: rail.family; fontSize: overlay.uiFontSmall }
-          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.viewedIsActive; text: "Use"; tooltipText: "Use on this workspace and close (Enter)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.applyViewed(true) }
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.viewedIsActive; text: "Use"; selected: true; tooltipText: "Use on this workspace and close (Enter)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.applyViewed(true) }
           Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Edit"; tooltipText: "Edit this layout (e)"; enabled: overlay.viewed !== null; onClicked: overlay.startEdit(false) }
           Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "New"; selected: overlay.choosingNew; tooltipText: "New layout: blank, or a copy of this one (n)"; enabled: overlay.current !== null; onClicked: { overlay.confirmingDelete = false; overlay.choosingNew = !overlay.choosingNew } }
           Row {
@@ -668,30 +680,32 @@ Card {
         }
       }
 
-      Column {
-        width: column.width
-        spacing: Style.spacing.sm
-        visible: Session.attention(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked)
-          || !!(overlay.sessionStatus && overlay.sessionStatus.unmatched && overlay.sessionStatus.unmatched.length)
-        Muted { width: parent.width; text: Session.summary(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked) }
+      // ---- Session saving, when it needs attention: a notice with its actions.
+      Prompt {
+        id: sessionNotice
+        readonly property bool attention: Session.attention(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked)
+        readonly property var unmatched: (overlay.sessionStatus && overlay.sessionStatus.unmatched) || []
+        visible: attention || unmatched.length > 0
+        warning: attention
+        PromptTitle { text: Session.summary(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked) }
         Muted {
           width: parent.width
           visible: !!(overlay.sessionStatus && overlay.sessionStatus.saving && overlay.sessionStatus.saving.since)
-          text: visible ? "Paused since " + new Date(overlay.sessionStatus.saving.since * 1000).toLocaleString() : ""
+          text: visible ? rail.sinceText(overlay.sessionStatus.saving.since) : ""
         }
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
-          Action { visible: Session.canResume(overlay.sessionStatus); text: "Resume saving"; tooltipText: "Accept the current desktop and resume saving; pending scene delivery keeps retrying"; enabled: !overlay.busy; onClicked: overlay.resumeSession() }
-          Action { visible: !!(overlay.sessionStatus && overlay.sessionStatus.unmatched && overlay.sessionStatus.unmatched.length); text: overlay.showSessionDetails ? "Hide unmatched" : "Show unmatched"; onClicked: overlay.showSessionDetails = !overlay.showSessionDetails }
+          Action { visible: Session.canResume(overlay.sessionStatus); text: "Resume saving"; selected: true; tooltipText: "Accept the current desktop and resume saving; pending scene delivery keeps retrying"; enabled: !overlay.busy; onClicked: overlay.resumeSession() }
+          Action { visible: sessionNotice.unmatched.length > 0; text: overlay.showSessionDetails ? "Hide unmatched" : "Show unmatched"; onClicked: overlay.showSessionDetails = !overlay.showSessionDetails }
         }
         Column {
           width: parent.width
           visible: overlay.showSessionDetails
           spacing: Style.spacing.xs
           Repeater {
-            model: overlay.sessionStatus ? (overlay.sessionStatus.unmatched || []) : []
-            Muted { required property var modelData; width: column.width; text: modelData.class + (modelData.title ? " — " + modelData.title : "") + ": " + modelData.reason }
+            model: overlay.showSessionDetails ? ((overlay.sessionStatus && overlay.sessionStatus.unmatched) || []) : []
+            Muted { required property var modelData; width: parent.width; text: modelData.class + (modelData.title ? " — " + modelData.title : "") + ": " + modelData.reason }
           }
         }
       }
@@ -1001,7 +1015,6 @@ Card {
           spacing: Style.spacing.sm
           Action { text: "Split columns"; tooltipText: "c"; onClicked: overlay.splitSelected("columns") }
           Action { text: "Split rows"; tooltipText: "r"; onClicked: overlay.splitSelected("rows") }
-          Action { text: "Delete"; accent: Color.urgent; tooltipText: "x, or right-click the zone"; onClicked: overlay.deleteZone(overlay.selected) }
         }
 
         Field {
@@ -1116,7 +1129,7 @@ Card {
           label: "Scale"
           valueText: Math.round(((rail.sel && rail.sel.scale) || 1) * 100) + "%"
           overridden: rail.sel !== null && rail.sel.scale !== undefined
-          resetLabel: "100%"
+          resetHint: "Back to 100%"
           minimum: 0.1
           maximum: 1
           step: 0.05
@@ -1124,6 +1137,16 @@ Card {
           onDragStarted: overlay.pushUndo()
           onChanged: function(v) { overlay.liveZoneProp("scale", v >= 1 ? null : Math.round(v * 100) / 100) }
           onReset: overlay.zoneProp("scale", null)
+        }
+
+        Action {
+          visible: rail.sel !== null
+          text: "Delete zone"
+          bordered: false
+          foreground: Color.urgent
+          accent: Color.urgent
+          tooltipText: "Remove this zone; its neighbours take the room (x, or right-click the zone)"
+          onClicked: overlay.deleteZone(overlay.selected)
         }
       }
 
@@ -1291,7 +1314,7 @@ Card {
 
       Muted {
         visible: !overlay.showKeys && !overlay.naming && !overlay.renaming && !overlay.namingScene
-        text: overlay.editing ? "Hold Space to peek at the windows  ·  ? for the keys" : "Hold Space to peek  ·  ? for the keys"
+        text: "Hold Space to peek  ·  ? for the keys"
       }
     }
   }

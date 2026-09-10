@@ -135,13 +135,13 @@ function areaFor(current, spec) {
 }
 
 // One-line summary of what happens after the fill order is exhausted, in
-// fill positions rather than zone names: "then repeats from 1" when the
+// fill positions rather than zone names: "then start again at 1" when the
 // cycle is the fill order itself, otherwise "then 2 → 3 → 1 repeating".
 function cycleSummary(spec) {
   var fill = Array.isArray(spec.fill) ? spec.fill : []
   var cycle = Array.isArray(spec.cycle) && spec.cycle.length > 0 ? spec.cycle : fill
   if (cycle.length === 0) return ""
-  if (cycle.join("\u0000") === fill.join("\u0000")) return "then repeats from 1"
+  if (cycle.join("\u0000") === fill.join("\u0000")) return "then start again at 1"
   var pos = {}
   for (var i = 0; i < fill.length; i++) if (pos[fill[i]] === undefined) pos[fill[i]] = i + 1
   var out = []

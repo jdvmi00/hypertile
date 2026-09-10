@@ -251,10 +251,9 @@ Column {
         id: sectionDetail
         textFormat: Text.PlainText
         text: section.detail
-        color: pane.accent
+        color: pane.overlay.mutedForeground
         font.family: pane.family
-        font.pixelSize: pane.overlay.uiFontSmall
-        font.bold: true
+        font.pixelSize: pane.overlay.uiCaption
         elide: Text.ElideRight
         width: Math.min(implicitWidth, parent.width - sectionTitle.implicitWidth - Style.spacing.lg * 2)
         anchors.right: parent.right

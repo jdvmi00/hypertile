@@ -36,7 +36,7 @@ const ultrawide = {
   check(z.right.x === 4909 && z.right.w === 1225, "ultrawide right: " + fmt(z.right))
   check(z.center.numbers.join() === "1" && z.right.numbers.join() === "2" && z.left.numbers.join() === "3", "ultrawide fill numbers")
   check(ctx.cycleSummary(ultrawide) === "then 2 → 3 → 1 repeating", "cycle summary: " + ctx.cycleSummary(ultrawide))
-  check(ctx.cycleSummary({ columns: [{ name: "a" }, { name: "b" }], fill: ["a", "b"] }) === "then repeats from 1", "cycle summary when cycle is the fill order")
+  check(ctx.cycleSummary({ columns: [{ name: "a" }, { name: "b" }], fill: ["a", "b"] }) === "then start again at 1", "cycle summary when cycle is the fill order")
 }
 
 // Quad: the engine's placement for eight windows (gaps aside).
