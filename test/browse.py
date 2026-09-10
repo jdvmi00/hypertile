@@ -2,14 +2,18 @@
 import copy
 import importlib.util
 import json
+import fcntl
+import multiprocessing
 import os
 from pathlib import Path
+import time
 import unittest
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("scene_fixtures", Path(__file__).with_name("scenes.py"))
 fixtures = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(fixtures)
+from ipc import daemon, request
 
 
 class BrowseTests(unittest.TestCase):
@@ -56,6 +60,8 @@ class BrowseTests(unittest.TestCase):
         self.start()
         self.now += 8
         self.command("catalog", browse_token="overlay")
+        durable = json.loads((self.ctl.root / "state.json").read_text())
+        self.assertEqual(durable["browse"]["active"]["1"]["deadline"], self.now + 10)
         self.now += 8
         self.tick()
         self.assertIn("1", self.ctl.browser.active)
@@ -109,6 +115,81 @@ class BrowseTests(unittest.TestCase):
         self.comp.desktop["workspaces"][0]["layout"] = "dwindle"
         self.command("browse-end", browse_token="overlay")
         self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "dwindle")
+
+    def test_waiting_session_does_not_block_a_managed_preview(self):
+        self.ready()
+        self.ctl.scenes.records["1"]["phase"] = "waiting-session"
+        self.assertTrue(self.start()["preview"])
+        self.command("browse-end", browse_token="overlay")
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "lua:quad")
+
+    def test_shutdown_attempts_all_leases_even_when_the_compositor_is_gone(self):
+        self.ready()
+        self.start()
+        self.ctl.browser.active["2"] = copy.deepcopy(self.ctl.browser.active["1"])
+        with patch.object(self.comp, "snapshot", side_effect=RuntimeError("compositor gone")) as snap:
+            result = self.ctl.command({"command": "stop"})
+        self.assertTrue(result["stopping"])
+        self.assertFalse(self.ctl.running)
+        self.assertEqual(snap.call_count, 2)
+        self.assertIn("compositor gone", result["error"])
+        saved = json.loads((self.ctl.root / "state.json").read_text())
+        self.assertTrue(all(r["ending"] for r in saved["browse"]["active"].values()))
+
+    def test_stop_and_sigterm_release_socket_and_writer_lock_with_active_lease(self):
+        self.ready()
+        self.start()
+        original = copy.deepcopy(self.ctl.state)
+        scene_root = self.ctl.root
+        runtime = self.root / "runtime"
+        comp = self.comp
+        # Keep the lease live until shutdown; don't let a startup tick recover
+        # the prior writer's lease before the test can send its stop signal.
+        class QuietController(fixtures.SceneController):
+            def tick(self):
+                pass
+        for sigterm in (False, True):
+            for failing in (False, True):
+                with self.subTest(sigterm=sigterm, failing=failing):
+                    (scene_root / "state.json").write_text(json.dumps(original))
+                    def factory(root, config, compositor):
+                        ctl = QuietController(root, config, comp)
+                        if failing:
+                            def unavailable():
+                                raise RuntimeError("compositor gone")
+                            comp.snapshot = unavailable
+                        return ctl
+                    with patch.dict(os.environ, HYPRLAND_INSTANCE_SIGNATURE="one"):
+                        proc = multiprocessing.get_context("fork").Process(target=daemon, args=(scene_root, runtime, self.ctl.config, factory))
+                        proc.start()
+                    try:
+                        until = time.monotonic() + 5
+                        while time.monotonic() < until:
+                            try:
+                                request(runtime, {"command": "status"}, timeout=.2)
+                                break
+                            except (OSError, ValueError):
+                                time.sleep(.02)
+                        else:
+                            self.fail("daemon did not start")
+                        if sigterm:
+                            proc.terminate()
+                        else:
+                            self.assertTrue(request(runtime, {"command": "stop"}, timeout=2)["stopping"])
+                        proc.join(3)
+                        self.assertEqual(proc.exitcode, 0)
+                        self.assertFalse((runtime / "control.sock").exists())
+                        with (scene_root / "writer.lock").open("a") as lock:
+                            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        active = json.loads((scene_root / "state.json").read_text())["browse"]["active"]
+                        if failing:
+                            self.assertTrue(active["1"]["ending"])
+                        else:
+                            self.assertFalse(active)
+                    finally:
+                        if proc.is_alive():
+                            proc.kill()
+                            proc.join(3)
 
 
 if __name__ == "__main__":

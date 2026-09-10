@@ -26,8 +26,8 @@ a newly installed compositor.
 
 This recipe is specifically for **Hyprland 0.56.2**, commit
 `efb50993780079460b0cbed1363e2166a2de1d9f`, using Arch packaging revision
-`0.56.2-1`. It produces **`hyprland 0.56.2-1.1`** with no epoch, package
-hold, or `IgnorePkg` entry. Official `0.56.2-2` and newer versions sort after
+`0.56.2-2`. It produces **`hyprland 0.56.2-2.1`** with no epoch, package
+hold, or `IgnorePkg` entry. Official `0.56.2-3` and newer versions sort after
 this local package. It does not patch Omarchy files or change layouts.
 
 Upstream already corrected this defect as part of the
@@ -38,6 +38,15 @@ upstream commit `5584938a9fce2a4d6ebc236eb524c1551556815d`; this is not a claim
 that a particular packaged release includes it. **Check the package's exact
 source before retiring the backport.** A new package version alone is not
 proof.
+
+The official **0.56.2-2** package was reviewed on 2026-09-08. Its signed
+package's `.BUILDINFO` records PKGBUILD SHA-256
+`284b4e4fe5f2f2806accd92b3f39db45832bc1d61284da744456f8ad8f43cf36`,
+which matches Arch's tagged recipe. It uses the same release archive and
+adds a Glaze build compatibility change, but no acknowledgment correction.
+The source-extracted regression still fails 1,189/4,950 checks before the
+backport and passes all 4,950 afterward. The current local recipe preserves
+that Glaze change and builds against the updated libraries.
 
 ## Build and install the backport
 
@@ -54,7 +63,7 @@ omarchy pkg add base-devel cmake glaze hyprland-protocols meson ninja xorgproto
 
 Keep the original signed package for rollback somewhere outside pacman's
 pruned cache. For this version, obtain
-`hyprland-0.56.2-1-x86_64.pkg.tar.zst` and its `.sig` from your configured
+`hyprland-0.56.2-2-x86_64.pkg.tar.zst` and its `.sig` from your configured
 repository mirror (`pacman -Sp --print-format '%l' hyprland` shows its URL),
 then verify with `pacman-key --verify /path/to/package.pkg.tar.zst.sig`.
 Save both under `~/.local/state/hypertile/backport/rollback/`. If the mirror
@@ -63,7 +72,7 @@ has advanced, use a trusted Arch archive rather than an arbitrary binary.
 Build as your normal user, not root:
 
 ```bash
-backport_dir="$HOME/.local/state/hypertile/backport/build"
+backport_dir="$HOME/.local/state/hypertile/backport/build-0.56.2-2.1"
 mkdir -p "$backport_dir"
 cp docs/diagnostics/size-acks/{PKGBUILD,hyprland-0.56.2.patch,verify.py} "$backport_dir/"
 cd "$backport_dir"
@@ -71,7 +80,7 @@ makepkg --log
 ```
 
 The [PKGBUILD](diagnostics/size-acks/PKGBUILD) derives from the
-[Arch 0.56.2-1 recipe](https://gitlab.archlinux.org/archlinux/packaging/packages/hyprland/-/blob/0.56.2-1/PKGBUILD).
+[Arch 0.56.2-2 recipe](https://gitlab.archlinux.org/archlinux/packaging/packages/hyprland/-/blob/0.56.2-2/PKGBUILD).
 It verifies the release archive and local inputs with SHA-256, runs the
 regression on the unpatched source, applies the patch with zero fuzz, and
 builds the release package. It defaults to eight compilation jobs; set
@@ -89,8 +98,8 @@ backport: 0/4950 failed checks
 Validate the resulting package and install it:
 
 ```bash
-pacman -Qip ./hyprland-0.56.2-1.1-x86_64.pkg.tar.zst
-sudo pacman -U ./hyprland-0.56.2-1.1-x86_64.pkg.tar.zst
+pacman -Qip ./hyprland-0.56.2-2.1-x86_64.pkg.tar.zst
+sudo pacman -U ./hyprland-0.56.2-2.1-x86_64.pkg.tar.zst
 ```
 
 This is a local package transaction, not a system upgrade. Continue using
@@ -196,7 +205,7 @@ gap-navigation issue and should not be removed as part of retiring this fix.
 For an immediate rollback on the same compatible library stack:
 
 ```bash
-sudo pacman -U "$HOME/.local/state/hypertile/backport/rollback/hyprland-0.56.2-1-x86_64.pkg.tar.zst"
+sudo pacman -U "$HOME/.local/state/hypertile/backport/rollback/hyprland-0.56.2-2-x86_64.pkg.tar.zst"
 ```
 
 Save work and start a new desktop session afterward. This restores the original

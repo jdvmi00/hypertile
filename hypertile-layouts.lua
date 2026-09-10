@@ -4,11 +4,31 @@
 -- appear without editing this file.
 
 local paths = require("default.hypr.paths")
-local require_all = require("default.hypr.require_all")
 
 local layouts_dir = paths.config_home .. "/hypr/layouts"
 
-require_all.files(layouts_dir, "hypr.layouts", { reload = true })
+-- A hand-edited layout must not abort the rest of hyprland.lua. Keep the
+-- sorted/reload behavior of require_all, but isolate each file's failure.
+local function quote(value)
+  return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
+end
+local files = io.popen("find " .. quote(layouts_dir)
+  .. " -maxdepth 1 -type f -name '*.lua' -printf '%f\\n' 2>/dev/null | sort")
+if files then
+  for filename in files:lines() do
+    local module = "hypr.layouts." .. filename:gsub("%.lua$", "")
+    package.loaded[module] = nil
+    local ok, err = pcall(require, module)
+    if not ok then
+      local message = filename .. ": " .. tostring(err)
+      print("hypertile: " .. message)
+      if hl.exec_cmd then
+        hl.exec_cmd("notify-send --app-name=Hypertile 'Layout could not load' " .. quote(message))
+      end
+    end
+  end
+  files:close()
+end
 
 -- Persisted workspace rules written by `hypertile-ctl apply`. They are read
 -- with io.open on purpose: files the config requires are watched by the

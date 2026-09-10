@@ -292,14 +292,15 @@ end
 
 -- Run `argv` (this CLI's own arguments) detached, after `ms` milliseconds.
 local function run_later(ms, argv)
-  local words = { "lua", arg[0] }
+  local words = { "setsid", "-f", "sh", "-c", 'sleep "$1"; shift; exec "$@"',
+    "sh", string.format("%.3f", ms / 1000), "lua", arg[0] }
   for _, a in ipairs(argv) do
     words[#words + 1] = a
   end
   for i, w in ipairs(words) do
     words[i] = "'" .. tostring(w):gsub("'", "'\\''") .. "'"
   end
-  os.execute(string.format("setsid -f sh -c 'sleep %.3f; exec %s' >/dev/null 2>&1", ms / 1000, table.concat(words, " ")))
+  os.execute(table.concat(words, " ") .. " >/dev/null 2>&1")
 end
 
 -- The workspace a cycle acts on and the layout the compositor shows there.
@@ -325,12 +326,37 @@ end
 
 -- Presses within the debounce window collapse into one switch (see the
 -- bridge); --now switches at once.
+local function cycle_locked(id, argv)
+  if not tostring(id):match("^%d+$") then die("invalid workspace id " .. tostring(id)) end
+  local function quote(value) return "'" .. tostring(value):gsub("'", "'\\''") .. "'" end
+  local directory = bridge.paths.runtime .. "/hypertile"
+  if not os.execute("mkdir -p " .. quote(directory)) then die("cannot create " .. directory) end
+  -- flock owns the lock and waits for the child CLI. --close keeps detached
+  -- committers from inheriting it; process exit releases it even after a crash.
+  local words = { "flock", "--exclusive", "--close", "--timeout", "5", "--conflict-exit-code", "75",
+    directory .. "/cycle-" .. id .. ".lock", "lua", arg[0] }
+  for _, word in ipairs(argv) do words[#words + 1] = word end
+  words[#words + 1] = "--cycle-locked"
+  for i, word in ipairs(words) do words[i] = quote(word) end
+  local ok, _, code = os.execute(table.concat(words, " "))
+  if not ok then
+    if code == 75 then die("timed out waiting for workspace " .. id .. " cycle lock") end
+    os.exit(code or 1)
+  end
+end
+
 function commands.cycle(pos, flags)
   local id, current = cycle_origin(flags)
   if flags.now or bridge.cycle_debounce_ms <= 0 then
     flags.workspace = flags.workspace or id
     switch_to(bridge.cycle_target(current, bridge.cycle_names(), flags.reverse), flags)
     return
+  end
+  if not flags["cycle-locked"] then
+    local argv = { "cycle", "--workspace", id }
+    if flags.quiet then argv[#argv + 1] = "--quiet" end
+    if flags.reverse then argv[#argv + 1] = "--reverse" end
+    return cycle_locked(id, argv)
   end
   local target, seq = bridge.cycle_request(id, current, flags.reverse)
   if not target then
@@ -350,10 +376,13 @@ function commands.cycle(pos, flags)
 end
 
 -- Internal: the deferred half of `cycle`.
-commands["cycle-commit"] = function(pos)
+commands["cycle-commit"] = function(pos, flags)
   local id, seq = pos[1], tonumber(pos[2])
   if not id or not seq then
     die("cycle-commit needs a workspace id and a sequence number")
+  end
+  if not flags["cycle-locked"] then
+    return cycle_locked(id, { "cycle-commit", id, tostring(seq) })
   end
   local layout, err = bridge.cycle_commit(id, seq)
   if layout == false then
@@ -449,9 +478,7 @@ if cmd == "scene" then
   local command = src and src ~= "" and (src .. "/bin/" .. entry)
     or ((os.getenv("HOME") or "") .. "/.local/bin/" .. entry)
   local words = { command }
-  if cmd == "scene" then
-    if #argv == 0 then argv[1] = "current" end
-  end
+  if #argv == 0 then argv[1] = "current" end
   for _, value in ipairs(argv) do words[#words + 1] = value end
   for i, value in ipairs(words) do words[i] = "'" .. value:gsub("'", "'\\''") .. "'" end
   local ok, _, code = os.execute(table.concat(words, " "))

@@ -38,22 +38,24 @@ jobs:
         run: shellcheck install.sh uninstall.sh
       - name: Development helper
         run: python3 test/dev.py && python3 test/upgrade.py
+      - name: Installer and uninstaller
+        run: python3 test/install.py
       - name: Engine
-        run: lua test/harness.lua
+        run: lua test/harness.lua && lua test/loader.lua
       - name: Window navigation
         run: lua test/navigation.lua
       - name: Bridge and CLI
         run: lua test/bridge.lua
       - name: Session recovery
-        run: python3 test/session.py && lua test/session.lua
+        run: python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lua && node test/session.js
       - name: Scenes and content
-        run: python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && lua test/swap.lua && node test/content.js
+        run: python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && lua test/swap.lua && node test/content.js && node test/content_keys.js
       - name: Managed layout browsing
         run: python3 test/browse.py && node test/browse.js
       - name: Overlay geometry
         run: node test/geometry.js
       - name: Overlay editor
-        run: node test/editor.js
+        run: node test/editor.js && node test/overlay.js && node test/readability.js
       - name: Installable tree excludes agent instructions
         run: test -z "$(git ls-files | grep -Ei '(^|/)(AGENTS|CLAUDE|GEMINI)\.md$' || true)"
       - name: Plugin manifest

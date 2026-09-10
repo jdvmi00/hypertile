@@ -1,5 +1,109 @@
 # Changelog
 
+## 1.1.2 (2026-09-10)
+
+- Refresh the local Hyprland size-ack backport recipe for Arch's 0.56.2-2
+  packaging and Omarchy 4.0.3. The documented 0.56.2-2.1 rebuild preserves the
+  Glaze compatibility change and records source, package, and isolated runtime
+  verification. Hypertile's installer does not install this compositor backport.
+- Overlay panels, badges, and zone labels use opaque text backgrounds. Neutral
+  text colors adjust to the theme for readable contrast, and thumbnail numbers
+  keep the caption size or hide when they cannot fit. Keyboard help wraps within
+  the rail and includes arrow/vi browsing keys and Ctrl+S.
+- The README covers the Scenes tab, placement and replacement behavior, and all
+  overlay scripting methods, including app search and scene confirmation.
+- Using a saved scene asks before replacing unsaved scene changes. Cancel
+  keeps the arrangement; confirmation uses the originally selected scene.
+  Clicking outside the zones deselects first, then closes Scenes.
+- Layout controls fit on one row: the header's status line says when the
+  layout is in use, Use reads as the default action, and workspace rows show
+  In use as a chip. Workspace rows keep window counts visible, single-slot fill
+  order has clear wording, and large zone numerals have an opaque backing.
+  Header status badges no longer overlap the tabs, and long monitor controls
+  fit within the rail.
+- Rail polish: the session-saving notice is one tinted card with a short
+  "Paused since" time; slider overrides reset with a Reset button; aspect
+  presets wrap instead of running off the rail; Delete zone sits at the end of
+  the zone form as a quiet destructive action; section details read as
+  information rather than links; the keys panel gives wide shortcuts room.
+- Saved scenes support arrow-key selection, Enter to use, and Delete with
+  confirmation. The selected card exposes its delete control and scrolls into
+  view. App searches accept leading digits, keep the query between zones, and
+  forward `?` to keyboard help.
+- Scenes use consistent Use/In use wording and report action progress and
+  completion. Placement feedback follows the acknowledged operation and cannot
+  mistake a stale catalog result or a pending app for completed placement.
+- Renaming a scene zone preserves eligible app pins by stable zone identity,
+  without another launch or move. Manual departures remain untouched, and
+  checkpoints retain assignments while the rename is being reconciled.
+- Invalid or unreadable scene files no longer break the rest of the catalog;
+  scenes also exclude layouts that failed compilation. Session app recipes
+  are validated before startup, and scene auto-start reports the daemon's
+  actual error instead of just a missing socket.
+- Scene pin recovery history is deduplicated, drops departed window identities,
+  and retains at most 512 entries. Completed restores start a fresh history.
+  Removed obsolete reservation-owner handling and unreachable CLI/engine code.
+- Scene recovery requests are queued durably and retried until acknowledged.
+  Undelivered assignments remain in checkpoints, including after a session
+  service restart; Freeze pauses delivery and Resume re-enables it.
+- An abandoned layout preview no longer silently prevents session checkpoints.
+  After its lease expires, capture uses the committed layout and eligible
+  original pins, preserves unrelated changes, and reports the remaining
+  on-screen preview. Heartbeats now publish their renewed deadline on disk.
+- The bar marks session-saving problems with an attention badge. The overlay
+  shows the pause time, unmatched windows, and Resume saving; it also reports
+  pending scene delivery, expired previews, and an unavailable session service.
+  Capture errors stay visible until a checkpoint succeeds.
+- Scenes waiting for session recovery time out after 45 seconds with Retry and
+  Dismiss actions. Waiting no longer blocks layout browsing. Dismiss releases
+  assignments while keeping the layout and open apps; late recovery messages
+  cannot recreate the record during the same login. The overlay marks deleted
+  scene definitions and explains which apps Retry may open or reuse.
+- Stopping the Scenes service, including SIGTERM, attempts to restore active
+  layout previews. A compositor failure no longer keeps the writer lock held;
+  unsuccessful restorations remain on disk for the next writer to recover.
+- The Scenes service survives a compositor error during its periodic check
+  (it previously exited with an internal error); `scene status` reports the
+  last failure until a check succeeds.
+- Copying a layout cannot overwrite its source under the same name. Saving a
+  new layout on assigned content asks before using it; discarding managed
+  edits leaves the workspace untouched.
+- Overlay refreshes preserve queued browsing, dismissal cancels it immediately,
+  and scene updates cannot mark a leased preview as the saved layout. Failed
+  or unreadable catalogs release browsing promptly; hung requests time out
+  after five seconds with a visible error and Retry action.
+- Successful command warnings no longer become errors. Errors include context,
+  wrap to fit the screen, expire after six seconds, and clear on successful
+  actions. Headers describe managed edits and previews accurately; losing
+  keyboard focus clears peek mode, and slider clicks/wheel changes support undo.
+- Layout cycling handles CLI paths with spaces or apostrophes and serializes
+  concurrent requests and commits per workspace. Atomic writes use separate
+  temporary files so overlapping writers cannot publish each other's data.
+- Invalid saved layouts show their validation errors in the catalog, stay out
+  of the cycle, and cannot be applied. A broken layout file no longer aborts
+  the rest of the compositor config. Fill/cycle lists and rule patterns are
+  validated before window placement.
+- Reading or changing the default layout handles nested tables, comments,
+  and quoted strings in `general`; computed layout expressions remain manual.
+  Directional navigation handles missing fullscreen fields and reports a
+  failed move into an empty slot without throwing out of the key callback.
+- Install and uninstall preserve the first config backups. Keybind removal
+  handles blank lines and older installations, and retains the runtime if a
+  custom navigation reference remains. Updates finish copying the daemon
+  runtime before Lua changes can restart it; `uninstall.sh --purge` also
+  removes saved scenes and Python caches.
+- Session recovery no longer pauses saving after every login because a window
+  had no launch recipe. Such windows could never be restored, so the restore
+  completes, saving resumes, a low-priority notification names the apps that
+  were not reopened, and `session status` keeps listing them. A failed launch
+  or an unmatched window still ends in `partial` mode.
+- The guarded logout, reboot and shutdown actions proceed when
+  `~/.config/hypertile/session.json` is malformed instead of exiting before
+  handing over to Omarchy.
+- The overlay keeps the latest layout selection while the scene catalog is
+  still loading and previews it once the catalog has loaded or failed, instead
+  of dropping arrow presses made in the first moments after opening.
+
 ## 1.1.1 (2026-09-07)
 
 - Remove repository agent instructions from the installable plugin tree in

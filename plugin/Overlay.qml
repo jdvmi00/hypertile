@@ -7,6 +7,7 @@ import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
 import "Content.js" as Content
+import "Readability.js" as Readability
 
 // Hypertile overlay: view and edit tiling layouts at true scale. The keys
 // are listed in README.md and in the rail (?).
@@ -43,6 +44,16 @@ Item {
   ]
 
   property bool opened: false
+  property bool dismissing: false
+  SessionStatus { id: sessionReader; ctl: root.ctl; polling: root.opened && !root.dismissing }
+  readonly property var sessionStatus: sessionReader.data
+  readonly property bool sessionAvailable: sessionReader.available
+  readonly property bool sessionChecked: sessionReader.checked
+  property bool showSessionDetails: false
+
+  function resumeSession() {
+    runCtl(["session", "resume"], "Resuming session saving…", "Session saving resumed")
+  }
   property var current: null       // hypertile-ctl current --json
   property var layouts: []         // hypertile-ctl list --json .layouts
   property var workspaces: []      // hypertile-ctl workspaces --json .workspaces
@@ -50,18 +61,24 @@ Item {
   property string defaultLayout: ""
   property bool contentMode: false      // the rail's Scenes tab: zones are selected, not browsed
   property var contentCatalog: null     // hypertile-ctl scene catalog --json
-  property bool catalogFailed: false    // no scene service: scenes are unavailable, browsing is not
+  property bool catalogFailed: false    // last catalog attempt failed; browsing can proceed
+  onContentCatalogChanged: Qt.callLater(root.runBrowse)
+  onCatalogFailedChanged: if (catalogFailed) Qt.callLater(root.runBrowse)
   property int catalogFailures: 0
   property string catalogError: ""
   property bool namingScene: false
-  property var pendingSwitch: null      // { workspaces, close }: a layout switch over assigned content awaiting confirmation
+  property var pendingSwitch: null      // a layout/content replacement awaiting confirmation
   property bool switchConfirmed: false
   readonly property bool managedContent: {
     if (!contentCatalog) return false
-    return contentCatalog.current && ["none", "restored"].indexOf(contentCatalog.current.phase) === -1
+    return Content.managed(contentCatalog.current)
   }
   property int viewIndex: 0
   property string errorText: ""
+  onErrorTextChanged: {
+    if (errorText !== "") { statusText = ""; errorTimer.restart() }
+    else errorTimer.stop()
+  }
   property string statusText: ""
   property bool statusSticky: false   // a status that stays until replaced
   onStatusTextChanged: statusSticky = false
@@ -166,7 +183,9 @@ Item {
     return out
   }
 
-  property color foreground: Color.menu.text
+  property color surfaceColor: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
+  property color foreground: Readability.textColor(Color.menu.text, surfaceColor, 1)
+  readonly property color mutedForeground: Readability.textColor(foreground, surfaceColor, 0.72)
   property color accent: Color.accent
   property color scrim: Color.menu.scrim
   property string fontFamily: Style.font.menuFamily
@@ -288,20 +307,73 @@ Item {
     pollCatalog()
   }
 
-  function pollCatalog() { if (!catalogProc.running && root.catalogFailures < 3) catalogProc.running = true }
+  function pollCatalog() {
+    if (!root.opened || root.dismissing || catalogProc.running || root.catalogFailures >= 3) return
+    catalogProc.running = true
+    catalogTimeout.restart()
+  }
 
-  function sceneAction(action, name, workspace) {
+  function retryCatalog() {
+    root.catalogFailures = 0
+    pollCatalog()
+  }
+
+  function finishCatalog(text, stderr, code, status) {
+    catalogTimeout.stop()
+    if (!root.opened || root.dismissing) return
+    var doc = null
+    if (code === 0 && status === 0) {
+      try { doc = JSON.parse(String(text || "")) } catch (e) {}
+    }
+    if (!doc || typeof doc !== "object" || Array.isArray(doc) || !Array.isArray(doc.scenes) || !Array.isArray(doc.apps)) {
+      root.catalogFailures = (code === 126 || code === 127) ? 3 : root.catalogFailures + 1
+      root.catalogFailed = true
+      root.catalogError = (code === 0 && status === 0)
+        ? "The scene service returned an unreadable workspace catalog."
+        : ctlErrorMessage(stderr, code, status, "catalog")
+      return
+    }
+    root.catalogFailures = 0
+    root.catalogFailed = false
+    root.catalogError = ""
+    var old = root.contentCatalog ? root.contentCatalog.current : null
+    root.contentCatalog = doc
+    if (!root.busy) root.finishSceneFeedback(doc.current)
+    if (old && doc.current && (old.phase !== doc.current.phase || JSON.stringify(old.document) !== JSON.stringify(doc.current.document))) {
+      // A leased preview is not a persisted layout change.
+      root.sceneCommitOnRefresh = root.liveLayout === root.committedLayout
+      if (!currentProc.running) currentProc.running = true
+    }
+  }
+
+  function sceneAction(action, name, workspace, confirmed) {
+    if (root.busy) return
+    var target = workspace ? String(workspace) : root.workspaceId
+    var currentScene = root.contentCatalog ? root.contentCatalog.current : null
+    if (action === "apply" && confirmed !== true && target === root.workspaceId && Content.sceneModified(currentScene)) {
+      root.pendingSwitch = {sceneName: name, workspace: target, previousName: currentScene.document.name}
+      root.namingScene = false
+      root.selected = ""
+      root.focusKeys()
+      return
+    }
     var args = ["scene", action]
     if (name) args.push(name)
     args.push("--workspace", workspace ? String(workspace) : workspaceId, "--json")
-    var status = action === "apply" ? "Applying " + name + "…"
+    var status = action === "apply" ? "Using " + name + "…"
       : action === "restore" ? "Restoring the previous arrangement…"
       : action === "save" ? "Saving " + name + "…"
       : action === "remove" ? "Deleting " + name + "…"
       : action === "retry" ? "Checking the pending content…"
+      : action === "dismiss" ? "Dismissing the scene…"
       : "Updating the scene…"
-    var done = action === "save" ? "Saved " + name : action === "remove" ? "Deleted " + name : ""
+    var done = action === "save" ? "Saved " + name : action === "remove" ? "Deleted " + name
+      : action === "dismiss" ? "Scene dismissed; layout kept"
+      : action === "apply" ? "Using " + name
+      : action === "restore" ? "Previous arrangement restored"
+      : action === "retry" ? "Content checked" : ""
     if (runCtl(args, status, done)) {
+      if (["apply", "restore", "retry"].indexOf(action) !== -1) root.sceneFeedback = {done: done, operation: "", zone: ""}
       browseTimer.stop()
       commitOnRefresh = true
     }
@@ -330,10 +402,11 @@ Item {
 
   function assignContent(type, app) {
     if (!selected || !viewedIsActive) { errorText = "Select a zone in the current layout"; return }
-    var what = type === "empty" ? "Empty" : app ? app : "Local windows"
+    var what = type === "empty" ? "Empty" : app ? nameForClass(app, contentCatalog ? contentCatalog.apps : []) : "Local windows"
     var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", type, "--json"]
     if (app) args.push("--app-class", app)
-    runCtl(args, "Putting " + what + " in " + selected + "…", "")
+    if (runCtl(args, "Putting " + what + " in " + zoneLabel(selected) + "…", "Content update requested"))
+      root.sceneFeedback = {done: "Put " + what + " in " + zoneLabel(selected), operation: "", zone: selected}
   }
 
   function assignApp(app) {
@@ -341,7 +414,15 @@ Item {
     var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", "app",
       "--desktop-id", app.desktop_id, "--app-class", app.app_class, "--json"]
     if (app.app_title) args.push("--app-title", app.app_title)
-    runCtl(args, "Opening " + app.name + " in " + selected + "…", "")
+    if (runCtl(args, "Opening " + app.name + " in " + zoneLabel(selected) + "…", "App placement requested"))
+      root.sceneFeedback = {done: "Put " + app.name + " in " + zoneLabel(selected), operation: "", zone: selected}
+  }
+
+  function pressContentCanvas(name, button) {
+    if (button !== Qt.LeftButton) return
+    if (name !== "") { root.selected = name; return }
+    if (root.selected !== "") root.selected = ""
+    else root.dismiss()
   }
 
   function selectContentNeighbor(dir) {
@@ -386,6 +467,7 @@ Item {
   // ------------------------------------------------------------- lifecycle
 
   function open(payloadJson) {
+    root.dismissing = false
     root.opened = true
     root.errorText = ""
     root.statusText = ""
@@ -394,6 +476,7 @@ Item {
     root.browseTarget = ""
     root.browseLaunched = ""
     root.commitOnRefresh = false
+    root.sceneCommitOnRefresh = false
     root.dismissAfterApply = false
     root.choosingNew = false
     root.peeking = false
@@ -403,6 +486,9 @@ Item {
   }
 
   function close() {
+    root.dismissing = true
+    root.pendingSwitch = null
+    root.sceneFeedback = null
     revertBrowse()
     root.opened = false
     root.editing = false
@@ -415,6 +501,10 @@ Item {
   }
 
   function dismiss() {
+    root.dismissing = true
+    root.pendingSwitch = null
+    root.sceneFeedback = null
+    revertBrowse()
     if (root.shell && typeof root.shell.hide === "function")
       root.shell.hide((root.manifest && root.manifest.id) || "jmartin.hypertile")
     else close()
@@ -427,7 +517,7 @@ Item {
     workspacesProc.running = true
     windowsProc.running = true
     defaultProc.running = true
-    pollCatalog()
+    retryCatalog()
   }
 
   function parseJson(text, what) {
@@ -472,13 +562,15 @@ Item {
   property string browseLaunched: ""    // what the running switch is going to
   property string browseToken: ""       // controller lease for a workspace with assigned content
   property bool commitOnRefresh: false
+  property bool sceneCommitOnRefresh: false
   property bool dismissAfterApply: false
 
   function browseTo(layout) {
     if (layout === "" || root.workspaceId === "") return
-    if (root.contentMode || (root.contentCatalog === null && !root.catalogFailed)) return
+    if (root.contentMode) return
+    // The layout list may arrive before the scene catalog. Remember the
+    // latest selection while waiting to learn whether it needs a lease.
     root.browseTarget = layout
-    root.liveLayout = layout
     runBrowse()
   }
 
@@ -492,8 +584,11 @@ Item {
   }
 
   function runBrowse() {
+    if (!root.opened || root.dismissing || root.editing || root.contentMode) return
+    if (root.contentCatalog === null && !root.catalogFailed) return
     if (browseProc.running || root.browseTarget === "" || root.browseTarget === root.browseLaunched) return
     root.browseLaunched = root.browseTarget
+    root.liveLayout = root.browseTarget
     browseProc.command = browseArgs(root.browseTarget)
     browseProc.running = true
   }
@@ -503,6 +598,9 @@ Item {
   // killed with the overlay.
   function revertBrowse() {
     browseTimer.stop()
+    // Cancel a selection still waiting for the catalog, even if no preview
+    // has moved the workspace yet.
+    root.browseTarget = root.committedLayout
     if (root.browseToken !== "") {
       var token = root.browseToken
       root.browseToken = ""
@@ -525,22 +623,37 @@ Item {
     onTriggered: if (!root.editing && root.viewed) root.browseTo("lua:" + root.viewed.name)
   }
 
-  // A hypertile-ctl run whose stderr, if any, becomes the toast's error.
+  // Process completion owns feedback so successful stderr is never an error,
+  // and every action receives its result after that feedback is set.
   component CtlProcess: Process {
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.reportCtlError(text)
+    id: process
+    property bool clearsError: true
+    signal finished(int code, int status)
+    stderr: StdioCollector { id: processErrors; waitForEnd: true }
+    onExited: function(code, status) {
+      root.reportCtlResult(processErrors.text, code, status, command[1], clearsError)
+      finished(code, status)
     }
   }
 
-  function reportCtlError(text) {
-    var t = String(text || "").trim()
-    if (t !== "") root.errorText = t.replace(/^hypertile-ctl: /, "")
+  function ctlErrorMessage(text, code, status, action) {
+    if (code === 126 || code === 127) return root.missingCtlText
+    var t = String(text || "").trim().replace(/^hypertile-ctl: /, "")
+    if (/Wait for the scene to finish/i.test(t)) return "The scene is still getting ready. Try again shortly."
+    var message = action === "current" ? "Could not read the workspace. Check that Hyprland is running."
+      : action === "catalog" ? "The scene service is unavailable."
+      : "Could not complete the action."
+    return message + (t !== "" ? "\nDetails: " + t : "")
+  }
+
+  function reportCtlResult(text, code, status, action, clearsError) {
+    if (code !== 0 || status !== 0) root.errorText = ctlErrorMessage(text, code, status, action)
+    else if (clearsError) root.errorText = ""
   }
 
   CtlProcess {
     id: browseProc
-    onExited: Qt.callLater(root.runBrowse)
+    onFinished: Qt.callLater(root.runBrowse)
   }
 
   readonly property bool viewedIsDefault: viewed !== null && defaultLayout === "lua:" + viewed.name
@@ -609,10 +722,30 @@ Item {
   }
 
   // One hypertile-ctl call at a time; false when one is already running.
+  property var sceneFeedback: null
+  function finishSceneFeedback(record) {
+    var feedback = root.sceneFeedback
+    if (!feedback || !record || !feedback.operation || record.operation !== feedback.operation) return
+    var message = Content.actionFeedback(record, feedback.done, feedback.zone)
+    root.statusText = message
+    if (["ready", "restored", "partial", "needs-attention"].indexOf(record.phase) !== -1) root.sceneFeedback = null
+  }
+  function acceptSceneAction(text) {
+    if (!root.sceneFeedback) return
+    var record = null
+    try { record = JSON.parse(text) } catch (e) {}
+    root.statusText = "Scene update requested"
+    if (!record || !record.operation) { root.sceneFeedback = null; return }
+    root.sceneFeedback.operation = record.operation
+    root.finishSceneFeedback(record)
+  }
   property string ctlDone: ""
   function runCtl(args, status, done) {
     if (root.busy) return false
     root.busy = true
+    root.pendingSwitch = null
+    root.sceneFeedback = null
+    root.errorText = ""
     root.statusText = status
     root.ctlDone = done === undefined ? "" : done
     ctlProc.command = [root.ctl].concat(args)
@@ -632,21 +765,23 @@ Item {
     root.dismissAfterApply = andClose === true
   }
 
-  function applyTo(workspace) {
-    if (!root.viewed) return
+  function applyTo(workspace, layoutName) {
+    layoutName = layoutName || root.applyQueueLayout || (root.viewed ? root.viewed.name : "")
+    if (!layoutName) return
     workspace = String(workspace)
     if (contentWorkspace(workspace)) {
-      if (!root.switchConfirmed) { askSwitch([workspace], false); return }
+      if (!root.switchConfirmed) { askSwitch([workspace], false, layoutName); return }
       // The controller replaces the content along with the layout.
-      if (runCtl(["scene", "layout", root.viewed.name, "--workspace", workspace, "--json"], "Switching workspace " + workspace + " to " + root.viewed.name + "…", "Workspace " + workspace + " uses " + root.viewed.name)
+      if (runCtl(["scene", "layout", layoutName, "--workspace", workspace, "--json"], "Switching workspace " + workspace + " to " + layoutName + "…", "Workspace " + workspace + " uses " + layoutName)
           && workspace === root.workspaceId) root.commitOnRefresh = true
       return
     }
-    runCtl(["apply", root.viewed.name, "--workspace", workspace, "--quiet"], "Using " + root.viewed.name + " on workspace " + workspace + "…", "Workspace " + workspace + " uses " + root.viewed.name)
+    runCtl(["apply", layoutName, "--workspace", workspace, "--quiet"], "Using " + layoutName + " on workspace " + workspace + "…", "Workspace " + workspace + " uses " + layoutName)
   }
 
   // Whether a workspace has content assigned to zones (a scene).
   function contentWorkspace(workspace) {
+    if (String(workspace) === root.workspaceId && root.managedContent) return true
     if (!root.contentCatalog) return false
     if ((root.contentCatalog.active_workspaces || []).indexOf(workspace) !== -1) return true
     return false
@@ -654,16 +789,18 @@ Item {
 
   // Using another layout on a workspace with assigned content replaces the
   // content (apps stay open), so it is asked about first.
-  function askSwitch(workspaces, close) {
+  function askSwitch(workspaces, close, layoutName) {
     root.applyQueue = []
     root.confirmingDelete = false
     root.choosingNew = false
-    root.pendingSwitch = { workspaces: workspaces.map(String), close: close === true }
+    root.pendingSwitch = { workspaces: workspaces.map(String), close: close === true,
+      layoutName: layoutName || (root.viewed ? root.viewed.name : "") }
   }
 
   function switchSummary() {
     var p = root.pendingSwitch
     if (!p) return ""
+    if (p.sceneName) return "The changes to " + p.previousName + " are not saved. Using " + p.sceneName + " replaces this workspace's arrangement; apps stay open. Cancel and save the scene first to keep those changes."
     var managed = p.workspaces.filter(function(w) { return contentWorkspace(w) })
     var s = managed.length === 1 ? "Workspace " + managed[0] + " has content assigned to its zones. " : "Workspaces " + managed.join(", ") + " have content assigned to their zones. "
     s += "Every zone goes back to local windows; apps stay open."
@@ -672,12 +809,19 @@ Item {
 
   function confirmSwitch() {
     var p = root.pendingSwitch
-    if (!p || !root.viewed || root.busy) return
+    if (!p || root.busy) return
+    if (p.sceneName) {
+      root.pendingSwitch = null
+      root.sceneAction("apply", p.sceneName, p.workspace, true)
+      return
+    }
+    if (!p.layoutName) return
     root.pendingSwitch = null
     root.switchConfirmed = true
+    root.applyQueueLayout = p.layoutName
     if (p.close) {
       browseTimer.stop()
-      if (!runCtl(["scene", "layout", root.viewed.name, "--workspace", root.workspaceId, "--json"], "Switching to " + root.viewed.name + "…", "Now using " + root.viewed.name)) { root.switchConfirmed = false; return }
+      if (!runCtl(["scene", "layout", p.layoutName, "--workspace", root.workspaceId, "--json"], "Switching to " + p.layoutName + "…", "Now using " + p.layoutName)) { root.switchConfirmed = false; return }
       root.commitOnRefresh = true
       root.dismissAfterApply = true
       return
@@ -688,6 +832,7 @@ Item {
 
   // Every existing workspace on a monitor, one apply per workspace.
   property var applyQueue: []
+  property string applyQueueLayout: ""
   function applyMonitor(monitor) {
     if (!root.viewed) return
     var ids = []
@@ -948,7 +1093,7 @@ Item {
 
   function doPreview() {
     if (!root.editing || !root.draft || root.workspaceId === "") return
-    if (root.managedContent) { root.statusText = "Assigned content stays in place while editing. Changes take effect when saved."; return }
+    if (root.managedContent) return
     if (previewProc.running) { root.previewPending = true; return }
     editFile.setText(docJson())
   }
@@ -971,9 +1116,7 @@ Item {
   CtlProcess {
     id: previewProc
     command: [root.ctl, "preview", editFile.path, "--workspace", root.workspaceId]
-    onExited: function(code) {
-      // A preview that goes through clears the error a bad edit left behind.
-      if (code === 0) root.errorText = ""
+    onFinished: function(code, status) {
       if (root.previewPending) {
         root.previewPending = false
         Qt.callLater(root.doPreview)
@@ -1008,7 +1151,7 @@ Item {
     if (!root.editing || root.busy) return
     name = String(name || "").trim()
     if (!Editor.validName(name)) { root.errorText = "Name: letters, digits, _ and - only"; return }
-    if ((!root.viewed || name !== root.viewed.name) && layoutNameTaken(name)) { root.errorText = "A layout called " + name + " already exists"; return }
+    if ((root.draftIsNew || !root.viewed || name !== root.viewed.name) && layoutNameTaken(name)) { root.errorText = "A layout called " + name + " already exists"; return }
     root.errorText = ""
     root.draftName = name
     root.naming = false
@@ -1034,20 +1177,28 @@ Item {
   CtlProcess {
     id: saveProc
     command: [root.ctl, "save", saveFile.path]
-    onExited: function(code) {
-      root.busy = false
-      if (code !== 0) { root.statusText = ""; return }
-      root.editing = false
-      root.numbering = false
-      root.naming = false
-      root.pickerOpen = false
-      root.confirmingDiscard = false
-      root.dirty = false
-      root.pendingView = root.draftName
-      // The reload dropped the preview rule; put this workspace on the saved layout.
-      root.commitOnRefresh = true
-      runCtl(["apply", root.draftName, "--quiet"], "Saved " + root.draftName, "Saved " + root.draftName)
+    onFinished: function(code, status) { root.finishSave(code, status) }
+  }
+
+  function finishSave(code, status) {
+    root.busy = false
+    if (code !== 0 || status !== 0) { root.statusText = ""; return }
+    root.editing = false
+    root.numbering = false
+    root.naming = false
+    root.pickerOpen = false
+    root.confirmingDiscard = false
+    root.dirty = false
+    root.pendingView = root.draftName
+    if (root.managedContent && "lua:" + root.draftName !== root.committedLayout) {
+      root.statusText = "Saved " + root.draftName + ". Choose Use to replace assigned content."
+      askSwitch([root.workspaceId], false, root.draftName)
+      refresh()
+      return
     }
+    // The reload dropped the preview rule; put this workspace on the saved layout.
+    root.commitOnRefresh = true
+    runCtl(["apply", root.draftName, "--quiet"], "Saved " + root.draftName, "Saved " + root.draftName)
   }
 
   // Drop the draft. An existing layout previews its saved spec back (one
@@ -1061,6 +1212,9 @@ Item {
     root.naming = false
     root.pickerOpen = false
     if (!root.dirty) { leaveEdit(""); return }
+    // Managed workspaces never previewed the draft, so there is no runtime
+    // change to undo and no reason to send a preview on the way out.
+    if (root.managedContent) { leaveEdit("Changes discarded"); return }
     if (root.draftIsNew || !root.viewed || !root.viewed.spec) {
       var back = root.committedLayout !== "" ? root.committedLayout : (root.viewed ? "lua:" + root.viewed.name : "")
       if (back === "" || root.workspaceId === "") { leaveEdit("Changes discarded"); return }
@@ -1100,56 +1254,57 @@ Item {
 
   CtlProcess {
     id: revertProc
-    onExited: root.leaveEdit("Changes discarded")
+    onFinished: root.leaveEdit("Changes discarded")
   }
 
   // ---------------------------------------------------------- processes
 
-  CtlProcess {
-    id: currentProc
-    command: [root.ctl, "current", "--json"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var doc = root.parseJson(text, "current --json")
-        if (doc) root.current = doc
-        // The compositor's answer is the truth about the live layout, unless
-        // a browse switch is in flight and about to change it.
-        var layout = (doc && doc.workspace) ? String(doc.workspace.layout || "") : ""
-        if (layout !== "") {
-          if (root.committedLayout === "" || root.commitOnRefresh) root.committedLayout = layout
-          root.commitOnRefresh = false
-          if (!browseProc.running) { root.liveLayout = layout; root.browseTarget = layout; root.browseLaunched = layout }
-        }
-        listProc.running = true
+  function acceptCurrent(text) {
+    var doc = root.parseJson(text, "current --json")
+    if (doc) root.current = doc
+    var layout = (doc && doc.workspace) ? String(doc.workspace.layout || "") : ""
+    if (layout !== "") {
+      var idleBrowse = !browseProc.running && !browseTimer.running && root.browseToken === ""
+        && root.browseTarget === root.browseLaunched && root.liveLayout === root.committedLayout
+      if (root.committedLayout === "" || root.commitOnRefresh || (root.sceneCommitOnRefresh && idleBrowse)) root.committedLayout = layout
+      root.commitOnRefresh = false
+      root.sceneCommitOnRefresh = false
+      if (!browseProc.running && !browseTimer.running && root.browseTarget === root.browseLaunched) {
+        root.liveLayout = layout
+        root.browseTarget = layout
+        root.browseLaunched = layout
       }
     }
-    // The plugin can be added (omarchy plugin add) without the engine and the
-    // CLI being installed yet; a start failure here is that, not a bug.
-    onExited: function(code, status) {
-      if (status !== 0 || code < 0 || code >= 126 || (code !== 0 && root.errorText === "")) root.errorText = root.missingCtlText
-    }
+    listProc.running = true
+  }
+
+  CtlProcess {
+    id: currentProc
+    clearsError: false
+    command: [root.ctl, "current", "--json"]
+    stdout: StdioCollector { id: currentOutput; waitForEnd: true }
+    onFinished: function(code, status) { if (code === 0 && status === 0) root.acceptCurrent(currentOutput.text) }
+  }
+
+  function acceptLayouts(text) {
+    var doc = root.parseJson(text, "list --json")
+    if (!doc || !Array.isArray(doc.layouts)) return
+    var chosen = root.pendingView || (root.viewed ? root.viewed.name : "")
+    var ok = []
+    for (var i = 0; i < doc.layouts.length; i++) if (doc.layouts[i].spec) ok.push(doc.layouts[i])
+    root.layouts = ok
+    for (var p = 0; p < ok.length; p++) if (ok[p].name === chosen) root.viewIndex = p
+    if (!root.editing && root.pendingView === "" && !browseTimer.running && root.browseTarget === root.committedLayout) root.selectActive()
+    root.pendingView = ""
+    if (ok.length === 0) { root.statusText = "No layouts yet. Press n to make one."; root.statusSticky = true }
   }
 
   CtlProcess {
     id: listProc
+    clearsError: false
     command: [root.ctl, "list", "--json"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var doc = root.parseJson(text, "list --json")
-        if (!doc || !Array.isArray(doc.layouts)) return
-        var ok = []
-        for (var i = 0; i < doc.layouts.length; i++) if (doc.layouts[i].spec) ok.push(doc.layouts[i])
-        root.layouts = ok
-        if (!root.editing) root.selectActive()
-        if (root.pendingView !== "") {
-          for (var p = 0; p < ok.length; p++) if (ok[p].name === root.pendingView) root.viewIndex = p
-          root.pendingView = ""
-        }
-        if (ok.length === 0) { root.statusText = "No layouts yet. Press n to make one."; root.statusSticky = true }
-      }
-    }
+    stdout: StdioCollector { id: listOutput; waitForEnd: true }
+    onFinished: function(code, status) { if (code === 0 && status === 0) root.acceptLayouts(listOutput.text) }
   }
 
   Process {
@@ -1192,40 +1347,31 @@ Item {
   // tab says so, and nothing else is affected.
   Process {
     id: catalogProc
+    property bool timedOut: false
     command: [root.ctl, "scene", "catalog", "--json"].concat(root.workspaceId ? ["--workspace", root.workspaceId] : [])
       .concat(root.browseToken ? ["--browse-token", root.browseToken] : [])
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var doc = null
-        try { doc = JSON.parse(String(text || "")) } catch (e) { return }
-        if (!doc || typeof doc !== "object") return
-        root.catalogFailures = 0
-        root.catalogFailed = false
-        root.catalogError = ""
-        var old = root.contentCatalog ? root.contentCatalog.current : null
-        root.contentCatalog = doc
-        if (old && doc.current && (old.phase !== doc.current.phase || JSON.stringify(old.document) !== JSON.stringify(doc.current.document))) {
-          root.commitOnRefresh = true
-          if (!currentProc.running) currentProc.running = true
-        }
-      }
-    }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.catalogError = String(text || "").trim().replace(/^hypertile-ctl: /, "")
-    }
+    stdout: StdioCollector { id: catalogOutput; waitForEnd: true }
+    stderr: StdioCollector { id: catalogErrors; waitForEnd: true }
+    onStarted: timedOut = false
     onExited: function(code, status) {
-      if (code === 0 && status === 0) return
-      root.catalogFailures = (code === 126 || code === 127) ? 3 : root.catalogFailures + 1
-      if (root.catalogFailures >= 3) root.catalogFailed = true
+      if (!timedOut) root.finishCatalog(catalogOutput.text, catalogErrors.text, code, status)
+    }
+  }
+
+  Timer {
+    id: catalogTimeout
+    interval: 5000
+    onTriggered: {
+      catalogProc.timedOut = true
+      catalogProc.running = false
+      root.finishCatalog("", "Timed out waiting for the workspace catalog. Try again.", 1, 0)
     }
   }
 
   Timer {
     interval: 2000
     repeat: true
-    running: root.opened && root.catalogFailures < 3
+    running: root.opened && !root.dismissing && root.catalogFailures < 3
     onTriggered: root.pollCatalog()
   }
 
@@ -1233,18 +1379,22 @@ Item {
   // refreshes when done.
   CtlProcess {
     id: ctlProc
-    stdout: StdioCollector { waitForEnd: true }
-    onExited: function(code) {
+    stdout: StdioCollector { id: ctlOutput; waitForEnd: true }
+    onFinished: function(code, status) {
+      sessionReader.refresh()
       root.busy = false
-      if (code !== 0) {
+      if (code !== 0 || status !== 0) {
+        root.sceneFeedback = null
         root.commitOnRefresh = false
         root.dismissAfterApply = false
         root.applyQueue = []
+        root.applyQueueLayout = ""
         root.switchConfirmed = false
         root.statusText = ""
         return
       }
       root.statusText = root.ctlDone
+      root.acceptSceneAction(ctlOutput.text)
       if (root.applyQueue.length > 0) {
         var next = root.applyQueue.slice()
         var id = next.shift()
@@ -1256,13 +1406,20 @@ Item {
       if (root.dismissAfterApply) {
         // The switch is persisted now: closing must not revert it.
         root.dismissAfterApply = false
-        if (root.viewed) root.committedLayout = "lua:" + root.viewed.name
+        if (root.applyQueueLayout || root.viewed) root.committedLayout = "lua:" + (root.applyQueueLayout || root.viewed.name)
         root.liveLayout = root.committedLayout
         root.dismiss()
         return
       }
+      root.applyQueueLayout = ""
       root.refresh()
     }
+  }
+
+  Timer {
+    id: errorTimer
+    interval: 6000
+    onTriggered: root.errorText = ""
   }
 
   Timer {
@@ -1290,6 +1447,8 @@ Item {
     }
 
     if (k === Qt.Key_Question || (shift && k === Qt.Key_Slash)) { setPref("showKeys", !root.showKeys); return true }
+
+    if (root.contentMode && !root.editing && !root.pendingSwitch && root.selected === "" && rail.handleSceneKey(event)) return true
 
     if (k === Qt.Key_Escape) {
       if (root.pendingSwitch) { root.pendingSwitch = null; return true }
@@ -1366,7 +1525,7 @@ Item {
         : (k === Qt.Key_Up || (plain && k === Qt.Key_K)) ? "up"
         : (k === Qt.Key_Down || (plain && k === Qt.Key_J)) ? "down" : ""
       if (dir !== "" && (k === Qt.Key_Left || k === Qt.Key_Right || k === Qt.Key_Up || k === Qt.Key_Down)) { selectContentNeighbor(dir); return true }
-      if (plain && k >= Qt.Key_1 && k <= Qt.Key_9) { selectContentNumber(k - Qt.Key_0); return true }
+      if (plain && rail.searchText === "" && k >= Qt.Key_1 && k <= Qt.Key_9) { selectContentNumber(k - Qt.Key_0); return true }
       // A printable key with a zone selected starts a search in the
       // picker, wherever the focus was (after a save, a click on chrome).
       if (plain && root.selected !== "" && root.viewedIsActive && event.text.length === 1 && event.text.trim() !== "") { rail.typeSearch(event.text); return true }
@@ -1438,6 +1597,7 @@ Item {
         id: keys
         anchors.fill: parent
         focus: true
+        onActiveFocusChanged: if (!activeFocus) root.peeking = false
         Keys.onPressed: function(event) { if (root.handleKey(event)) event.accepted = true }
         Keys.onReleased: function(event) { if (root.handleKeyRelease(event)) event.accepted = true }
       }
@@ -1480,7 +1640,7 @@ Item {
           if (root.naming) root.naming = false
           if (root.renaming) root.renaming = false
           if (!root.editing) {
-            if (root.contentMode) { root.selected = zoneAt(mouse.x, mouse.y); return }
+            if (root.contentMode) { root.pressContentCanvas(zoneAt(mouse.x, mouse.y), mouse.button); return }
             if (mouse.button === Qt.LeftButton) root.dismiss()
             return
           }
@@ -1560,11 +1720,13 @@ Item {
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottomMargin: window.edgeBottom
-        width: toastText.implicitWidth + root.uiPad * 2
+        width: Math.min(toastText.implicitWidth + root.uiPad * 2, window.width - window.edgeLeft - window.edgeRight)
         height: toastText.implicitHeight + root.uiPad * 1.2
         urgent: root.errorText !== ""
         Text {
           id: toastText
+          width: Math.min(implicitWidth, toast.width - root.uiPad * 2)
+          wrapMode: Text.Wrap
           anchors.centerIn: parent
           textFormat: Text.PlainText
           text: toast.shown

@@ -29,12 +29,21 @@ assert.strictEqual(C.sceneMeta({ phase: "ready" }, "quad", "1"), "quad  ·  work
 assert.strictEqual(C.sceneMeta({ phase: "none" }, "quad", "1"), "quad  ·  local windows in every zone")
 assert.strictEqual(C.sceneMeta({ phase: "restored" }, "quad", "1"), "quad  ·  Previous arrangement restored")
 assert.strictEqual(C.sceneMeta(null, "", ""), "")
+assert.strictEqual(C.managed(null), false)
+assert.strictEqual(C.managed({phase: "none"}), false)
+assert.strictEqual(C.managed({phase: "restored"}), false)
+assert.strictEqual(C.managed({phase: "waiting-session"}), false)
+assert.strictEqual(C.managed({phase: "needs-attention"}), true)
+assert.strictEqual(C.managed({phase: "ready"}), true)
+assert.match(C.sceneMeta({phase: "needs-attention", deleted: true}, "quad", "1"), /Deleted scene/)
+assert.match(C.retrySummary({sources: []}), /opens no apps/)
+assert.match(C.retrySummary({sources: [{type: "app", app_name: "MacBook"}, {type: "local", app_class: "foot"}]}), /opens or reuses MacBook\./)
 const placing = { phase: "connecting", sources: [
   { type: "app", zone: "a", status: "ready" }, { type: "app", zone: "b", status: "waiting-window" },
   { type: "local", zone: "c", app_class: "x", status: "needs-attention" }, { type: "local", zone: "d" }, { type: "empty", zone: "e" }] }
 assert.strictEqual(C.sceneProgress(placing), "1 of 3 placed  ·  1 needs attention")
 assert.strictEqual(C.sceneMeta(placing, "quad", "1"), "quad  ·  workspace 1  ·  1 of 3 placed  ·  1 needs attention")
-assert.strictEqual(C.sceneProgress({ phase: "layout", sources: placing.sources }), "Applying layout…")
+assert.strictEqual(C.sceneProgress({ phase: "layout", sources: placing.sources }), "Using layout…")
 assert.strictEqual(C.sceneProgress({ phase: "ready", sources: [] }), "Ready")
 // Scene cards and the picker.
 assert.strictEqual(JSON.stringify(C.appNames([{ type: "app", app_name: "MacBook (Remote Desktop)" }, { type: "local", app_class: "foot" }, { type: "empty" }, { type: "local" }])), '["MacBook","foot"]')
@@ -86,3 +95,9 @@ assert.strictEqual(C.positionLabel({ x: 2000, y: 900, w: 2000, h: 800 }, area), 
 const four = [{ name: "a", x: 10, y: 40, w: 1531, h: 2510 }, { name: "b", x: 1541, y: 40, w: 1531, h: 2510 }, { name: "c", x: 3072, y: 40, w: 1531, h: 2510 }, { name: "d", x: 4603, y: 40, w: 1531, h: 2510 }]
 assert.strictEqual(JSON.stringify(C.positionLabels(four, area)), JSON.stringify({ a: "Left", b: "", c: "", d: "Right" }))
 assert.strictEqual(JSON.stringify(C.positionLabels(quad, null)), "{}")
+
+assert.equal(C.actionFeedback({phase: "connecting"}, "Put Chrome in Top left", "left"), "Placing apps…")
+assert.equal(C.actionFeedback({phase: "partial"}, "Using work", ""), "Some content needs attention")
+assert.equal(C.actionFeedback({phase: "ready", sources: [{zone: "left", status: "moved"}]}, "Put Chrome in Top left", "left"), "Moved")
+assert.equal(C.actionFeedback({phase: "ready", sources: [{zone: "left", status: "ready"}]}, "Put Chrome in Top left", "left"), "Put Chrome in Top left")
+assert.equal(C.actionFeedback({phase: "restored"}, "Previous arrangement restored", ""), "Previous arrangement restored")

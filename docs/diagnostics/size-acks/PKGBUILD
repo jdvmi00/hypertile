@@ -1,5 +1,5 @@
-# Local size-ack backport; based on Arch packaging tag 0.56.2-1.
-# https://gitlab.archlinux.org/archlinux/packaging/packages/hyprland/-/blob/0.56.2-1/PKGBUILD
+# Local size-ack backport; based on Arch packaging tag 0.56.2-2.
+# https://gitlab.archlinux.org/archlinux/packaging/packages/hyprland/-/blob/0.56.2-2/PKGBUILD
 # Maintainer: Caleb Maclennan <caleb@alerque.com>
 # Contributor: ThatOneCalculator <kainoa@t1c.dev>
 # Contributor: Brenno Lemos <brenno@syndel.is>
@@ -7,7 +7,7 @@
 
 pkgname=hyprland
 pkgver=0.56.2
-pkgrel=1.1
+pkgrel=2.1
 options=(!debug !lto) # Local build: no split debug package or link-time optimization.
 pkgdesc='Hyprland with the Hypertile size-ack bookkeeping backport'
 arch=(x86_64 aarch64)
@@ -85,6 +85,7 @@ prepare() {
 	python3 "$srcdir/verify.py" "$PWD"
 	patch --batch --forward --fuzz=0 -p1 < "$srcdir/hyprland-0.56.2.patch"
 	sed -i -e '/^release:/{n;s/-D/-DCMAKE_SKIP_RPATH=ON -D/}' Makefile
+	sed -i -e '/find_package.glaze/s/7...<8 //' {.,hyprpm,start}/CMakeLists.txt
 }
 
 build() {

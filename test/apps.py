@@ -119,6 +119,56 @@ class AppTests(unittest.TestCase):
         self.assertNotIn("Placeholder", [a["name"] for a in self.command("catalog")["apps"]])
         self.assertFalse(self.desktop.launched)
 
+    def test_zone_rename_preserves_ready_app_without_relaunch_or_replacement(self):
+        window = self.window()
+        self.start()
+        self.layouts.entries[0]["spec"]["columns"][1]["name"] = "renamed"
+        self.layouts.entries[0]["spec"]["fill"][1] = "renamed"
+        self.tick()  # Schedule reconciliation; a catalog may arrive in between.
+        self.assertEqual(self.command("current")["sources"][0]["status"], "ready")
+        captured = scene_recovery.capture(self.comp.snapshot())
+        self.assertEqual(captured["scenes"][0]["document"]["sources"]["z-right"]["zone"], "renamed")
+        self.assertFalse(captured["windows"], "a queued remap must not drop the app into normal recovery")
+        self.ctl = self.controller()  # The preserved intent survives a writer restart.
+        self.ctl.scenes.apps.desktop = self.desktop
+        original = self.comp.call
+        def remap(method, args):
+            if method == "scene_clear":
+                self.fail("Reconciliation must not clear app ownership in a separate call")
+            result = original(method, args)
+            if method == "scene_content_apply":
+                self.assertEqual(args["preserve_apps"], {"z-right": "right"})
+                window["pin"] = "renamed"  # The adapter's atomic transfer is tested in scenes.lua.
+            return result
+        with patch.object(self.comp, "call", side_effect=remap):
+            self.tick(3)
+        self.assertEqual(self.command("current")["phase"], "ready")
+        self.assertEqual(self.command("current")["sources"][0]["status"], "ready")
+        self.assertEqual(window["pin"], "renamed")
+        self.assertEqual(len(self.placements()), 1)
+        self.assertFalse(self.desktop.launched)
+
+    def test_reconciliation_does_not_relaunch_closed_or_move_departed_apps(self):
+        for change in ("closed", "moved", "floating", "pin"):
+            with self.subTest(change=change):
+                self.comp.desktop["windows"].clear()
+                window = self.window()
+                if not self.ctl.scenes.path("work").exists(): self.save()
+                self.command("apply", name="work")
+                self.tick()
+                if change == "closed": self.comp.desktop["windows"].clear()
+                elif change == "moved": window["workspace"] = "2"
+                elif change == "floating": window["floating"] = True
+                else: window["pin"] = "left"
+                leaf = self.layouts.entries[0]["spec"]["columns"][1]
+                leaf["name"] = "renamed-" + change
+                self.layouts.entries[0]["spec"]["fill"][1] = leaf["name"]
+                before = len(self.placements())
+                self.tick(3)
+                self.assertEqual(len(self.placements()), before)
+                self.assertFalse(self.desktop.launched)
+                self.assertEqual(self.command("current")["sources"][0]["status"], "closed" if change == "closed" else "moved")
+
     def test_standalone_service_does_not_take_stream_lock_or_read_computers(self):
         legacy = self.root / "hypertile/streams"
         legacy.mkdir()
@@ -335,6 +385,74 @@ class AppTests(unittest.TestCase):
                 with (root / "writer.lock").open("a") as competing:
                     with self.assertRaises(BlockingIOError):
                         fcntl.flock(competing, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                request(runtime, {"command": "stop"}, timeout=1)
+                proc.join(3)
+                self.assertEqual(proc.exitcode, 0)
+            finally:
+                if proc.is_alive():
+                    proc.terminate()
+                    proc.join(3)
+
+    def test_dismiss_stops_late_app_placement_and_keeps_saved_scene(self):
+        self.start()
+        saved = (self.ctl.scenes.path("work")).read_bytes()
+        self.ctl.scenes.records["1"]["phase"] = "needs-attention"
+        self.command("dismiss")
+        self.window()
+        self.tick(3)
+        self.assertEqual(self.placements(), [])
+        self.assertEqual(self.desktop.launched, [self.desktop_file.name])
+        self.assertEqual((self.ctl.scenes.path("work")).read_bytes(), saved)
+        self.assertEqual(len(self.comp.desktop["windows"]), 1)
+
+    def test_retried_session_delivery_does_not_restart_accepted_placement(self):
+        self.save()
+        refs = [{"workspace": "1", "document": self.command("show", name="work")}]
+        self.ctl.command({"command": "session-restore", "scenes": refs})
+        self.tick(3)
+        operation = self.ctl.scenes.records["1"]["operation"]
+        self.ctl.command({"command": "session-restore", "scenes": refs})
+        self.tick(3)
+        self.assertEqual(self.ctl.scenes.records["1"]["operation"], operation)
+        self.assertEqual(self.desktop.launched, [self.desktop_file.name])
+        self.window()
+        self.tick()
+        self.ctl.command({"command": "session-restore", "scenes": refs})
+        self.tick()
+        self.assertEqual(len(self.placements()), 1)
+
+    def test_daemon_survives_a_failing_tick_and_reports_it(self):
+        root, runtime = self.root / "ipc/scenes", self.root / "ipc/runtime"
+        class Flaky(SceneController):
+            failures = 2
+            def tick(self):
+                if Flaky.failures:
+                    Flaky.failures -= 1
+                    raise RuntimeError("injected compositor outage")
+                super().tick()
+        with patch.dict(os.environ, HYPRLAND_INSTANCE_SIGNATURE="fake-scenes"):
+            proc = multiprocessing.get_context("fork").Process(target=daemon, args=(root, runtime, self.ctl.config, Flaky))
+            proc.start()
+            try:
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        status = request(runtime, {"command": "status"}, timeout=.2)
+                        if status.get("error"):
+                            break
+                    except (OSError, ValueError):
+                        pass
+                    time.sleep(.02)
+                else:
+                    self.fail("the failing tick was not reported")
+                self.assertEqual(status["error"], "injected compositor outage")
+                # Scene commands force a tick each; once the outage is over the
+                # tick succeeds and the error clears.
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline and request(runtime, {"command": "status"}, timeout=1).get("error"):
+                    request(runtime, {"command": "scene", "action": "list"}, timeout=1)
+                    time.sleep(.02)
+                self.assertIsNone(request(runtime, {"command": "status"}, timeout=1)["error"])
                 request(runtime, {"command": "stop"}, timeout=1)
                 proc.join(3)
                 self.assertEqual(proc.exitcode, 0)

@@ -57,6 +57,12 @@ class SessionTests(unittest.TestCase):
         self.addCleanup(self.directory.cleanup)
         self.root = Path(self.directory.name)
         self.store = Store(self.root)
+        env = patch.dict(os.environ, XDG_STATE_HOME=str(self.root), XDG_RUNTIME_DIR=str(self.root))
+        env.start()
+        self.addCleanup(env.stop)
+        notification = patch("service.notify")
+        notification.start()
+        self.addCleanup(notification.stop)
 
     def test_interrupted_publish_and_corrupt_latest_preserve_previous(self):
         first, second = record(window("1")), record(window("2"))
@@ -202,9 +208,9 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(recovery.tick(5), "complete")
         self.assertIn("workspace 1: window order not restored", recovery.report()["limitations"])
 
-    def test_power_action_proceeds_and_warns_when_the_service_is_down(self):
+    def power_action(self, command="logout"):
         fake_bin = self.root / "bin"
-        fake_bin.mkdir()
+        fake_bin.mkdir(exist_ok=True)
         for tool in ("omarchy", "notify-send"):
             script = fake_bin / tool
             script.write_text('#!/bin/sh\nprintf \'%s\\n\' "$@" >> "$HYPERTILE_TEST_LOG.' + tool + '"\n')
@@ -213,10 +219,23 @@ class SessionTests(unittest.TestCase):
                    XDG_RUNTIME_DIR=str(self.root), XDG_STATE_HOME=str(self.root), XDG_CONFIG_HOME=str(self.root),
                    HYPERTILE_TEST_LOG=str(self.root / "log"))
         service = Path(__file__).resolve().parents[1] / "session" / "service.py"
-        result = subprocess.run([sys.executable, str(service), "logout"], env=env, capture_output=True, text=True)
+        return subprocess.run([sys.executable, str(service), command], env=env, capture_output=True, text=True)
+
+    def test_power_action_proceeds_and_warns_when_the_service_is_down(self):
+        result = self.power_action()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual((self.root / "log.omarchy").read_text().split(), ["system", "logout"])
         self.assertIn("not saved", (self.root / "log.notify-send").read_text())
+
+    def test_power_action_proceeds_when_the_config_is_malformed(self):
+        config = self.root / "hypertile" / "session.json"
+        config.parent.mkdir(parents=True)
+        for body in ("{", "[]", '{"enabled": false'):
+            config.write_text(body)
+            (self.root / "log.omarchy").unlink(missing_ok=True)
+            result = self.power_action("reboot")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((self.root / "log.omarchy").read_text().split(), ["system", "reboot"], body)
 
     def test_chromium_app_windows_get_a_web_app_recipe(self):
         from service import Launchers as RealLaunchers
@@ -232,6 +251,35 @@ class SessionTests(unittest.TestCase):
             with patch("service.Path.read_bytes", return_value=b"/opt/google/chrome/chrome\0--type=main\0"):
                 recipe = launchers.recipe(window("4", "Home / X", "chrome-x.com__-Default"))
             self.assertEqual(recipe["argv"], ["/opt/google/chrome/chrome", "--app=https://x.com/", "--profile-directory=Default"])
+
+    def test_invalid_app_configuration_fails_before_capture_with_a_clear_error(self):
+        from service import Launchers as RealLaunchers
+        for apps in ([], "terminal", 1, None):
+            with self.assertRaisesRegex(ValueError, "apps must be an object"):
+                RealLaunchers({"apps": apps})
+        for recipe in ([], "terminal", True, {}, {"argv": []}, {"argv": [1]},
+                       {"argv": [""]}, {"argv": ["bad\0command"]}, {"argv": ["terminal"], "per_window": "yes"}):
+            with self.assertRaisesRegex(ValueError, "apps.terminal"):
+                RealLaunchers({"apps": {"terminal": recipe}})
+        with patch.dict(os.environ, XDG_DATA_HOME=str(self.root), XDG_DATA_DIRS=str(self.root)):
+            disabled = RealLaunchers({"apps": {"terminal": False}})
+            self.assertIsNone(disabled.recipe(window("1")))
+            explicit = RealLaunchers({"apps": {"terminal": {"argv": ["terminal", ""]}}})
+            self.assertEqual(explicit.recipe(window("1"))["argv"], ["terminal", ""])
+
+    def test_bad_session_config_daemon_exits_cleanly_and_preserves_checkpoints(self):
+        config = self.root / "hypertile/session.json"
+        config.parent.mkdir(exist_ok=True)
+        for body, message in (("[]", "configuration must be an object"),
+                              ('{"apps":[]}', "apps must be an object")):
+            config.write_text(body)
+            env = dict(os.environ, XDG_CONFIG_HOME=str(self.root), HYPRLAND_INSTANCE_SIGNATURE="test-bad-config")
+            entry = Path(__file__).resolve().parents[1] / "session/service.py"
+            result = subprocess.run([sys.executable, str(entry), "daemon"], env=env, capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(message, result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse((self.root / "hypertile/sessions/latest.json").exists())
 
     def test_retry_uses_a_builtin_recipe_the_snapshot_lacked(self):
         saved = record(dict(window("1", "Home / X", "chrome-x.com__-Default"), launch=None))
@@ -258,11 +306,28 @@ class SessionTests(unittest.TestCase):
             self.assertEqual([c[0][0] for c in launch.call_args_list], [["chrome"], ["cursor"]])
             comp.desktop["windows"] = [window("4", "a", "chrome"), window("5", "b", "cursor")]
             self.assertEqual(recovery.tick(2), "restoring")
-            self.assertEqual(recovery.tick(4), "partial")  # settled: the rest has no recipe
+            # Settled: the rest has no recipe, which no retry could change, so
+            # the restore is complete and saving resumes.
+            self.assertEqual(recovery.tick(4), "complete")
             self.assertLess(4, recovery.deadline)
         report = recovery.report()
         self.assertEqual(report["matched"], 2)
         self.assertEqual(report["unmatched"], [{"class": "chrome-x.com__-Default", "title": "Home / X", "reason": "no launch recipe"}])
+
+    def test_a_failed_launch_still_ends_partial(self):
+        saved = record(window("1", "a", "chrome"), window("2", "b", "cursor"))
+        saved["desktop"]["windows"][0]["launch"] = {"argv": ["chrome"], "per_window": False}
+        saved["desktop"]["windows"][1]["launch"] = {"argv": ["cursor"], "per_window": False}
+        comp = FakeCompositor(record()["desktop"])
+        recovery = Recovery(saved, comp, Launchers(), 0, lambda value: None)
+        with patch("service.subprocess.Popen", side_effect=[OSError("cursor: not found"), None]) as launch:
+            self.assertEqual(recovery.tick(1), "restoring")
+            self.assertEqual(launch.call_count, 2)
+            comp.desktop["windows"] = [window("4", "b", "cursor")]
+            self.assertEqual(recovery.tick(2), "restoring")
+            self.assertEqual(recovery.tick(4), "partial")  # a retry can still launch chrome
+        report = recovery.report()
+        self.assertEqual([w["reason"] for w in report["unmatched"]], ["launch failed"])
 
     def test_terminal_recipes_read_threaded_children_and_replay_only_listed_jobs(self):
         from service import Launchers as RealLaunchers

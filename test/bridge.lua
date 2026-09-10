@@ -332,6 +332,28 @@ esac
   local badpath, bperr = bridge.layout_path("a/b")
   check(badpath == nil and tostring(bperr):find("invalid layout name", 1, true), "layout_path refuses a name with a slash")
 
+  -- Loadable Lua can still describe a layout the compositor cannot register.
+  for _, case in ipairs({
+    { spec = { columns = { { name = "a" }, { name = "a" } } }, error = "duplicate" },
+    { spec = { name = "a", empty = "invalid" }, error = "empty" },
+    { spec = { name = "a", border = "thin" }, error = "border" },
+    { spec = { name = "a", gaps = { inner = "small" } }, error = "gaps.inner" },
+    { spec = { name = "a", rounding = "round" }, error = "rounding" },
+  }) do
+    local file = assert(io.open(tmp .. "/layouts/invalid.lua", "w"))
+    file:write(bridge.serialize("invalid", case.spec)); file:close()
+    local entry
+    for _, item in ipairs(bridge.list()) do if item.name == "invalid" then entry = item end end
+    check(entry and entry.error and entry.error:find(case.error, 1, true) and not entry.spec,
+      "invalid layout is listed with its compilation error: " .. case.error)
+    local before_rules = slurp(tmp .. "/rule.log")
+    local result, err = bridge.apply("invalid", 9)
+    check(not result and tostring(err):find(case.error, 1, true) and slurp(tmp .. "/rule.log") == before_rules
+      and not exists(tmp .. "/workspace-rules/9.lua"), "invalid apply changes no live or persisted rule")
+    check(not table.concat(bridge.cycle_names(), ","):find("invalid", 1, true), "invalid layout stays out of cycle")
+  end
+  os.remove(tmp .. "/layouts/invalid.lua")
+
   -- The name the shell shows, and the SUPER+L cycle.
   check(bridge.display_name("lua:columns") == "columns" and bridge.display_name("dwindle") == "Dwindle" and bridge.display_name("") == "", "display_name strips lua: and capitalises built-ins")
   local names = { "a", "b" }
@@ -383,6 +405,28 @@ esac
   check(after:find("gaps_in = 5", 1, true) and after:find("-- comment", 1, true), "everything else in looknfeel.lua is untouched")
   check(slurp(bridge.looknfeel_path .. ".bak"):find('layout = "lua:quad"', 1, true), "set_default_layout keeps the previous text as .bak")
   check(bridge.set_default_layout("dwindle") == "dwindle", "built-in layout names pass through")
+
+  for _, literal in ipairs({ '"lua:quad"', "'lua:quad'", "[=[lua:quad]=]" }) do
+    local text = [==[-- general = { layout = "comment" }
+local note = "general = { layout = 'string' }"
+--[=[ general = { layout = "long-comment" } ]=]
+hl.config({ general = { snap = { enabled = true, layout = "nested" },
+  note = "} -- escaped \" brace", another = [=[{ layout = "long-string" }]=],
+  -- layout = "ignored"
+  layout = ]==] .. literal .. [==[, gaps_in = 5 }, decoration = { rounding = 4 } })
+]==]
+    local file = assert(io.open(bridge.looknfeel_path, "w")); file:write(text); file:close()
+    check(bridge.default_layout() == "lua:quad", "nested general table locates the actual layout literal")
+    check(bridge.set_default_layout("dwindle") == "dwindle", "nested default can be changed")
+    local prefix, suffix = text:match("^(.*\n  layout = ).-(, gaps_in.*)$")
+    check(slurp(bridge.looknfeel_path) == prefix .. '"dwindle"' .. suffix,
+      "updating default preserves nested fields, comments and strings exactly")
+  end
+  local file = assert(io.open(bridge.looknfeel_path, "w"))
+  file:write('general = { snap = { layout = "nested" }, layout = "lua:" .. name }'); file:close()
+  check(not bridge.default_layout() and not bridge.set_default_layout("dwindle"), "computed default requires manual editing")
+  file = assert(io.open(bridge.looknfeel_path, "w"))
+  file:write('general = { snap = { enabled = true }, layout = "dwindle" }'); file:close()
 
   -- remove honours references: the default is protected, workspace rules
   -- block unless forced, and forcing drops the rules.
@@ -438,13 +482,17 @@ do
   lf:close()
   -- `env` adds or overrides variables; the cycle debounce is off unless a
   -- test turns it on.
-  local function run(args, stdin, env)
-    local cmd = string.format(
+  local function command(args, env, cli)
+    cli = cli or "bin/hypertile-ctl"
+    return string.format(
       "(cd '%s' && HOME='%s' XDG_CONFIG_HOME='%s' XDG_STATE_HOME='%s' XDG_RUNTIME_DIR='%s/runtime' HYPERTILE_SRC='%s'"
         .. " HYPERTILE_LAYOUTS_DIR='%s/layouts' HYPERTILE_RULES_DIR='%s/workspace-rules'"
-        .. " HYPERTILE_HYPRCTL_BIN='%s/fake-hyprctl' HYPERTILE_SHELL_BIN='%s/fake-shell' HYPERTILE_CYCLE_DEBOUNCE_MS=0 %s lua bin/hypertile-ctl %s)",
-      root, home, config_home, state_home, tmp, root, tmp, tmp, tmp, tmp, env or "", args
+        .. " HYPERTILE_HYPRCTL_BIN='%s/fake-hyprctl' HYPERTILE_SHELL_BIN='%s/fake-shell' HYPERTILE_CYCLE_DEBOUNCE_MS=0 %s lua '%s' %s)",
+      root, home, config_home, state_home, tmp, root, tmp, tmp, tmp, tmp, env or "", cli:gsub("'", "'\\''"), args
     )
+  end
+  local function run(args, stdin, env, cli)
+    local cmd = command(args, env, cli)
     if stdin then
       cmd = "printf '%s' '" .. stdin:gsub("'", "'\\''") .. "' | " .. cmd
     else
@@ -537,6 +585,49 @@ do
   check(not exists(tmp .. "/runtime/hypertile/cycle-3.json"), "the pending request is cleared once applied")
   local now = run("cycle --now --quiet", nil, "HYPERTILE_CYCLE_DEBOUNCE_MS=400")
   check(now:find("workspace 3 -> ", 1, true) and not now:find("pending", 1, true), "cycle --now switches at once: " .. now)
+
+  local odd_cli = tmp .. "/Jim's CLI with spaces"
+  local copy = assert(io.open(odd_cli, "w")); copy:write(slurp(root .. "/bin/hypertile-ctl")); copy:close()
+  local odd_layouts = tmp .. "/layouts with spaces"
+  os.execute("ln -s '" .. tmp .. "/layouts' '" .. odd_layouts .. "'")
+  before = slurp(tmp .. "/rule.log")
+  local quoted_out, quoted_code = run("cycle --quiet", nil,
+    "HYPERTILE_CYCLE_DEBOUNCE_MS=100 HYPERTILE_LAYOUTS_DIR='" .. odd_layouts .. "'", odd_cli)
+  os.execute("sleep 1")
+  added = slurp(tmp .. "/rule.log"):sub(#before + 1)
+  check(quoted_code == 0 and quoted_out:find("pending", 1, true) and rule_lines(added) == 1,
+    "deferred cycle works when CLI path contains spaces and apostrophes: " .. quoted_out)
+
+  -- Start every process before waiting; the lock must preserve every press.
+  -- Queue the deferred work without timers, then run all committers together.
+  -- This tests contention without depending on how fast the CI runner is.
+  os.execute("mkdir -p '" .. tmp .. "/cycle-tools'")
+  local scheduler = assert(io.open(tmp .. "/cycle-tools/setsid", "w"))
+  scheduler:write('#!/bin/sh\nexit 0\n'); scheduler:close()
+  os.execute("chmod +x '" .. tmp .. "/cycle-tools/setsid'")
+  before = slurp(tmp .. "/rule.log")
+  local burst = {}
+  for i = 1, 8 do
+    burst[#burst + 1] = command("cycle --quiet", "HYPERTILE_CYCLE_DEBOUNCE_MS=200 PATH='" .. tmp .. "/cycle-tools':\"$PATH\"")
+      .. " > '" .. tmp .. "/burst-" .. i .. "' 2>&1 < /dev/null &"
+  end
+  burst[#burst + 1] = "wait"
+  os.execute(table.concat(burst, "\n"))
+  local expected = "lua:quad"
+  for _ = 1, 8 do expected = bridge.cycle_target(expected, on_disk) end
+  local pending = bridge.cycle_pending("3")
+  check(pending and pending.seq == 8 and pending.target == expected, "concurrent burst records every step in valid JSON")
+  for i = 1, 8 do check(slurp(tmp .. "/burst-" .. i):find("pending", 1, true), "concurrent cycle " .. i .. " succeeds") end
+  local committers = {}
+  for i = 1, 8 do
+    committers[#committers + 1] = command("cycle-commit 3 " .. i)
+      .. " > '" .. tmp .. "/commit-" .. i .. "' 2>&1 < /dev/null &"
+  end
+  committers[#committers + 1] = "wait"
+  os.execute(table.concat(committers, "\n"))
+  added = slurp(tmp .. "/rule.log"):sub(#before + 1)
+  check(rule_lines(added) == 1 and added:find("3 " .. expected, 1, true), "concurrent burst commits only the final target")
+  check(not exists(tmp .. "/runtime/hypertile/cycle-3.json"), "concurrent commit clears pending file")
   -- Point the rules the applies above wrote elsewhere so demo can go.
   run("apply dwindle --workspace 1 --quiet")
   run("apply dwindle --workspace 3 --quiet")

@@ -29,22 +29,38 @@ a packaging placeholder are left out. A card's **Change…** and **Clear** do
 the same from the screen, and a card that needs attention is outlined and
 offers **Retry**.
 
+While the search has focus, digits are ordinary text (for example, `1Password`).
+Tab selects the next zone and keeps the query; `?` toggles keyboard help.
+With no zone selected, ↑ ↓ select a saved scene, Enter uses it, and Delete
+asks before removing its file. The selected scene scrolls into view and shows
+its delete control. Progress messages follow the controller until content is
+placed or needs attention.
+
 Applications declaring `StartupWMClass` are available immediately. For other
 apps, an open window whose class equals the desktop ID without `.desktop`
 provides the identity. Apps without either can be configured through the CLI
 with an explicit class and optional exact title.
 
-The header names the workspace until a scene is applied, then the scene, with
+The header names the workspace until a scene is in use, then the scene, with
 the layout, the workspace, and how many apps are placed. **Scenes** lists the
 saved scenes as cards: the layout with the apps it places drawn in their
-zones, and what it holds. Click a card to apply it; the delete appears on hover
-and confirms inline.
+zones, and what it holds. Click a card to use it; the delete appears on hover
+or keyboard selection and confirms inline. Using another scene, or reusing its
+saved definition, asks first if the current scene has unsaved changes. Cancel
+to save those changes, or confirm **Use** to replace the arrangement.
+Click outside the zones once to deselect a zone; with no zone selected, clicking
+outside closes the overlay.
 
-**Save as scene…** stores the current definition. **Apply** requests that saved
-arrangement again, including apps you moved or closed. **Retry** explicitly
+**Save as…** stores the current definition. Using a saved scene requests its
+arrangement, including apps you moved or closed. **Retry** explicitly
 rechecks placement and may retry a failed/timed-out launch. Closing an app or
 moving it yourself leaves its source marked *Closed* or *Moved*. Changes to the
 saved definition happen only when you save.
+
+Renaming a zone keeps its stable identity and remaps apps that are still placed
+there. It does not launch them again or pull back apps you moved, floated,
+unpinned, or closed. Invalid or unreadable saved scenes appear as individual
+invalid cards; the rest of the catalog remains available.
 
 **Restore previous** restores the prior layout/content and eligible app pins.
 It leaves apps open and does not move departed windows back to their original
@@ -52,9 +68,22 @@ workspace. Changing scenes or cancelling an in-progress scene stops pending
 placement; an app already launched may still open normally. Empty/fill behavior
 and the layout's application rules continue to apply to other windows.
 
+If session recovery does not arrive within 45 seconds after login, the scene
+shows **Needs attention** and offers **Retry** or **Dismiss**. Waiting for
+session recovery does not block layout browsing. The header marks a missing
+saved definition as **Deleted scene** and explains which apps Retry may open
+or reuse from the retained definition.
+
+**Dismiss** forgets a waiting or failed scene and releases its zone assignments.
+It keeps the current layout and leaves apps open. A late session recovery
+message cannot bring that record back during the same login; saved scene files
+are kept, so you can choose one again later.
+
 Layout browsing previews the geometry and restores the committed layout when
 you leave the preview. The lease expires after ten seconds without a heartbeat.
-Session capture waits until the preview ends. Choosing a different layout
+Session capture waits until the preview ends or expires. After a writer crash,
+expired previews are checkpointed using their committed layout, with a warning
+in the bar and overlay until the on-screen preview is cleaned up. Choosing a different layout
 replaces the assignments with local content; open apps keep running.
 
 ## CLI
@@ -69,6 +98,7 @@ hypertile-ctl scene apply work --workspace 1
 hypertile-ctl scene current --workspace 1 --json
 hypertile-ctl scene retry --workspace 1
 hypertile-ctl scene restore --workspace 1
+hypertile-ctl scene dismiss --workspace 1
 ```
 
 For an app without declared identity, add `--app-class org.example.App` and,
@@ -91,7 +121,8 @@ change focus; the app's own launcher may activate its window.
 
 ## Format and stable references
 
-Definitions live in `~/.config/hypertile/scenes/NAME.json`, mode 0600. Save this
+Definitions live in `$XDG_CONFIG_HOME/hypertile/scenes/NAME.json`
+(default `~/.config/hypertile/scenes/NAME.json`), mode 0600. Save this
 input using `scene save work --file scene.json`, substituting your layout/zones:
 
 ```json

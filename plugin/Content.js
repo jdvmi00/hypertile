@@ -6,7 +6,7 @@ var STATUS = {
   "waiting-session": "Waiting for session recovery", "waiting-window": "Opening app…",
   moved: "Moved", closed: "Closed", ready: "Ready", restored: "Previous arrangement restored",
   partial: "Some content needs attention", stopping: "Clearing previous placement…",
-  layout: "Applying layout…", connecting: "Placing apps…", "needs-attention": "Needs attention",
+  layout: "Using layout…", connecting: "Placing apps…", "needs-attention": "Needs attention",
   pending: "Pending", "waiting-workspace": "Waiting for the workspace", "restore-builtin": "Restoring…"
 }
 
@@ -18,6 +18,17 @@ function status(value) {
 // States that want the user's attention (drawn in the urgent color).
 function troubled(value) {
   return ["partial", "needs-attention"].indexOf(value) !== -1
+}
+
+function managed(scene) {
+  return !!(scene && scene.phase && ["none", "restored", "waiting-session"].indexOf(scene.phase) === -1)
+}
+
+function retrySummary(scene) {
+  var apps = ((scene && scene.sources) || []).filter(function(s) { return s.type === "app" })
+  var names = appNames(apps)
+  return names.length ? "Retry uses this scene's layout and opens or reuses " + names.join(", ") + "."
+    : "Retry uses this scene's layout and zone assignments. It opens no apps."
 }
 
 // The content assigned to a zone from the active scene. Null means the zone holds local windows by fill order.
@@ -126,6 +137,7 @@ function sceneMeta(scene, layout, workspace) {
     return bits.join("  ·  ")
   }
   if (workspace) bits.push("workspace " + workspace)
+  if (scene.deleted) bits.push("Deleted scene")
   var p = sceneProgress(scene)
   if (p !== "") bits.push(p)
   return bits.join("  ·  ")
@@ -197,4 +209,15 @@ function positionLabels(zones, area) {
   }
   for (var name in labels) if (counts[labels[name]] > 1) labels[name] = ""
   return labels
+}
+
+// Action acknowledgements can precede placement by several catalog polls.
+function actionFeedback(record, done, zone) {
+  if (record.phase === "restored") return done
+  if (record.phase === "ready") {
+    var source = (record.sources || []).find(function(s) { return s.zone === zone })
+    if (zone && source && source.status !== "ready") return status(source.status)
+    return done
+  }
+  return status(record.phase) || "Scene update requested"
 }

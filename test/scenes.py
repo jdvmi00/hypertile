@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / p) for p in ("scenes", "session")]
@@ -127,5 +128,148 @@ class SceneTests(unittest.TestCase):
         result = identify(source)
         self.assertNotIn("layout_id", source)
         self.assertNotEqual(result["columns"][0]["id"], result["columns"][1]["id"])
+
+    def test_bad_scene_files_are_isolated_in_list_and_catalog(self):
+        self.save()
+        for bad in ({"version": 1, "layout": None}, {"version": 1, "layout": []},
+                    {"version": 1, "layout": 42}, {"version": 1, "layout": "quad", "sources": []}, None):
+            (self.root / "scenes/bad.json").write_text(json.dumps(bad))
+            for action in ("list", "catalog"):
+                entries = {v["name"]: v for v in self.command(action)["scenes"]}
+                self.assertTrue(entries["work"]["valid"])
+                self.assertFalse(entries["bad"]["valid"])
+                self.assertTrue(entries["bad"]["error"])
+        (self.root / "scenes/bad.json").write_bytes(b'\xff')
+        self.assertFalse(self.command("list")["scenes"][0]["valid"])
+        original = Path.read_text
+        def unreadable(path, *args, **kwargs):
+            if path.name == "bad.json": raise PermissionError("scene is unreadable")
+            return original(path, *args, **kwargs)
+        with patch.object(Path, "read_text", unreadable):
+            self.assertIn("unreadable", self.command("catalog")["scenes"][0]["error"])
+
+    def test_retired_pins_are_deduplicated_bounded_and_reset_after_restore(self):
+        window = {"address": "a", "stable_id": 1, "pid": 2}
+        snap = {"windows": [window]}
+        pin = dict(window, zone="right", before="left")
+        dead = dict(pin, stable_id=99)
+        old = {"phase": "ready", "retired_pins": [pin, dead] * 100, "pins": [pin]}
+        self.assertEqual(self.ctl.scenes.retired_pins(old, snap), [pin])
+        old["retired_pins"] = [dict(pin, zone=str(i)) for i in range(1000)]
+        kept = self.ctl.scenes.retired_pins(old, snap)
+        self.assertEqual(len(kept), 512)
+        self.assertEqual(kept[-1], pin)
+        old["phase"] = "restored"
+        self.assertEqual(self.ctl.scenes.retired_pins(old, snap), [])
+
+    def test_scene_layout_catalog_excludes_compile_failures(self):
+        from scenes import Layouts as RealLayouts
+        layouts = RealLayouts()
+        layouts.directory = self.root / "layouts"
+        good = {"name": "good", "spec": {"name": "one"}}
+        bad = {"name": "bad", "spec": {"fill": "invalid"}, "error": "fill must be an array"}
+        with patch.object(layouts, "run", return_value=json.dumps({"layouts": [bad, good]})):
+            self.assertEqual(layouts.all(), [good])
+            with self.assertRaisesRegex(ValueError, "missing"):
+                layouts.get("bad")
+
+    def test_autostart_reports_invalid_state_without_overwriting_it(self):
+        checkout = Path(__file__).resolve().parents[1]
+        state = self.root / "hypertile/scenes/state.json"
+        for body in ('{"version":999}', '[]'):
+            state.write_text(body)
+            env = dict(os.environ, HYPERTILE_SRC=str(checkout), XDG_RUNTIME_DIR=str(self.root / "runtime"),
+                       HYPRLAND_INSTANCE_SIGNATURE="test-invalid-state", XDG_CONFIG_HOME=str(self.root / "config"))
+            result = subprocess.run([sys.executable, str(checkout / "bin/hypertile-scenes"), "list"],
+                                    env=env, text=True, capture_output=True, timeout=3)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Scene service did not start", result.stderr)
+            self.assertIn("unsupported scene state version", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(state.read_text(), body)
+
+    def test_missing_session_times_out_across_service_restart_and_accepts_late_refs(self):
+        self.ready()
+        document = self.command("current")["document"]
+        self.comp.instance = "two"
+        self.ctl = self.controller()
+        self.assertEqual(self.command("current")["phase"], "waiting-session")
+        self.assertNotIn("1", self.command("catalog")["active_workspaces"])
+        self.assertTrue(self.command("current")["can_dismiss"])
+        self.assertEqual(self.ctl.tick_interval(), 1)
+        self.now += 44
+        self.ctl = self.controller()
+        self.tick()
+        self.assertEqual(self.command("current")["phase"], "waiting-session")
+        self.now += 1
+        self.tick()
+        current = self.command("current")
+        self.assertEqual(current["phase"], "needs-attention")
+        self.assertIn("could not be put back after login", current["error"])
+        self.assertFalse(current["can_restore"])
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.tick(3)
+        self.assertEqual(self.command("current")["phase"], "ready")
+
+    def test_old_waiting_records_receive_a_deadline_once(self):
+        self.ready()
+        record = self.ctl.scenes.records["1"]
+        record["phase"] = "waiting-session"
+        record.pop("deadline", None)
+        self.ctl.persist()
+        self.ctl = self.controller()
+        self.assertEqual(self.ctl.scenes.records["1"]["deadline"], 145)
+        self.now = 146
+        self.ctl = self.controller()
+        self.tick()
+        self.assertEqual(self.command("current")["phase"], "needs-attention")
+
+    def test_dismiss_deleted_scene_keeps_layout_and_blocks_late_recovery(self):
+        self.ready()
+        document = self.command("current")["document"]
+        self.command("remove", name="work")
+        record = self.ctl.scenes.records["1"]
+        record.update(phase="needs-attention")
+        record.pop("baseline", None)
+        self.assertTrue(self.command("current")["deleted"])
+        before = len(self.comp.calls)
+        self.command("dismiss")
+        self.assertEqual(self.comp.calls[before:], [("scene_clear", {"workspace": "1"})])
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "lua:quad")
+        self.assertEqual(self.command("current")["phase"], "none")
+        self.ctl = self.controller()
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.tick(3)
+        self.assertNotIn("1", self.ctl.scenes.records)
+        # A new login can restore scenes again; dismissal only supersedes
+        # recovery requests from this compositor session.
+        self.comp.instance = "three"
+        self.ctl = self.controller()
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.assertIn("1", self.ctl.scenes.records)
+
+    def test_dismiss_missing_workspace_and_failed_clear(self):
+        self.ready()
+        with self.assertRaisesRegex(ValueError, "Only a waiting or failed"):
+            self.command("dismiss")
+        self.ctl.scenes.records["1"]["phase"] = "needs-attention"
+        self.comp.desktop["workspaces"] = []
+        with patch.object(self.comp, "call", side_effect=RuntimeError("compositor unavailable")):
+            with self.assertRaisesRegex(RuntimeError, "compositor unavailable"):
+                self.command("dismiss")
+        self.assertIn("1", self.ctl.scenes.records)
+        self.command("dismiss")
+        self.assertNotIn("1", self.ctl.scenes.records)
+
+    def test_missing_workspace_recovery_has_an_actionable_error(self):
+        self.save()
+        document = self.command("show", name="work")
+        self.comp.desktop["workspaces"] = []
+        self.ctl.command({"command": "session-restore", "scenes": [{"workspace": "1", "document": document}]})
+        self.now += 46
+        self.tick()
+        current = self.command("current")
+        self.assertIn("Its workspace did not return", current["error"])
+        self.assertTrue(current["can_dismiss"])
 
 if __name__ == "__main__": unittest.main()

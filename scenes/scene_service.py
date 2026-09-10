@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 from service import atomic_json, read_json
@@ -17,17 +18,26 @@ class SceneController:
     def __init__(self, root, config, compositor, now=time.time):
         self.root, self.config, self.compositor, self.now = root, config, compositor, now
         self.state = read_json(root / "state.json") if (root / "state.json").exists() else {"version": 1}
-        if self.state.get("version") != 1:
+        if not isinstance(self.state, dict) or self.state.get("version") != 1:
             raise ValueError("unsupported scene state version")
         self.running = True
+        self.error = None  # the last failed tick, reported by status until one succeeds
         self.scenes = Manager(self)
         self.browser = Browser(self)
         if self.state.get("instance") != compositor.instance:
             self.state["app_launches"].clear()
+            self.state["dismissed"] = []
             for record in self.scenes.records.values():
                 if record.get("phase") != "restored":
-                    record.update(phase="waiting-session")
+                    record.update(phase="waiting-session", deadline=self.now() + 45)
                     record.pop("baseline", None)
+                    record.pop("error", None)
+                    record.pop("recovery_timeout", None)
+        # Migrate records left waiting by older versions without extending an
+        # existing deadline on every service restart.
+        for record in self.scenes.records.values():
+            if record.get("phase") == "waiting-session":
+                record.setdefault("deadline", self.now() + 45)
         self.state["instance"] = compositor.instance
         self.persist()
 
@@ -37,12 +47,10 @@ class SceneController:
     def command(self, payload):
         command = payload.get("command")
         if command == "status":
-            return {"instance": self.compositor.instance, "scenes": len(self.scenes.records)}
+            return {"instance": self.compositor.instance, "scenes": len(self.scenes.records), "error": self.error}
         if command == "stop":
-            for workspace in list(self.browser.active):
-                self.browser.end(workspace)
-            self.running = False
-            return {"stopping": True}
+            self.shutdown()
+            return {"stopping": True, "error": self.error}
         if command == "session-restore":
             self.scenes.restore_refs(payload.get("scenes", []))
             return {"accepted": True}
@@ -50,6 +58,22 @@ class SceneController:
             raise ValueError("Scenes only manages layouts and app placement")
         self.browser.before_command(payload)
         return self.scenes.command(payload)
+
+    def shutdown(self):
+        self.running = False
+        if getattr(self, "_shutdown", False):
+            return
+        self._shutdown = True
+        errors = []
+        for workspace in list(self.browser.active):
+            try:
+                self.browser.end(workspace)
+            except (OSError, ValueError, RuntimeError, KeyError, subprocess.TimeoutExpired) as error:
+                # Keep failed leases durable so the next writer can restore
+                # them, but never retain the writer lock after a stop request.
+                errors.append(f"Workspace {workspace}: {error}")
+        if errors:
+            self.error = "; ".join(errors)
 
     def tick(self):
         before = json.dumps(self.state, sort_keys=True)
@@ -64,7 +88,7 @@ class SceneController:
                or any(a["status"] in ("pending", "waiting-window") for a in r.get("apps", {}).values())
                for r in self.scenes.records.values()):
             return .2
-        return 1 if self.browser.active else 30
+        return 1 if self.browser.active or any(r["phase"] == "waiting-session" for r in self.scenes.records.values()) else 30
 
 
 def paths():
@@ -73,11 +97,34 @@ def paths():
             Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "hypertile/scenes.json")
 
 
+def ensure_started(runtime, entry):
+    try:
+        request(runtime, {"command": "status"}, timeout=1)
+        return
+    except (OSError, ValueError):
+        pass
+    # A file avoids a full stderr pipe blocking a daemon that outlives its CLI.
+    with tempfile.TemporaryFile() as errors:
+        child = subprocess.Popen([sys.executable, str(entry), "daemon"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
+        for _ in range(50):
+            try:
+                request(runtime, {"command": "status"}, timeout=.2)
+                return
+            except (OSError, ValueError):
+                if child.poll() is not None:
+                    break
+                time.sleep(.1)
+        errors.seek(0)
+        details = errors.read(8192).decode(errors="replace").strip()
+        raise RuntimeError("Scene service did not start" + (": " + details if details else "; no response from its control socket"))
+
+
 def main(argv=None):
     os.umask(0o077)
     parser = argparse.ArgumentParser(description="Save and apply layouts with ordinary desktop apps")
     commands = parser.add_subparsers(dest="action", required=True)
-    for action in ("daemon", "status", "stop", "list", "show", "save", "validate", "apply", "current", "restore", "cancel", "retry", "remove", "catalog", "content", "layout", "browse", "browse-end"):
+    for action in ("daemon", "status", "stop", "list", "show", "save", "validate", "apply", "current", "restore", "cancel", "retry", "dismiss", "remove", "catalog", "content", "layout", "browse", "browse-end"):
         child = commands.add_parser(action)
         if action in ("show", "save", "apply", "remove", "layout", "browse"):
             child.add_argument("name")
@@ -105,20 +152,10 @@ def main(argv=None):
         if args.action == "validate" and not payload.get("document"):
             raise ValueError("validate requires --file FILE (or - for stdin)")
         if args.action not in ("stop", "status"):
-            try:
-                request(runtime, {"command": "status"}, timeout=1)
-            except (OSError, ValueError):
-                entry = Path(__file__).resolve().parents[1] / "bin/hypertile-scenes"
-                if not entry.exists():
-                    entry = Path.home() / ".local/bin/hypertile-scenes"
-                subprocess.Popen([sys.executable, str(entry), "daemon"], stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                for _ in range(50):
-                    try:
-                        request(runtime, {"command": "status"}, timeout=.2)
-                        break
-                    except (OSError, ValueError):
-                        time.sleep(.1)
+            entry = Path(__file__).resolve().parents[1] / "bin/hypertile-scenes"
+            if not entry.exists():
+                entry = Path.home() / ".local/bin/hypertile-scenes"
+            ensure_started(runtime, entry)
         print(json.dumps(request(runtime, payload), indent=2))
         return 0
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:

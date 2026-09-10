@@ -34,14 +34,26 @@ missing supported apps: applications that restore their own windows start
 together, while per-window launches (terminals, web apps) go one at a time so
 each new window is attributed correctly. Windows that nothing can bring back
 (no recipe, or a failed launch) do not delay placement, ordering and focus;
-`status` names the reason for each. It never closes unrelated windows. An incomplete
-restore enters `partial` mode and stops automatic checkpointing, so a
-missing app cannot destroy the source session. A desktop notification reports
+`status` names the reason for each. It never closes unrelated windows. A
+window with no launch recipe could never be restored, so it does not make the
+restore incomplete: the restore finishes, saving resumes, a low-priority
+notification names the apps that were not reopened, and `status` keeps listing
+them. An incomplete restore (a launch that failed, or a launched app whose
+window never matched) enters `partial` mode and stops automatic checkpointing,
+so a missing app cannot destroy the source session. A desktop notification reports
 the incomplete restore, and the guarded logout, reboot and shutdown commands
 warn again while saving is paused, since the desktop you are leaving will not
 be saved. Open the missing app and retry `restore`, add an app recipe and
 restart the watcher, or use `resume` to accept the desktop as it stands. A
 failed application launch is retried only on an explicit retry, not in a loop.
+
+The bar's layout widget shows **!** when session saving needs attention. Its
+tooltip and the overlay explain whether saving is paused, recovery requests
+are still waiting for Scenes, or a preview has expired. The overlay shows when
+the pause began, **Show unmatched** lists the windows and reasons, and
+**Resume saving** accepts the current desktop after an incomplete restore or
+freeze. Scene delivery continues retrying after Resume. A disabled watcher is
+reported as disabled; an unreachable watcher is reported as unavailable.
 
 `freeze` persists across service restarts within the same compositor. If a
 logout is cancelled, use `resume`. Freezing during recovery preserves the
@@ -112,6 +124,9 @@ Configure applications in `~/.config/hypertile/session.json`:
 `replay` holds command names (the executable's basename); the whole argument
 list of the running job is replayed. `apps` keys are exact initial window
 classes (falling back to the current class).
+The service validates the configuration and app recipes before starting.
+Invalid entries produce a specific error and leave existing checkpoints intact;
+correct the configuration before restarting the service.
 `argv` is an argument array, executed without a shell. `per_window` defaults
 to false. The snapshot retains the recipe used at capture time; an explicit
 current configuration overrides it, and a window the snapshot had no recipe
@@ -153,6 +168,10 @@ State lives under `$XDG_STATE_HOME/hypertile/sessions` (normally
   unguarded logout closing every window, cannot flush the history within
   seconds. `restore @previous-1` then loses at most two minutes of changes.
 - `recovery.json`: protected source of the current/most recent restore.
+- `pending-scenes.json`: scene recovery requests awaiting acknowledgment.
+  They survive service restarts, remain represented in checkpoints, and retry
+  with delays increasing from one to thirty seconds. Freeze pauses delivery;
+  Resume re-enables it. A lost reply cannot cause duplicate scene placement.
 - `status.json`: lifecycle and launch progress, used after a service restart.
 - `saved/<name>.json`: explicitly saved sessions, never changed by autosave.
 
@@ -176,8 +195,18 @@ most recent uncheckpointed changes.
 Restoration protects its source before touching the compositor, commits launch
 intent before spawning apps, and persists successful matches. Restarting the
 service during recovery in the same compositor does not relaunch already
-attempted apps. Automatic saving resumes only after all saved windows have
-matched and settled, or after an explicit `resume`.
+attempted apps. Automatic saving resumes after recoverable windows have matched
+and settled (windows without a launch recipe remain listed), or after an
+explicit `resume`.
+
+An active layout preview temporarily pauses capture to protect the committed
+layout. Its ten-second deadline is refreshed on disk by overlay heartbeats.
+If the scene writer dies and the lease expires, capture resumes with the
+committed layout and original pins for windows still on that workspace. It
+preserves windows moved elsewhere and unrelated layout changes. A persistent
+warning explains that the abandoned preview may still be visible; closing the
+overlay or restarting Scenes restores it on screen. Capture errors remain
+visible until a checkpoint actually succeeds.
 
 Workspace [scenes](SCENES.md) are checkpointed as versioned definitions. The
 independent scene service places their apps, including on an otherwise empty

@@ -109,6 +109,61 @@ local function collect_leaves(node, names, by_name)
   return names
 end
 
+-- string.find validates only the path reached by a particular input. Check
+-- the whole pattern so a bad suffix cannot first fail during recalculation.
+local function validate_pattern(pattern)
+  local i, captures, open = 1, {}, {}
+  local function bracket()
+    assert(pattern:sub(i, i) == "[", "missing '[' after '%f'")
+    i = i + 1
+    if pattern:sub(i, i) == "^" then i = i + 1 end
+    repeat
+      assert(i <= #pattern, "missing ']' in pattern")
+      i = i + (pattern:sub(i, i) == "%" and 2 or 1)
+    until pattern:sub(i, i) == "]"
+    i = i + 1
+  end
+  while i <= #pattern do
+    local c = pattern:sub(i, i)
+    if c == "[" then
+      bracket()
+    elseif c == "%" then
+      local escape = pattern:sub(i + 1, i + 1)
+      assert(escape ~= "", "pattern ends with '%'")
+      if escape == "b" then
+        assert(i + 3 <= #pattern, "missing arguments to '%b'")
+        i = i + 4
+      elseif escape == "f" then
+        i = i + 2
+        bracket()
+      else
+        if escape:match("%d") then
+          assert(captures[tonumber(escape)] == "closed", "invalid capture index %" .. escape)
+        end
+        i = i + 2
+      end
+    elseif c == "(" then
+      assert(#captures < 32, "too many captures")
+      if pattern:sub(i + 1, i + 1) == ")" then
+        captures[#captures + 1] = "closed"
+        i = i + 2
+      else
+        captures[#captures + 1] = "open"
+        open[#open + 1] = #captures
+        i = i + 1
+      end
+    elseif c == ")" then
+      assert(#open > 0, "invalid pattern capture")
+      captures[table.remove(open)] = "closed"
+      i = i + 1
+    else
+      i = i + 1
+    end
+  end
+  assert(#open == 0, "unfinished capture")
+  string.find("", pattern)
+end
+
 function M.compile(spec)
   local tree = normalize_node(spec, "")
   local leaf_opts = {}
@@ -144,8 +199,22 @@ function M.compile(spec)
     assert(leaf_set[name], "hypertile: " .. what .. " references unknown slot " .. tostring(name))
     assert(not leaf_opts[name].spacer, "hypertile: " .. what .. " references spacer slot " .. tostring(name))
   end
-  local fill = spec.fill or fillable
-  local cycle = spec.cycle or fill
+  local fill = spec.fill == nil and fillable or spec.fill
+  local cycle = spec.cycle == nil and fill or spec.cycle
+  local function assert_slot_array(value, what)
+    assert(type(value) == "table", "hypertile: " .. what .. " must be an array of slot names")
+    local count = 0
+    for key, name in pairs(value) do
+      count = count + 1
+      assert(type(key) == "number" and key >= 1 and key % 1 == 0 and type(name) == "string",
+        "hypertile: " .. what .. " must be an array of slot names")
+    end
+    for i = 1, count do
+      assert(value[i] ~= nil, "hypertile: " .. what .. " must be an array without holes")
+    end
+  end
+  assert_slot_array(fill, "fill")
+  assert_slot_array(cycle, "cycle")
   assert(#fill > 0, "hypertile: fill must name at least one slot")
   assert(#cycle > 0, "hypertile: cycle must name at least one slot")
   -- Position of each slot in the numbering (first occurrence); slots that
@@ -165,6 +234,14 @@ function M.compile(spec)
   end
   for _, rule in ipairs(spec.rules or {}) do
     assert_fillable(rule.slot, "rule")
+    for _, field in ipairs({ "class", "title" }) do
+      local pattern = rule[field]
+      if pattern ~= nil then
+        assert(type(pattern) == "string", "hypertile: rule " .. field .. " must be a Lua pattern string")
+        local ok, err = pcall(validate_pattern, pattern)
+        assert(ok, "hypertile: invalid rule " .. field .. " pattern: " .. tostring(err))
+      end
+    end
   end
   for name, cap in pairs(spec.capacity or {}) do
     assert_fillable(name, "capacity")
@@ -289,11 +366,8 @@ function M.assign(compiled, targets, state)
     local win = target.window
     local key = window_key(win)
     local slot = key and pins[key]
-    for name, owner in pairs(reserved) do
-      if key == owner then slot = name end
-    end
     if slot and compiled.leaf_set[slot] and not compiled.leaf_opts[slot].spacer
-      and (not reserved[slot] or reserved[slot] == key) then
+      and not reserved[slot] then
       take(slot, i)
     else
       -- Among every rule this window matches, take the slot with the lowest
@@ -514,7 +588,6 @@ function M.recalculate(compiled, ctx, state)
     local ws = w and w.workspace
     jiggle = ws ~= nil and ws.id == jiggle
   end
-  state = state or { pins = {}, sizes = {} }
   local jstate = { pins = state.pins, sizes = state.sizes, jiggle = jiggle and true or false }
   if n == 1 and compiled.single == "collapse" and next(reserved) == nil and not keep_slots then
     -- The lone window takes the whole area, but keeps its slot's shape.

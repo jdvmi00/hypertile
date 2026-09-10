@@ -167,6 +167,24 @@ function M.scene_content_apply(request)
   local available = false
   for _, zone in ipairs(live.compiled.cycle) do if not blocked[zone] then available = true end end
   assert(available, "leave one fill zone for local windows")
+  -- A metadata rename retains eligible one-shot placements. Check identity,
+  -- location and the old pin before clearing anything, on this same thread.
+  local keep = {}
+  local old_live = previous and engine.live[previous.layout:match("^lua:(.+)$")]
+  for zone_id, pin in pairs(previous and previous.app_placements or {}) do
+    local zone = live.compiled.zone_ids[zone_id]
+    if request.preserve_apps and request.preserve_apps[zone_id] and zone
+      and not live.compiled.leaf_opts[zone].spacer and old_live then
+      for _, w in ipairs(hl.get_windows()) do
+        if w.mapped and w.address == pin.address and w.stable_id == pin.stable_id and w.pid == pin.pid
+          and w.workspace and selector(w.workspace) == request.workspace and not w.floating
+          and old_live.state.pins[w.address] == pin.zone then
+          keep[zone_id] = { address = pin.address, stable_id = pin.stable_id, pid = pin.pid,
+            zone = zone, before = pin.before, exclusive = pin.exclusive }
+        end
+      end
+    end
+  end
   M.scene_clear(request)
   live.state.scene_empty = live.state.scene_empty or {}
   live.state.scene_empty[tostring(ws.id)] = empty
@@ -174,6 +192,11 @@ function M.scene_content_apply(request)
   local record = { workspace_id = ws.id, layout = request.layout, operation = request.operation,
     app_placements = {}, pins = json.array(), results = json.array() }
   scene_content[request.workspace] = record
+  for zone_id, pin in pairs(keep) do
+    record.app_placements[zone_id] = pin
+    record.pins[#record.pins + 1] = pin
+    live.state.pins[pin.address], live.state.exclusive_pins[pin.address] = pin.zone, true
+  end
   for _, source in ipairs(request.sources) do
     if source.type == "local" and source.app_class then
       local matches = {}

@@ -4,6 +4,7 @@ import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
 import "Content.js" as Content
+import "Session.js" as Session
 
 // The inspector rail: the name and actions of what is being looked at on
 // top, then the sections for the current mode. The Layouts tab shows the
@@ -21,16 +22,40 @@ Card {
   // that drive it from the overlay and its IPC.
   readonly property string searchText: contentPane.query
   readonly property int matchCount: contentPane.matchCount
+  function handleSceneKey(event) { return contentPane.handleSceneKey(event) }
   function focusSearch() { contentPane.focusSearch() }
   function setSearch(text) { contentPane.setQuery(text) }
   function typeSearch(text) { contentPane.typeSearch(text) }
   function pickMatch() { contentPane.pickMatch() }
   function hoverMatch(index) { contentPane.hoverMatch(index) }
 
+  function revealItem(item) {
+    var top = item.mapToItem(column, 0, 0).y
+    var bottom = top + item.height
+    if (top < scroller.contentY) scroller.contentY = top
+    else if (bottom > scroller.contentY + scroller.height) scroller.contentY = bottom - scroller.height
+  }
+  Connections {
+    target: rail.overlay
+    function onPendingSwitchChanged() {
+      if (rail.overlay.pendingSwitch) Qt.callLater(function() { rail.revealItem(switchPrompt) })
+    }
+  }
+
   // Put the cursor in the layout-name field, preloaded with `initial`.
   function focusName(initial) {
     nameField.text = initial
     Qt.callLater(function() { nameField.forceActiveFocus(); nameField.selectAll() })
+  }
+
+  // "Paused since 5:17 PM" today, with the date once it is older.
+  function sinceText(seconds) {
+    var d = new Date(Number(seconds) * 1000)
+    var now = new Date()
+    var sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()
+    var when = Qt.formatTime(d, "HH:mm")
+    if (!sameDay) when = Qt.formatDate(d, Locale.ShortFormat) + " " + when
+    return "Paused since " + when
   }
 
   function focusWidth() {
@@ -72,10 +97,10 @@ Card {
   readonly property var keyHints: {
     if (overlay.naming || overlay.namingScene) return [["Enter", "save"], ["Esc", "cancel"]]
     if (overlay.renaming) return [["Enter", "rename"], ["Esc", "cancel"]]
-    if (overlay.contentMode) return [["click / ← → ↑ ↓", "select zone"], ["Tab", "next zone"], ["1 – 9", "zone by number"], ["type", "search apps"], ["↑ ↓", "pick a match"], ["Enter", "assign the match, else close"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
+    if (overlay.contentMode) return [["↑ ↓ (no zone)", "select scene"], ["Enter / Delete", "use / delete selected scene"], ["click / ← →", "select zone"], ["Tab", "next zone (keep search)"], ["1 – 9 (outside search)", "zone by number"], ["type", "search apps"], ["↑ ↓ (search)", "pick a match"], ["Enter (search)", "assign match"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
     if (overlay.numbering) return [["click", "next in order"], ["click again", "stack"], ["Backspace", "undo"], ["Enter", "done"]]
-    if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w", "save"], ["Esc", "leave"], ["?", "hide keys"]]
-    return [["← →", "browse (the windows follow)"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
+    if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w / Ctrl+S", "save"], ["Esc", "leave"], ["?", "hide keys"]]
+    return [["← → ↑ ↓ / hjkl", "browse layouts"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
   }
 
   readonly property string metaText: {
@@ -87,15 +112,19 @@ Card {
       return Content.sceneMeta(rail.scene, overlay.viewed ? overlay.viewed.name : "", overlay.workspaceId)
     }
     if (overlay.editing) {
+      if (overlay.managedContent) return "Preview off: assigned content stays put" + (overlay.draftIsNew ? " · save, then choose Use" : " · saving applies")
       var s = overlay.workspaceId !== "" ? "Previewing on workspace " + overlay.workspaceId : "Previewing"
       if (overlay.draftIsNew) s += "  ·  new layout"
       return s
     }
     if (!overlay.viewed) return "No layouts in ~/.config/hypr/layouts yet"
     var m = ""
-    if (overlay.viewedIsActive) m = "In use on workspace " + overlay.current.workspace.id
-    else if (overlay.managedContent && overlay.current && overlay.current.workspace) m = "Workspace " + overlay.current.workspace.id + " keeps its windows in place: it has assigned content"
-    else if (overlay.current && overlay.current.workspace) m = "Workspace " + overlay.current.workspace.id + " uses " + String(overlay.current.workspace.layout).replace(/^lua:/, "")
+    if (overlay.workspaceId !== "") {
+      if (overlay.liveLayout !== "" && overlay.liveLayout !== overlay.committedLayout)
+        m = "Previewing on workspace " + overlay.workspaceId + " · Enter keeps it, Esc puts " + overlay.committedLayout.replace(/^lua:/, "") + " back"
+      else if (overlay.viewedIsActive) m = "In use on workspace " + overlay.workspaceId
+      else m = "Workspace " + overlay.workspaceId + " uses " + overlay.committedLayout.replace(/^lua:/, "")
+    }
     if (overlay.viewedIsDefault) m += (m !== "" ? "  ·  " : "") + "default layout"
     if (!overlay.viewedInCycle) m += (m !== "" ? "  ·  " : "") + "not in the SUPER+L cycle"
     return m
@@ -110,7 +139,7 @@ Card {
 
   component Label: Text {
     textFormat: Text.PlainText
-    color: Util.alpha(rail.fg, 0.7)
+    color: rail.overlay.mutedForeground
     font.family: rail.family
     font.pixelSize: overlay.uiCaption
     font.bold: true
@@ -120,7 +149,7 @@ Card {
     textFormat: Text.PlainText
     width: column.width
     wrapMode: Text.WordWrap
-    color: Util.alpha(rail.fg, 0.62)
+    color: rail.overlay.mutedForeground
     font.family: rail.family
     font.pixelSize: overlay.uiCaption
   }
@@ -162,7 +191,7 @@ Card {
         visible: sh.collapsible
         textFormat: Text.PlainText
         text: sh.open ? "▾" : "▸"
-        color: Util.alpha(rail.fg, 0.7)
+        color: rail.overlay.mutedForeground
         font.family: rail.family
         font.pixelSize: overlay.uiCaption
         anchors.verticalCenter: parent.verticalCenter
@@ -180,10 +209,9 @@ Card {
       id: shDetail
       textFormat: Text.PlainText
       text: sh.detail
-      color: rail.accent
+      color: rail.overlay.mutedForeground
       font.family: rail.family
-      font.pixelSize: overlay.uiFontSmall
-      font.bold: true
+      font.pixelSize: overlay.uiCaption
       elide: Text.ElideRight
       width: Math.min(implicitWidth, parent.width - shTitle.implicitWidth - Style.spacing.lg * 2)
       anchors.right: parent.right
@@ -232,12 +260,19 @@ Card {
     property string label: ""
     property string valueText: ""
     property bool overridden: false
-    property string resetLabel: "global"
+    property string resetLabel: "Reset"
+    property string resetHint: "Back to the global value"
     property real minimum: 0
     property real maximum: 1
     property real step: 0.05
     property bool integer: false
     property real value: 0
+    property bool undoStarted: false
+    function changeValue(value, released) {
+      if (!undoStarted) { undoStarted = true; dragStarted() }
+      changed(value)
+      if (released) undoStarted = false
+    }
     signal dragStarted()
     signal changed(real value)   // every step of a drag, and its end
     signal reset()
@@ -261,7 +296,7 @@ Card {
           font.bold: true
           anchors.verticalCenter: parent.verticalCenter
         }
-        Action { visible: sf.overridden; text: sf.resetLabel; tooltipText: "Back to the default"; fontSize: overlay.uiCaption; onClicked: sf.reset() }
+        Action { visible: sf.overridden; text: sf.resetLabel; tooltipText: sf.resetHint; fontSize: overlay.uiCaption; onClicked: sf.reset() }
       }
     }
     PanelSlider {
@@ -274,9 +309,9 @@ Card {
       value: sf.value
       trackHeight: Math.max(4, Math.round(overlay.uiFontSmall * 0.28))
       knobSize: Math.max(14, Math.round(overlay.uiFontSmall * 0.85))
-      onDraggingChanged: if (dragging) sf.dragStarted()
-      onMoved: function(v) { sf.changed(v) }
-      onReleased: function(v) { sf.changed(v) }
+      onDraggingChanged: if (dragging) sf.undoStarted = false
+      onMoved: function(v) { sf.changeValue(v, false) }
+      onReleased: function(v) { sf.changeValue(v, true) }
     }
   }
 
@@ -291,17 +326,20 @@ Card {
     descriptionSize: overlay.uiCaption
   }
 
-  // A row of exclusive choices; the selected one reads as pressed.
-  component Choice: Row {
+  // A row of exclusive choices; the selected one reads as pressed. Wraps
+  // when the options outgrow the rail (the aspect presets do).
+  component Choice: Flow {
     id: choice
     property var options: []
     property string value: ""
     signal changed(string value)
+    width: column.width
     spacing: Style.spacing.md
     Repeater {
       model: choice.options
       Action {
         required property var modelData
+        horizontalPadding: Style.spacing.lg
         text: modelData.label
         selected: String(modelData.value) === choice.value
         onClicked: choice.changed(String(modelData.value))
@@ -309,13 +347,15 @@ Card {
     }
   }
 
-  component KeyHint: Row {
+  component KeyHint: Item {
     id: hint
     property string keys: ""
     property string label: ""
-    spacing: Style.spacing.sm
+    width: column.width
+    implicitHeight: Math.max(keyBox.height, hintText.implicitHeight)
     Rectangle {
-      width: keyText.implicitWidth + Style.space(10)
+      id: keyBox
+      width: Math.min(keyText.implicitWidth + Style.space(10), hint.width * 0.62)
       height: keyText.implicitHeight + Style.space(4)
       radius: overlay.radiusControl
       color: Util.alpha(rail.fg, 0.08)
@@ -325,21 +365,28 @@ Card {
       Text {
         id: keyText
         anchors.centerIn: parent
+        width: parent.width - Style.space(10)
         textFormat: Text.PlainText
         text: hint.keys
         color: rail.fg
         font.family: rail.family
         font.pixelSize: overlay.uiCaption
         font.bold: true
+        wrapMode: Text.WordWrap
       }
     }
     Text {
+      id: hintText
+      anchors.left: keyBox.right
+      anchors.leftMargin: Style.spacing.md
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: hint.label
-      color: Util.alpha(rail.fg, 0.7)
+      color: rail.overlay.mutedForeground
       font.family: rail.family
       font.pixelSize: overlay.uiCaption
-      anchors.verticalCenter: parent.verticalCenter
+      wrapMode: Text.WordWrap
     }
   }
 
@@ -461,6 +508,51 @@ Card {
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.spacing.sm
+            Action {
+              text: "?"
+              selected: overlay.showKeys
+              bordered: false
+              fontSize: overlay.uiFontSmall
+              tooltipText: overlay.showKeys ? "Hide the keys (?)" : "Show the keys (?)"
+              onClicked: overlay.setPref("showKeys", !overlay.showKeys)
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Action {
+              text: overlay.dockLeft ? "⇥" : "⇤"
+              bordered: false
+              fontSize: overlay.uiFontSmall
+              tooltipText: overlay.dockLeft ? "Dock the rail on the right" : "Dock the rail on the left"
+              onClicked: overlay.setPref("dockLeft", !overlay.dockLeft)
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+        }
+
+        Item {
+          visible: !overlay.naming && !overlay.renaming && !overlay.namingScene
+          width: parent.width
+          implicitHeight: Math.max(titleText.implicitHeight, titleStatus.implicitHeight)
+          Text {
+            id: titleText
+            anchors.left: parent.left
+            anchors.right: titleStatus.left
+            anchors.rightMargin: Style.spacing.sm
+            anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
+            text: overlay.editing ? overlay.draftName
+              : overlay.contentMode ? ((overlay.catalogFailed || overlay.contentCatalog === null) ? "Scenes" : Content.sceneTitle(rail.scene, overlay.workspaceId))
+              : (overlay.viewed ? overlay.viewed.name : "No layouts")
+            color: rail.accent
+            font.family: rail.family
+            font.pixelSize: overlay.uiTitle
+            font.bold: true
+            elide: Text.ElideRight
+          }
+          Row {
+            id: titleStatus
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.spacing.sm
             Label {
               visible: !overlay.editing && !overlay.contentMode && overlay.layouts.length > 0
               text: (overlay.viewIndex + 1) + " / " + overlay.layouts.length
@@ -474,38 +566,7 @@ Card {
               fontSize: overlay.uiCaption
               anchors.verticalCenter: parent.verticalCenter
             }
-            Action {
-              text: "?"
-              selected: overlay.showKeys
-              bordered: false
-              fontSize: overlay.uiCaption
-              tooltipText: overlay.showKeys ? "Hide the keys (?)" : "Show the keys (?)"
-              onClicked: overlay.setPref("showKeys", !overlay.showKeys)
-              anchors.verticalCenter: parent.verticalCenter
-            }
-            Action {
-              text: overlay.dockLeft ? "⇥" : "⇤"
-              bordered: false
-              fontSize: overlay.uiCaption
-              tooltipText: overlay.dockLeft ? "Dock the rail on the right" : "Dock the rail on the left"
-              onClicked: overlay.setPref("dockLeft", !overlay.dockLeft)
-              anchors.verticalCenter: parent.verticalCenter
-            }
           }
-        }
-
-        Text {
-          visible: !overlay.naming && !overlay.renaming && !overlay.namingScene
-          width: parent.width
-          textFormat: Text.PlainText
-          text: overlay.editing ? overlay.draftName
-            : overlay.contentMode ? ((overlay.catalogFailed || overlay.contentCatalog === null) ? "Scenes" : Content.sceneTitle(rail.scene, overlay.workspaceId))
-            : (overlay.viewed ? overlay.viewed.name : "No layouts")
-          color: rail.accent
-          font.family: rail.family
-          font.pixelSize: overlay.uiTitle
-          font.bold: true
-          elide: Text.ElideRight
         }
 
         TextField {
@@ -526,6 +587,7 @@ Card {
 
         Muted { text: rail.metaText; visible: text !== "" }
         Muted { visible: rail.scenesTab && rail.scene !== null && !!rail.scene.error; text: rail.scene ? (rail.scene.error || "") : ""; color: Color.urgent }
+        Muted { visible: rail.scenesTab && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: Content.retrySummary(rail.scene) }
 
         Flow {
           width: parent.width
@@ -533,16 +595,21 @@ Card {
           topPadding: Style.spacing.xs
 
           // the Layouts tab
-          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: overlay.viewedIsActive ? "In use" : "Use"; selected: overlay.viewedIsActive; tooltipText: "Use on this workspace and close (Enter)"; enabled: overlay.viewed !== null && !overlay.viewedIsActive && !overlay.busy; onClicked: overlay.applyViewed(true) }
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.viewedIsActive; text: "Use"; selected: true; tooltipText: "Use on this workspace and close (Enter)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.applyViewed(true) }
           Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Edit"; tooltipText: "Edit this layout (e)"; enabled: overlay.viewed !== null; onClicked: overlay.startEdit(false) }
           Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "New"; selected: overlay.choosingNew; tooltipText: "New layout: blank, or a copy of this one (n)"; enabled: overlay.current !== null; onClicked: { overlay.confirmingDelete = false; overlay.choosingNew = !overlay.choosingNew } }
-          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Rename"; tooltipText: "Rename this layout (F2)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.startRename() }
-          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.confirmingDelete; text: "Delete"; accent: Color.urgent; tooltipText: overlay.viewedIsDefault ? "The default layout cannot be deleted; make another the default first" : "Delete this layout's file (d)"; enabled: overlay.viewed !== null && !overlay.viewedIsDefault && !overlay.busy; onClicked: { overlay.choosingNew = false; overlay.confirmingDelete = true } }
+          Row {
+            visible: !overlay.editing && !overlay.renaming && !overlay.contentMode
+            spacing: Style.spacing.sm
+            Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Rename"; tooltipText: "Rename this layout (F2)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.startRename() }
+            Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.confirmingDelete; text: "Delete"; accent: Color.urgent; tooltipText: overlay.viewedIsDefault ? "The default layout cannot be deleted; make another the default first" : "Delete this layout's file (d)"; enabled: overlay.viewed !== null && !overlay.viewedIsDefault && !overlay.busy; onClicked: { overlay.choosingNew = false; overlay.confirmingDelete = true } }
+          }
           // the Scenes tab
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.sceneNamed; text: "Save"; tooltipText: rail.sceneModified ? "Save the changes to " + rail.scene.document.name : "Saved"; enabled: rail.sceneModified && !overlay.busy; onClicked: overlay.saveScene(rail.scene.document.name) }
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.contentReady; text: rail.sceneNamed ? "Save as…" : "Save as scene…"; tooltipText: "Save this workspace's layout and content under a name"; enabled: !overlay.busy; onClicked: overlay.startSceneSave() }
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && rail.scene.can_restore === true && ["restored", "none"].indexOf(rail.scene.phase) === -1; text: "Restore previous"; tooltipText: "Put back the layout and content the workspace had before the scene"; enabled: !overlay.busy; onClicked: overlay.sceneAction("restore") }
-          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: "Retry"; tooltipText: "Check the pending content again"; enabled: !overlay.busy; onClicked: overlay.sceneAction("retry") }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: "Retry"; tooltipText: Content.retrySummary(rail.scene); enabled: !overlay.busy; onClicked: overlay.sceneAction("retry") }
+          Action { visible: rail.scenesTab && !overlay.namingScene && rail.scene !== null && rail.scene.can_dismiss === true; text: "Dismiss"; tooltipText: "Forget this scene and release its zone assignments; keep the layout and open apps"; enabled: !overlay.busy; onClicked: overlay.sceneAction("dismiss") }
           // naming a scene
           Action { visible: overlay.namingScene; text: "Save"; onClicked: overlay.confirmSceneName() }
           Action { visible: overlay.namingScene; text: "Cancel"; onClicked: { overlay.namingScene = false; overlay.errorText = ""; overlay.focusKeys() } }
@@ -598,22 +665,59 @@ Card {
         }
       }
 
-      // ---- View mode: a layout switch over assigned content replaces it.
+      // ---- Confirm replacing assigned content or a modified scene.
       Prompt {
-        visible: !overlay.editing && overlay.pendingSwitch !== null && overlay.viewed !== null
+        id: switchPrompt
+        visible: !overlay.editing && overlay.pendingSwitch !== null
         warning: true
-        PromptTitle { text: "Use " + (overlay.viewed ? overlay.viewed.name : "") + " anyway?" }
+        PromptTitle { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName) : "") + " anyway?" }
         Muted { width: parent.width; text: overlay.switchSummary() }
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
-          Action { text: "Use " + (overlay.viewed ? overlay.viewed.name : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
+          Action { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName) : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
           Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.pendingSwitch = null }
         }
       }
 
+      // ---- Session saving, when it needs attention: a notice with its actions.
+      Prompt {
+        id: sessionNotice
+        readonly property bool attention: Session.attention(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked)
+        readonly property var unmatched: (overlay.sessionStatus && overlay.sessionStatus.unmatched) || []
+        visible: attention || unmatched.length > 0
+        warning: attention
+        PromptTitle { text: Session.summary(overlay.sessionStatus, overlay.sessionAvailable, overlay.sessionChecked) }
+        Muted {
+          width: parent.width
+          visible: !!(overlay.sessionStatus && overlay.sessionStatus.saving && overlay.sessionStatus.saving.since)
+          text: visible ? rail.sinceText(overlay.sessionStatus.saving.since) : ""
+        }
+        Flow {
+          width: parent.width
+          spacing: Style.spacing.sm
+          Action { visible: Session.canResume(overlay.sessionStatus); text: "Resume saving"; selected: true; tooltipText: "Accept the current desktop and resume saving; pending scene delivery keeps retrying"; enabled: !overlay.busy; onClicked: overlay.resumeSession() }
+          Action { visible: sessionNotice.unmatched.length > 0; text: overlay.showSessionDetails ? "Hide unmatched" : "Show unmatched"; onClicked: overlay.showSessionDetails = !overlay.showSessionDetails }
+        }
+        Column {
+          width: parent.width
+          visible: overlay.showSessionDetails
+          spacing: Style.spacing.xs
+          Repeater {
+            model: overlay.showSessionDetails ? ((overlay.sessionStatus && overlay.sessionStatus.unmatched) || []) : []
+            Muted { required property var modelData; width: parent.width; text: modelData.class + (modelData.title ? " — " + modelData.title : "") + ": " + modelData.reason }
+          }
+        }
+      }
+
       // ---- The Scenes tab: saved scenes, what each zone holds, the selected zone.
-      ContentPane { id: contentPane; visible: rail.scenesTab; width: column.width; overlay: rail.overlay }
+      ContentPane {
+        id: contentPane
+        visible: rail.scenesTab
+        width: column.width
+        overlay: rail.overlay
+        onRevealItem: function(item) { rail.revealItem(item) }
+      }
 
       // ---- Edit mode: unsaved changes.
       Prompt {
@@ -701,7 +805,7 @@ Card {
                       bits.push(n + (n === 1 ? " slot" : " slots"))
                       return bits.join("  ·  ")
                     }
-                    color: Util.alpha(rail.fg, 0.62)
+                    color: rail.overlay.mutedForeground
                     font.family: rail.family
                     font.pixelSize: overlay.uiCaption
                     elide: Text.ElideRight
@@ -730,6 +834,7 @@ Card {
             if (!overlay.viewed || !overlay.viewed.spec) return ""
             var spec = overlay.viewed.spec
             var count = Array.isArray(spec.fill) ? spec.fill.length : overlay.zones.length
+            if (count === 1) return "Every window shares slot 1"
             var s = "Windows take slots 1 to " + count + " in order"
             var c = Geometry.cycleSummary(spec)
             if (c !== "") s += ", " + c
@@ -754,12 +859,12 @@ Card {
               required property var modelData
               readonly property bool uses: overlay.viewed !== null && modelData.layout === "lua:" + overlay.viewed.name
               width: column.width
-              implicitHeight: Math.max(wsText.implicitHeight, wsButton.implicitHeight)
+              implicitHeight: Math.max(wsText.implicitHeight, wsControl.implicitHeight)
 
               Column {
                 id: wsText
                 anchors.left: parent.left
-                anchors.right: wsButton.left
+                anchors.right: wsControl.left
                 anchors.rightMargin: Style.spacing.lg
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.spacing.xxs
@@ -776,24 +881,45 @@ Card {
                 Text {
                   textFormat: Text.PlainText
                   width: parent.width
-                  text: wsRow.modelData.monitor + "  ·  " + String(wsRow.modelData.layout).replace(/^lua:/, "") + (wsRow.modelData.windows > 0 ? "  ·  " + wsRow.modelData.windows + (wsRow.modelData.windows === 1 ? " window" : " windows") : "")
-                  color: Util.alpha(rail.fg, 0.62)
+                  id: wsMeta
+                  readonly property string compactText: String(wsRow.modelData.windows || 0) + " win  ·  " + String(wsRow.modelData.layout).replace(/^lua:/, "")
+                  // Drop the monitor before sacrificing the window count.
+                  text: wsMeasure.advanceWidth <= width ? wsMeasure.text : compactText
+                  TextMetrics {
+                    id: wsMeasure
+                    font: wsMeta.font
+                    text: wsMeta.compactText + "  ·  " + wsRow.modelData.monitor
+                  }
+                  color: rail.overlay.mutedForeground
                   font.family: rail.family
                   font.pixelSize: overlay.uiCaption
                   elide: Text.ElideRight
                 }
               }
-              Action {
-                id: wsButton
+              Item {
+                id: wsControl
                 anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: wsRow.uses ? "In use" : "Use"
-                selected: wsRow.uses
-                fontSize: overlay.uiCaption
-                tooltipText: "Use " + (overlay.viewed ? overlay.viewed.name : "") + " on workspace " + wsRow.modelData.id + "; the overlay stays open"
-                enabled: !wsRow.uses && !overlay.busy
-                opacity: 1
-                onClicked: overlay.applyTo(wsRow.modelData.id)
+                implicitWidth: wsRow.uses ? wsStatus.implicitWidth : wsButton.implicitWidth
+                implicitHeight: wsRow.uses ? wsStatus.implicitHeight : wsButton.implicitHeight
+                Chip {
+                  id: wsStatus
+                  visible: wsRow.uses
+                  text: "In use"
+                  foreground: rail.accent
+                  fontFamily: rail.family
+                  fontSize: overlay.uiCaption
+                }
+                Action {
+                  id: wsButton
+                  visible: !wsRow.uses
+                  text: "Use"
+                  fontSize: overlay.uiCaption
+                  tooltipText: "Use " + (overlay.viewed ? overlay.viewed.name : "") + " on workspace " + wsRow.modelData.id + "; the overlay stays open"
+                  enabled: !wsRow.uses && !overlay.busy
+                  opacity: 1
+                  onClicked: overlay.applyTo(wsRow.modelData.id)
+                }
               }
             }
           }
@@ -806,7 +932,15 @@ Card {
             model: overlay.monitors
             Action {
               required property var modelData
-              text: "Use on all of " + modelData
+              text: monitorLabel.elidedText
+              TextMetrics {
+                id: monitorLabel
+                text: "Use on all of " + modelData
+                font.family: rail.family
+                font.pixelSize: overlay.uiCaption
+                elide: Qt.ElideRight
+                elideWidth: Math.max(0, column.width - overlay.uiFont * 3)
+              }
               fontSize: overlay.uiCaption
               tooltipText: "Every workspace currently on " + modelData
               enabled: !overlay.busy
@@ -881,7 +1015,6 @@ Card {
           spacing: Style.spacing.sm
           Action { text: "Split columns"; tooltipText: "c"; onClicked: overlay.splitSelected("columns") }
           Action { text: "Split rows"; tooltipText: "r"; onClicked: overlay.splitSelected("rows") }
-          Action { text: "Delete"; accent: Color.urgent; tooltipText: "x, or right-click the zone"; onClicked: overlay.deleteZone(overlay.selected) }
         }
 
         Field {
@@ -996,7 +1129,7 @@ Card {
           label: "Scale"
           valueText: Math.round(((rail.sel && rail.sel.scale) || 1) * 100) + "%"
           overridden: rail.sel !== null && rail.sel.scale !== undefined
-          resetLabel: "100%"
+          resetHint: "Back to 100%"
           minimum: 0.1
           maximum: 1
           step: 0.05
@@ -1004,6 +1137,16 @@ Card {
           onDragStarted: overlay.pushUndo()
           onChanged: function(v) { overlay.liveZoneProp("scale", v >= 1 ? null : Math.round(v * 100) / 100) }
           onReset: overlay.zoneProp("scale", null)
+        }
+
+        Action {
+          visible: rail.sel !== null
+          text: "Delete zone"
+          bordered: false
+          foreground: Color.urgent
+          accent: Color.urgent
+          tooltipText: "Remove this zone; its neighbours take the room (x, or right-click the zone)"
+          onClicked: overlay.deleteZone(overlay.selected)
         }
       }
 
@@ -1155,11 +1298,9 @@ Card {
       Section {
         visible: overlay.showKeys
         title: "KEYS"
-        Grid {
+        Column {
           width: column.width
-          columns: 2
-          columnSpacing: Style.spacing.xl
-          rowSpacing: Style.spacing.xs
+          spacing: Style.spacing.xs
           Repeater {
             model: rail.keyHints
             KeyHint {
@@ -1173,7 +1314,7 @@ Card {
 
       Muted {
         visible: !overlay.showKeys && !overlay.naming && !overlay.renaming && !overlay.namingScene
-        text: overlay.editing ? "Hold Space to peek at the windows  ·  ? for the keys" : "Hold Space to peek  ·  ? for the keys"
+        text: "Hold Space to peek  ·  ? for the keys"
       }
     }
   }

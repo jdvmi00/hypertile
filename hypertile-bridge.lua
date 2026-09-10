@@ -72,21 +72,28 @@ local function write_file(path, content)
   if not f then
     return nil, err
   end
-  f:write(content)
-  f:close()
+  local written, werr = f:write(content)
+  local closed, cerr = f:close()
+  if not written or not closed then return nil, werr or cerr end
   return true
 end
 
 -- A reader never sees a half-written file: the content lands in a sibling
 -- and is renamed into place.
 local function write_file_atomic(path, content)
-  local ok, err = write_file(path .. ".tmp", content)
+  local handle = io.popen("mktemp -- " .. shell_quote(path .. ".tmp.XXXXXX"))
+  if not handle then return nil, "cannot create temporary file for " .. path end
+  local temporary = handle:read("l")
+  local created = handle:close()
+  if not created or not temporary then return nil, "cannot create temporary file for " .. path end
+  local ok, err = write_file(temporary, content)
   if not ok then
+    os.remove(temporary)
     return nil, err
   end
-  local renamed, rerr = os.rename(path .. ".tmp", path)
+  local renamed, rerr = os.rename(temporary, path)
   if not renamed then
-    os.remove(path .. ".tmp")
+    os.remove(temporary)
     return nil, rerr
   end
   return true
@@ -199,7 +206,9 @@ function M.list()
       out[#out + 1] = { name = stem, path = path, error = err }
     else
       for _, e in ipairs(entries) do
-        out[#out + 1] = { name = e.name, path = path, spec = e.spec }
+        local valid, validation_error = M.validate(e.name, e.spec)
+        out[#out + 1] = { name = e.name, path = path, spec = valid and e.spec or nil,
+          error = validation_error }
       end
     end
   end
@@ -893,7 +902,9 @@ end
 -- Record one press for workspace `id`, whose compositor layout is
 -- `current`: the target steps on from the pending target when a burst is
 -- under way. Returns the target and the request's sequence number.
+-- The CLI holds cycle-<id>.lock across each request/commit transaction.
 function M.cycle_request(id, current, reverse)
+  if not valid_workspace(id) then return nil, "invalid workspace id " .. tostring(id) end
   local pending = M.cycle_pending(id)
   local target = M.cycle_target(pending and pending.target or current, M.cycle_names(), reverse)
   local seq = (pending and tonumber(pending.seq) or 0) + 1
@@ -908,6 +919,7 @@ end
 -- Apply request `seq` for workspace `id` if no later press superseded it.
 -- Returns false when it did, otherwise what M.apply returns.
 function M.cycle_commit(id, seq)
+  if not valid_workspace(id) then return nil, "invalid workspace id " .. tostring(id) end
   local pending = M.cycle_pending(id)
   if not pending or tonumber(pending.seq) ~= tonumber(seq) then
     return false
@@ -979,18 +991,77 @@ end
 -- The default layout for workspaces without a rule lives in looknfeel.lua
 -- as general.layout. Read it, or replace it in place (the line must exist).
 M.looknfeel_path = M.paths.config_home .. "/hypr/looknfeel.lua"
-local layout_pattern = '(general%s*=%s*{[^}]-layout%s*=%s*")([^"]*)(")'
+
+-- Locate a literal general.layout without executing the user's config.
+-- Strings and comments are single tokens, so their braces and field names
+-- cannot be mistaken for table structure.
+local function default_layout_token(text)
+  local tokens, i = {}, 1
+  while i <= #text do
+    local start, c = i, text:sub(i, i)
+    local comment = text:sub(i, i + 1) == "--"
+    if comment then i = i + 2 end
+    local equals = text:sub(i):match("^%[(=*)%[")
+    if equals then
+      local _, finish = text:find("]" .. equals .. "]", i + #equals + 2, true)
+      if not finish then return nil end
+      i = finish + 1
+    elseif comment then
+      i = text:find("\n", i, true) or (#text + 1)
+    elseif c == '"' or c == "'" then
+      i = i + 1
+      while i <= #text and text:sub(i, i) ~= c do
+        i = i + (text:sub(i, i) == "\\" and 2 or 1)
+      end
+      if i > #text then return nil end
+      i = i + 1
+    elseif c:match("[%a_]") then
+      i = i + #text:sub(i):match("^[%w_]+")
+    else
+      i = i + 1
+    end
+    if not comment and not c:match("%s") then
+      tokens[#tokens + 1] = { value = text:sub(start, i - 1), first = start, last = i - 1,
+        literal = equals ~= nil or c == '"' or c == "'" }
+    end
+  end
+  local depth
+  for index, token in ipairs(tokens) do
+    local next_token, after = tokens[index + 1], tokens[index + 2]
+    if depth then
+      if depth == 1 and token.value == "layout" and next_token and next_token.value == "="
+        and after and after.literal then
+        -- Only a standalone string literal; concatenations/expressions must
+        -- be edited by hand rather than replacing one part of the expression.
+        local following = tokens[index + 3]
+        if not following or not ({ [","] = true, [";"] = true, ["}"] = true })[following.value] then return nil end
+        local chunk = load("return " .. after.value, "=general.layout", "t", {})
+        if not chunk then return nil end
+        after.layout = chunk()
+        return after
+      end
+      if token.value == "{" then depth = depth + 1 end
+      if token.value == "}" then
+        depth = depth - 1
+        if depth == 0 then depth = nil end
+      end
+    elseif token.value == "general" and next_token and next_token.value == "="
+      and after and after.value == "{" then
+      depth = 0 -- The opening brace will be counted when its token is visited.
+    end
+  end
+end
 
 function M.default_layout()
   local text = read_file(M.looknfeel_path)
   if not text then
     return nil, "cannot read " .. M.looknfeel_path
   end
-  local _, value = text:match(layout_pattern)
-  if not value then
+  local token = default_layout_token(text)
+  if not token then
     return nil, "no general.layout in " .. M.looknfeel_path
   end
-  return value
+  return token.layout
 end
 
 function M.set_default_layout(layout)
@@ -999,12 +1070,11 @@ function M.set_default_layout(layout)
   if not before then
     return nil, "cannot read " .. M.looknfeel_path
   end
-  local text, count = before:gsub(layout_pattern, function(pre, _, post)
-    return pre .. layout .. post
-  end, 1)
-  if count == 0 then
+  local token = default_layout_token(before)
+  if not token then
     return nil, "no general.layout in " .. M.looknfeel_path .. "; set it by hand once"
   end
+  local text = before:sub(1, token.first - 1) .. string.format("%q", layout) .. before:sub(token.last + 1)
   write_file(M.looknfeel_path .. ".bak", before)
   local ok, err = write_file_atomic(M.looknfeel_path, text)
   if not ok then

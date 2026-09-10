@@ -4,6 +4,7 @@ import Quickshell.Io
 import Quickshell.Hyprland
 import qs.Commons
 import qs.Ui
+import "Session.js" as Session
 
 // The layout on this monitor's active workspace, in the bar. Click opens
 // the overlay; the wheel and middle-click cycle through the layouts. The label follows
@@ -21,6 +22,8 @@ BarWidget {
   property string layout: ""         // as the compositor names it: lua:columns, dwindle
   property int workspaceId: 0
   readonly property string label: displayName(layout)
+  SessionStatus { id: sessionReader; ctl: root.ctl }
+  readonly property bool sessionAttention: Session.attention(sessionReader.data, sessionReader.available, sessionReader.checked)
 
   // A bar is built per monitor, so each instance describes the workspace
   // active on its own screen rather than the one holding keyboard focus.
@@ -147,12 +150,14 @@ BarWidget {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.vertical || root.label === "" ? root.icon : root.icon + "  " + root.label
+    text: (root.vertical || root.label === "" ? root.icon : root.icon + "  " + root.label) + (root.sessionAttention ? " !" : "")
+    active: root.sessionAttention
     fontSize: Style.font.caption
     horizontalMargin: 6
     tooltipText: root.ctlMissing
       ? "hypertile-ctl is not installed: run install.sh in ~/.config/omarchy/plugins/jmartin.hypertile"
       : (root.label !== "" ? root.label + " on workspace " + root.workspaceId + "\n" : "")
+        + Session.summary(sessionReader.data, sessionReader.available, sessionReader.checked) + "\n"
         + "Click: layouts overlay · Scroll or middle-click: next layout"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.MiddleButton) root.cycle(false)
