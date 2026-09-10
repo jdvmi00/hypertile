@@ -89,8 +89,8 @@ Card {
     if (overlay.renaming) return [["Enter", "rename"], ["Esc", "cancel"]]
     if (overlay.contentMode) return [["↑ ↓ (no zone)", "select scene"], ["Enter / Delete", "use / delete selected scene"], ["click / ← →", "select zone"], ["Tab", "next zone (keep search)"], ["1 – 9 (outside search)", "zone by number"], ["type", "search apps"], ["↑ ↓ (search)", "pick a match"], ["Enter (search)", "assign match"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
     if (overlay.numbering) return [["click", "next in order"], ["click again", "stack"], ["Backspace", "undo"], ["Enter", "done"]]
-    if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w", "save"], ["Esc", "leave"], ["?", "hide keys"]]
-    return [["← →", "browse (the windows follow)"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
+    if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w / Ctrl+S", "save"], ["Esc", "leave"], ["?", "hide keys"]]
+    return [["← → ↑ ↓ / hjkl", "browse layouts"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
   }
 
   readonly property string metaText: {
@@ -129,7 +129,7 @@ Card {
 
   component Label: Text {
     textFormat: Text.PlainText
-    color: Util.alpha(rail.fg, 0.7)
+    color: rail.overlay.mutedForeground
     font.family: rail.family
     font.pixelSize: overlay.uiCaption
     font.bold: true
@@ -139,7 +139,7 @@ Card {
     textFormat: Text.PlainText
     width: column.width
     wrapMode: Text.WordWrap
-    color: Util.alpha(rail.fg, 0.62)
+    color: rail.overlay.mutedForeground
     font.family: rail.family
     font.pixelSize: overlay.uiCaption
   }
@@ -181,7 +181,7 @@ Card {
         visible: sh.collapsible
         textFormat: Text.PlainText
         text: sh.open ? "▾" : "▸"
-        color: Util.alpha(rail.fg, 0.7)
+        color: rail.overlay.mutedForeground
         font.family: rail.family
         font.pixelSize: overlay.uiCaption
         anchors.verticalCenter: parent.verticalCenter
@@ -334,13 +334,15 @@ Card {
     }
   }
 
-  component KeyHint: Row {
+  component KeyHint: Item {
     id: hint
     property string keys: ""
     property string label: ""
-    spacing: Style.spacing.sm
+    width: column.width
+    implicitHeight: Math.max(keyBox.height, hintText.implicitHeight)
     Rectangle {
-      width: keyText.implicitWidth + Style.space(10)
+      id: keyBox
+      width: Math.min(keyText.implicitWidth + Style.space(10), hint.width * 0.5)
       height: keyText.implicitHeight + Style.space(4)
       radius: overlay.radiusControl
       color: Util.alpha(rail.fg, 0.08)
@@ -350,21 +352,28 @@ Card {
       Text {
         id: keyText
         anchors.centerIn: parent
+        width: parent.width - Style.space(10)
         textFormat: Text.PlainText
         text: hint.keys
         color: rail.fg
         font.family: rail.family
         font.pixelSize: overlay.uiCaption
         font.bold: true
+        wrapMode: Text.WordWrap
       }
     }
     Text {
+      id: hintText
+      anchors.left: keyBox.right
+      anchors.leftMargin: Style.spacing.md
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
       textFormat: Text.PlainText
       text: hint.label
-      color: Util.alpha(rail.fg, 0.7)
+      color: rail.overlay.mutedForeground
       font.family: rail.family
       font.pixelSize: overlay.uiCaption
-      anchors.verticalCenter: parent.verticalCenter
+      wrapMode: Text.WordWrap
     }
   }
 
@@ -782,7 +791,7 @@ Card {
                       bits.push(n + (n === 1 ? " slot" : " slots"))
                       return bits.join("  ·  ")
                     }
-                    color: Util.alpha(rail.fg, 0.62)
+                    color: rail.overlay.mutedForeground
                     font.family: rail.family
                     font.pixelSize: overlay.uiCaption
                     elide: Text.ElideRight
@@ -867,7 +876,7 @@ Card {
                     font: wsMeta.font
                     text: wsMeta.compactText + "  ·  " + wsRow.modelData.monitor
                   }
-                  color: Util.alpha(rail.fg, 0.62)
+                  color: rail.overlay.mutedForeground
                   font.family: rail.family
                   font.pixelSize: overlay.uiCaption
                   elide: Text.ElideRight
@@ -1266,11 +1275,9 @@ Card {
       Section {
         visible: overlay.showKeys
         title: "KEYS"
-        Grid {
+        Column {
           width: column.width
-          columns: 2
-          columnSpacing: Style.spacing.xl
-          rowSpacing: Style.spacing.xs
+          spacing: Style.spacing.xs
           Repeater {
             model: rail.keyHints
             KeyHint {

@@ -200,7 +200,7 @@ Column {
 
   component Label: Text {
     textFormat: Text.PlainText
-    color: Util.alpha(pane.fg, 0.7)
+    color: pane.overlay.mutedForeground
     font.family: pane.family
     font.pixelSize: pane.overlay.uiCaption
     font.bold: true
@@ -211,7 +211,7 @@ Column {
     textFormat: Text.PlainText
     width: pane.width
     wrapMode: Text.WordWrap
-    color: urgent ? Color.urgent : Util.alpha(pane.fg, 0.62)
+    color: urgent ? Color.urgent : pane.overlay.mutedForeground
     font.family: pane.family
     font.pixelSize: pane.overlay.uiCaption
   }
@@ -344,7 +344,7 @@ Column {
         width: Math.max(0, parent.width - x)
         textFormat: Text.PlainText
         text: row.sub
-        color: Util.alpha(pane.fg, 0.7)
+        color: pane.overlay.mutedForeground
         font.family: pane.family
         font.pixelSize: pane.overlay.uiFontSmall
         elide: Text.ElideRight
@@ -359,7 +359,7 @@ Column {
       width: Math.min(implicitWidth, row.width * 0.45)
       textFormat: Text.PlainText
       text: row.trait
-      color: row.urgent ? Color.urgent : Util.alpha(pane.fg, 0.62)
+      color: row.urgent ? Color.urgent : pane.overlay.mutedForeground
       font.family: pane.family
       font.pixelSize: pane.overlay.uiCaption
       elide: Text.ElideRight
@@ -465,7 +465,7 @@ Column {
           textFormat: Text.PlainText
           width: parent.width
           text: card.meta
-          color: card.valid ? Util.alpha(pane.fg, 0.62) : Color.urgent
+          color: card.valid ? pane.overlay.mutedForeground : Color.urgent
           font.family: pane.family
           font.pixelSize: pane.overlay.uiCaption
           wrapMode: card.valid ? Text.NoWrap : Text.WordWrap
@@ -646,7 +646,7 @@ Column {
           anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
           text: pane.sel ? pane.sel.name : ""
-          color: Util.alpha(pane.fg, 0.62)
+          color: pane.overlay.mutedForeground
           font.family: pane.family
           font.pixelSize: pane.overlay.uiCaption
         }

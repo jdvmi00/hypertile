@@ -55,7 +55,7 @@ jobs:
       - name: Overlay geometry
         run: node test/geometry.js
       - name: Overlay editor
-        run: node test/editor.js && node test/overlay.js
+        run: node test/editor.js && node test/overlay.js && node test/readability.js
       - name: Installable tree excludes agent instructions
         run: test -z "$(git ls-files | grep -Ei '(^|/)(AGENTS|CLAUDE|GEMINI)\.md$' || true)"
       - name: Plugin manifest

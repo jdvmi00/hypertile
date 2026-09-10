@@ -131,11 +131,11 @@ the layout's name, the actions, and the settings for the current mode. It
 docks on the left or the right and remembers that, along with which
 sections are open, in `~/.local/state/hypertile/overlay.json`.
 
-### View mode
+### Layouts tab
 
 | Key | Action |
 |---|---|
-| `←` `→` or `h` `l`, or a click in the rail's list | browse the layouts on disk; the workspace follows |
+| arrows or `h` `j` `k` `l`, or a click in the rail's list | browse the layouts on disk; the workspace follows |
 | `Enter` | use the viewed layout on this workspace and close |
 | `Esc`, click outside | close; the workspace goes back to the layout it had |
 | `Space` (hold) | peek: the overlay fades to hairlines |
@@ -154,9 +154,29 @@ fall back to the default. The rail's **Workspaces** section uses the viewed
 layout on any workspace, on every workspace of a monitor, or as the
 default, and keeps the overlay open.
 
+### Scenes tab
+
+Switch to **Scenes** to choose what each zone holds: **Local windows**, **Empty**,
+an open window, or an installed app. Click a zone, press its fill number outside
+the search field, or use `Tab` to select it. Type to search; app names can start
+with digits. `↑`/`↓` select a match, `Enter` assigns it, and `Tab` moves to the
+next zone while keeping the query. `Esc` clears a query first, then closes;
+`?` shows the keys. Ordinary letters, including `hjkl`, remain search text.
+
+With no zone selected, `↑`/`↓` browse saved scenes, `Enter` uses the selected
+scene, and `Delete` asks before removing its file (`Enter` confirms, `Esc`
+cancels). **Save** updates the named scene; **Save as…** stores another one.
+Using a saved scene asks before replacing unsaved scene changes. **Retry**
+rechecks pending content, and **Restore previous** returns to the arrangement
+from before the scene. Clicking outside the zones deselects first; a second
+click closes. See [Scenes and content](docs/SCENES.md) for placement, recovery,
+and app identity details.
+
 ### Edit mode
 
-Everything previews live on the current workspace.
+Edits preview live on an unmanaged workspace. When a workspace has assigned
+content, preview stays off: saving an existing layout applies the changes, and
+saving a new layout asks before using it and replacing those assignments.
 
 ![Edit mode with the top-left zone selected: split buttons on the zone, the Zone section in the rail](docs/screenshots/overlay-edit.jpg)
 
@@ -170,7 +190,7 @@ Everything previews live on the current workspace.
 | `s` | toggle spacer (an empty hole that never takes windows) |
 | `f` | renumber: click zones in fill order, `Backspace` undoes, `Enter` finishes |
 | `u` | undo |
-| `w` | save (a new layout asks for a name) |
+| `w`, `Ctrl+S` | save (a new layout asks for a name) |
 | `Esc` | leave; with unsaved changes it asks: Discard, Save, or keep editing |
 
 The rail's **Zone** section names the selected zone (names matter in the
@@ -187,8 +207,8 @@ workspaces, the empty and lone-window policies, and whether the layout is
 in the `SUPER+L` cycle.
 
 Zones you did not click while renumbering follow the clicked ones in tree
-order. Discarding an edit previews the saved layout back onto the
-workspace; nothing reloads. Gutters and rounding travel with the layout as
+order. Discarding an unmanaged edit previews the saved layout back onto the
+workspace; nothing reloads. Discarding managed edits leaves the workspace as it was. Gutters and rounding travel with the layout as
 workspace and window rules, and that rule write is the whole switch (see
 `docs/INTERNALS.md`).
 
@@ -208,8 +228,36 @@ it:
 | `renameZone <zone> <name>`, `renumber <a,b,c>`, `zoneProp <zone> <key> <value>`, `capacity <zone> <n>` | zone settings |
 | `layoutProp <key> <value>`, `gap <inner\|outer> <px>`, `addRule <class> <zone>`, `removeRule <i>` | layout settings |
 | `undo`, `saveAs <name>`, `discard` | finish an edit |
+| `content <bool>` | show Scenes (`true`) or Layouts (`false`); leave edit mode first |
+| `assign <local\|empty>` | set the selected zone to local fill or empty |
+| `assignApp <class>` | pin an already-open window of this class to the selected zone; does not launch an app |
+| `scene <action> <name>` | request a scene action on the current workspace; see actions below |
+| `saveSceneAs`, `saveScene <name>`, `deleteScene <name>` | open the scene naming field, save directly, or delete directly |
+| `confirmSwitch` | confirm the pending layout or scene replacement |
+| `search <text>`, `pick` | set the app query, then assign the selected search match |
+| `hover <index>`, `focusSearch` | preview a search match by zero-based index (`-1` clears), or focus the search field |
 | `dock <left\|right>`, `keysHint <bool>`, `peek <bool>`, `refresh`, `close` | the overlay itself |
 | `viewed`, `draft`, `state` | read back the viewed name, the draft, or the whole state as JSON |
+
+For content assignments, switch to Scenes and select a zone first. `assignApp`
+accepts a window class; to launch or reuse an installed app, use `search` and
+`pick`. `scene` actions include `apply`, `save`, and `remove` with a scene name,
+or `retry`, `restore`, and `dismiss` with an empty name argument (`""`). Use
+`state` to inspect `pendingSwitch`, scene progress, or errors; `confirmSwitch`
+accepts a pending replacement. `deleteScene` removes the saved definition
+immediately, without the UI's confirmation prompt.
+
+```bash
+omarchy-shell hypertile content true
+omarchy-shell hypertile select left
+omarchy-shell hypertile search '1Password'
+omarchy-shell hypertile state  # check that matches is greater than zero
+omarchy-shell hypertile pick
+omarchy-shell hypertile state
+```
+
+Replace `left` with a zone name from your layout. Placement may continue after
+the command returns; read `state` to check its result.
 
 ## Bar widget
 

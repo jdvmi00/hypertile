@@ -141,12 +141,12 @@ Item {
 
   // An opaque backing keeps the numeral readable over window contents.
   Rectangle {
-    visible: numeral.visible && zone.roomy && !zone.editing
+    visible: numeral.visible
     anchors.centerIn: numeral
     width: Math.min(numeral.contentWidth, numeral.width) + zone.pad * 2
     height: numeral.contentHeight + zone.pad
     radius: zone.overlay.radiusCard
-    color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
+    color: zone.overlay.surfaceColor
   }
 
   // Fill numeral in the middle.
@@ -157,7 +157,7 @@ Item {
     width: parent.width - zone.pad * 2
     textFormat: Text.PlainText
     text: zone.numeral
-    color: Util.alpha(zone.fg, zone.isSpacer ? 0.65 : (zone.isSelected ? 0.95 : (zone.editing ? 0.5 : 0.9)))
+    color: zone.fg
     font.family: zone.overlay.fontFamily
     font.bold: true
     font.pixelSize: Math.max(Style.font.heading, Math.min(zone.height * 0.3, zone.width * 0.26, Style.space(150)))
@@ -166,16 +166,26 @@ Item {
   }
 
   // Under the numeral while scenes are edited: what an unassigned zone does.
+  Rectangle {
+    visible: localHint.visible
+    anchors.centerIn: localHint
+    width: Math.min(localHint.contentWidth, localHint.width) + zone.pad * 2
+    height: localHint.implicitHeight + zone.pad
+    radius: zone.overlay.radiusControl
+    color: zone.overlay.surfaceColor
+  }
   Text {
+    id: localHint
     visible: zone.content && zone.roomy && !zone.peek && !zone.showCentre
     anchors.top: numeral.bottom
+    anchors.topMargin: zone.pad
     anchors.horizontalCenter: parent.horizontalCenter
     width: parent.width - zone.pad * 2
     textFormat: Text.PlainText
     text: zone.modelData.spacer === true ? "Spacer  ·  never holds windows"
       : zone.isSpacer ? "Empty  ·  nothing opens here"
       : "Local windows  ·  fill order"
-    color: Util.alpha(zone.fg, zone.isSelected ? 0.7 : 0.45)
+    color: zone.overlay.mutedForeground
     font.family: zone.overlay.fontFamily
     font.pixelSize: zone.overlay.uiFontSmall
     horizontalAlignment: Text.AlignHCenter
@@ -183,6 +193,14 @@ Item {
   }
 
   // What the zone holds: the app's icon, its name, and its state.
+  Rectangle {
+    visible: centre.visible
+    anchors.centerIn: centre
+    width: Math.min(centre.width, Math.max(centreTitle.contentWidth, centreState.contentWidth, centre.shownIcon !== "" ? centre.iconSize : 0)) + zone.pad * 2
+    height: centre.implicitHeight + zone.pad * 2
+    radius: zone.overlay.radiusCard
+    color: zone.overlay.surfaceColor
+  }
   Column {
     id: centre
     visible: zone.showCentre && !zone.peek
@@ -208,8 +226,9 @@ Item {
     Text {
       width: parent.width
       textFormat: Text.PlainText
+      id: centreTitle
       text: zone.ghost !== null ? zone.ghost.name : zone.overlay.contentName(zone.source)
-      color: Util.alpha(zone.fg, 0.92)
+      color: zone.fg
       font.family: zone.overlay.fontFamily
       font.pixelSize: Math.round(zone.overlay.uiFont * 1.25)
       font.bold: true
@@ -220,8 +239,9 @@ Item {
       visible: text !== ""
       width: parent.width
       textFormat: Text.PlainText
+      id: centreState
       text: zone.ghost !== null ? "click to put it here" : zone.contentState.text
-      color: (zone.contentState.urgent && zone.ghost === null) ? Color.urgent : Util.alpha(zone.fg, 0.62)
+      color: (zone.contentState.urgent && zone.ghost === null) ? Color.urgent : zone.overlay.mutedForeground
       font.family: zone.overlay.fontFamily
       font.pixelSize: zone.overlay.uiFontSmall
       horizontalAlignment: Text.AlignHCenter

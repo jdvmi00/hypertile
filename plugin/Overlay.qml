@@ -7,6 +7,7 @@ import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
 import "Content.js" as Content
+import "Readability.js" as Readability
 
 // Hypertile overlay: view and edit tiling layouts at true scale. The keys
 // are listed in README.md and in the rail (?).
@@ -182,7 +183,9 @@ Item {
     return out
   }
 
-  property color foreground: Color.menu.text
+  property color surfaceColor: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
+  property color foreground: Readability.textColor(Color.menu.text, surfaceColor, 1)
+  readonly property color mutedForeground: Readability.textColor(foreground, surfaceColor, 0.72)
   property color accent: Color.accent
   property color scrim: Color.menu.scrim
   property string fontFamily: Style.font.menuFamily

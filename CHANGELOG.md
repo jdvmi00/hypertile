@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Overlay panels, badges, and zone labels use opaque text backgrounds. Neutral
+  text colors adjust to the theme for readable contrast, and thumbnail numbers
+  keep the caption size or hide when they cannot fit. Keyboard help wraps within
+  the rail and includes arrow/vi browsing keys and Ctrl+S.
+- The README covers the Scenes tab, placement and replacement behavior, and all
+  overlay scripting methods, including app search and scene confirmation.
 - Using a saved scene asks before replacing unsaved scene changes. Cancel
   keeps the arrangement; confirmation uses the originally selected scene.
   Clicking outside the zones deselects first, then closes Scenes.

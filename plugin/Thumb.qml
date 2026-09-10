@@ -75,9 +75,9 @@ Item {
         visible: !cell.spacer && cell.icon === "" && parent.width > implicitWidth + 4 && parent.height > implicitHeight + 2 && modelData.numbers.length > 0
         textFormat: Text.PlainText
         text: modelData.numbers.length > 0 ? String(modelData.numbers[0]) : ""
-        color: Util.alpha(thumb.foreground, 0.85)
+        color: thumb.foreground
         font.family: thumb.overlay.fontFamily
-        font.pixelSize: Math.max(8, Math.min(thumb.overlay.uiCaption, parent.height * 0.6))
+        font.pixelSize: thumb.overlay.uiCaption
         font.bold: true
       }
     }

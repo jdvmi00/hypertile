@@ -14,7 +14,7 @@ BorderSurface {
   property bool urgent: false
 
   radius: overlay.radiusCard
-  color: Color.menu.background
+  color: overlay.surfaceColor
   borderSpec: urgent ? Border.flat(Color.urgent, Math.max(1, Style.space(1)))
     : accented ? Border.flat(overlay.accent, Math.max(1, Style.space(1)))
     : Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(1)))
