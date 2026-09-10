@@ -45,7 +45,11 @@ The header names the workspace until a scene is in use, then the scene, with
 the layout, the workspace, and how many apps are placed. **Scenes** lists the
 saved scenes as cards: the layout with the apps it places drawn in their
 zones, and what it holds. Click a card to use it; the delete appears on hover
-or keyboard selection and confirms inline.
+or keyboard selection and confirms inline. Using another scene, or reusing its
+saved definition, asks first if the current scene has unsaved changes. Cancel
+to save those changes, or confirm **Use** to replace the arrangement.
+Click outside the zones once to deselect a zone; with no zone selected, clicking
+outside closes the overlay.
 
 **Save as…** stores the current definition. Using a saved scene requests its
 arrangement, including apps you moved or closed. **Retry** explicitly

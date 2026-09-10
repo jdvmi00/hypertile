@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Using a saved scene asks before replacing unsaved scene changes. Cancel
+  keeps the arrangement; confirmation uses the originally selected scene.
+  Clicking outside the zones deselects first, then closes Scenes.
+- Layout controls keep Rename/Delete together and show In use as a status chip.
+  Workspace rows keep window counts visible, single-slot fill order has clear
+  wording, and large zone numerals have an opaque backing. Header status badges
+  no longer overlap the tabs, and long monitor controls fit within the rail.
 - Saved scenes support arrow-key selection, Enter to use, and Delete with
   confirmation. The selected card exposes its delete control and scrolls into
   view. App searches accept leading digits, keep the query between zones, and

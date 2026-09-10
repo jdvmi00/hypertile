@@ -249,3 +249,58 @@ console.log("overlay safeguards and feedback: all checks passed")
   context.rail.searchText = 'App'
   root.handleKey({...event('Key_1'), text: '1'}); assert.equal(routed.pop(), '1')
 }
+
+// Modified scene replacement asks before any command, including same-name reuse.
+for (const target of ['home', 'work']) {
+  const {root, context} = fixture()
+  const sent = []
+  context.runCtl = (...args) => {sent.push(clone(args)); return true}
+  context.workspaceId = '1'
+  root.contentCatalog = {current: {phase: 'ready', modified: true, document: {name: 'work'}}}
+  root.sceneAction('apply', target)
+  assert.equal(sent.length, 0)
+  assert.equal(root.pendingSwitch.sceneName, target)
+  assert.match(root.switchSummary(), /changes to work are not saved/)
+  assert.equal(root.selected, '')
+  root.viewIndex = 1 // unrelated browsing must not alter the captured scene name
+  root.confirmSwitch()
+  assert.equal(root.pendingSwitch, null)
+  assert.deepEqual(sent[0][0], ['scene','apply',target,'--workspace','1','--json'])
+  assert.equal(root.sceneFeedback.done, 'Using ' + target)
+  root.confirmSwitch()
+  assert.equal(sent.length, 1, 'a confirmation cannot execute twice')
+}
+{
+  const {root, context} = fixture()
+  context.workspaceId = '1'
+  const sent = []
+  context.runCtl = (...args) => {sent.push(clone(args)); return true}
+  root.contentCatalog = {current: {phase: 'ready', modified: true, document: {name: 'work'}}}
+  root.sceneAction('apply', 'home')
+  let next = 1
+  for (const m of qml.matchAll(/Qt\.(Key_\w+|\w+Modifier)/g)) if (!(m[1] in context.Qt)) context.Qt[m[1]] = next++
+  root.handleKey({key: context.Qt.Key_Escape, modifiers: 0, text: ''})
+  assert.equal(root.pendingSwitch, null)
+  assert.equal(sent.length, 0, 'Escape keeps the modified scene')
+  root.contentCatalog.current.modified = false
+  root.sceneAction('apply', 'home')
+  assert.equal(sent.length, 1, 'unmodified scenes need no confirmation')
+  root.contentCatalog.current.modified = true
+  root.sceneAction('apply', 'home', '2')
+  assert.equal(sent.length, 2, 'current-workspace modifications do not block a different workspace')
+  root.busy = true
+  root.sceneAction('apply', 'home')
+  assert.equal(root.pendingSwitch, null, 'busy requests cannot create stale confirmation prompts')
+}
+
+// Left-clicking the canvas selects a zone, then deselects outside, then closes.
+{
+  const {root, context, calls} = fixture()
+  context.Qt.LeftButton = 1; context.Qt.RightButton = 2
+  root.pressContentCanvas('left', 1); assert.equal(root.selected, 'left')
+  root.pressContentCanvas('', 2); assert.equal(root.selected, 'left')
+  root.pressContentCanvas('', 1); assert.equal(root.selected, ''); assert.equal(calls.length, 0)
+  root.pendingSwitch = {sceneName: 'home', workspace: '1'}
+  root.pressContentCanvas('', 1); assert.deepEqual(calls, [['hide']])
+  assert.equal(root.pendingSwitch, null, 'closing cancels a pending replacement')
+}

@@ -66,7 +66,7 @@ Item {
   property int catalogFailures: 0
   property string catalogError: ""
   property bool namingScene: false
-  property var pendingSwitch: null      // { workspaces, close }: a layout switch over assigned content awaiting confirmation
+  property var pendingSwitch: null      // a layout/content replacement awaiting confirmation
   property bool switchConfirmed: false
   readonly property bool managedContent: {
     if (!contentCatalog) return false
@@ -343,7 +343,17 @@ Item {
     }
   }
 
-  function sceneAction(action, name, workspace) {
+  function sceneAction(action, name, workspace, confirmed) {
+    if (root.busy) return
+    var target = workspace ? String(workspace) : root.workspaceId
+    var currentScene = root.contentCatalog ? root.contentCatalog.current : null
+    if (action === "apply" && confirmed !== true && target === root.workspaceId && Content.sceneModified(currentScene)) {
+      root.pendingSwitch = {sceneName: name, workspace: target, previousName: currentScene.document.name}
+      root.namingScene = false
+      root.selected = ""
+      root.focusKeys()
+      return
+    }
     var args = ["scene", action]
     if (name) args.push(name)
     args.push("--workspace", workspace ? String(workspace) : workspaceId, "--json")
@@ -403,6 +413,13 @@ Item {
     if (app.app_title) args.push("--app-title", app.app_title)
     if (runCtl(args, "Opening " + app.name + " in " + zoneLabel(selected) + "…", "App placement requested"))
       root.sceneFeedback = {done: "Put " + app.name + " in " + zoneLabel(selected), operation: "", zone: selected}
+  }
+
+  function pressContentCanvas(name, button) {
+    if (button !== Qt.LeftButton) return
+    if (name !== "") { root.selected = name; return }
+    if (root.selected !== "") root.selected = ""
+    else root.dismiss()
   }
 
   function selectContentNeighbor(dir) {
@@ -467,6 +484,7 @@ Item {
 
   function close() {
     root.dismissing = true
+    root.pendingSwitch = null
     root.sceneFeedback = null
     revertBrowse()
     root.opened = false
@@ -481,6 +499,7 @@ Item {
 
   function dismiss() {
     root.dismissing = true
+    root.pendingSwitch = null
     root.sceneFeedback = null
     revertBrowse()
     if (root.shell && typeof root.shell.hide === "function")
@@ -721,6 +740,7 @@ Item {
   function runCtl(args, status, done) {
     if (root.busy) return false
     root.busy = true
+    root.pendingSwitch = null
     root.sceneFeedback = null
     root.errorText = ""
     root.statusText = status
@@ -777,6 +797,7 @@ Item {
   function switchSummary() {
     var p = root.pendingSwitch
     if (!p) return ""
+    if (p.sceneName) return "The changes to " + p.previousName + " are not saved. Using " + p.sceneName + " replaces this workspace's arrangement; apps stay open. Cancel and save the scene first to keep those changes."
     var managed = p.workspaces.filter(function(w) { return contentWorkspace(w) })
     var s = managed.length === 1 ? "Workspace " + managed[0] + " has content assigned to its zones. " : "Workspaces " + managed.join(", ") + " have content assigned to their zones. "
     s += "Every zone goes back to local windows; apps stay open."
@@ -785,7 +806,13 @@ Item {
 
   function confirmSwitch() {
     var p = root.pendingSwitch
-    if (!p || !p.layoutName || root.busy) return
+    if (!p || root.busy) return
+    if (p.sceneName) {
+      root.pendingSwitch = null
+      root.sceneAction("apply", p.sceneName, p.workspace, true)
+      return
+    }
+    if (!p.layoutName) return
     root.pendingSwitch = null
     root.switchConfirmed = true
     root.applyQueueLayout = p.layoutName
@@ -1610,7 +1637,7 @@ Item {
           if (root.naming) root.naming = false
           if (root.renaming) root.renaming = false
           if (!root.editing) {
-            if (root.contentMode) { root.selected = zoneAt(mouse.x, mouse.y); return }
+            if (root.contentMode) { root.pressContentCanvas(zoneAt(mouse.x, mouse.y), mouse.button); return }
             if (mouse.button === Qt.LeftButton) root.dismiss()
             return
           }

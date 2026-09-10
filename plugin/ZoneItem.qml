@@ -139,7 +139,17 @@ Item {
     }
   }
 
-  // Faint numeral in the middle.
+  // An opaque backing keeps the numeral readable over window contents.
+  Rectangle {
+    visible: numeral.visible && zone.roomy && !zone.editing
+    anchors.centerIn: numeral
+    width: Math.min(numeral.contentWidth, numeral.width) + zone.pad * 2
+    height: numeral.contentHeight + zone.pad
+    radius: zone.overlay.radiusCard
+    color: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
+  }
+
+  // Fill numeral in the middle.
   Text {
     id: numeral
     visible: !zone.peek && !zone.showCentre
@@ -147,7 +157,7 @@ Item {
     width: parent.width - zone.pad * 2
     textFormat: Text.PlainText
     text: zone.numeral
-    color: Util.alpha(zone.fg, zone.isSpacer ? 0.3 : (zone.isSelected ? 0.85 : (zone.editing ? 0.5 : 0.3)))
+    color: Util.alpha(zone.fg, zone.isSpacer ? 0.65 : (zone.isSelected ? 0.95 : (zone.editing ? 0.5 : 0.9)))
     font.family: zone.overlay.fontFamily
     font.bold: true
     font.pixelSize: Math.max(Style.font.heading, Math.min(zone.height * 0.3, zone.width * 0.26, Style.space(150)))
