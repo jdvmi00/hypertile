@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import sys
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 sys.path[:0] = [str(Path(__file__).resolve().parents[1] / p) for p in ("scenes", "session")]
@@ -127,6 +128,65 @@ class SceneTests(unittest.TestCase):
         result = identify(source)
         self.assertNotIn("layout_id", source)
         self.assertNotEqual(result["columns"][0]["id"], result["columns"][1]["id"])
+
+    def test_bad_scene_files_are_isolated_in_list_and_catalog(self):
+        self.save()
+        for bad in ({"version": 1, "layout": None}, {"version": 1, "layout": []},
+                    {"version": 1, "layout": 42}, {"version": 1, "layout": "quad", "sources": []}, None):
+            (self.root / "scenes/bad.json").write_text(json.dumps(bad))
+            for action in ("list", "catalog"):
+                entries = {v["name"]: v for v in self.command(action)["scenes"]}
+                self.assertTrue(entries["work"]["valid"])
+                self.assertFalse(entries["bad"]["valid"])
+                self.assertTrue(entries["bad"]["error"])
+        (self.root / "scenes/bad.json").write_bytes(b'\xff')
+        self.assertFalse(self.command("list")["scenes"][0]["valid"])
+        original = Path.read_text
+        def unreadable(path, *args, **kwargs):
+            if path.name == "bad.json": raise PermissionError("scene is unreadable")
+            return original(path, *args, **kwargs)
+        with patch.object(Path, "read_text", unreadable):
+            self.assertIn("unreadable", self.command("catalog")["scenes"][0]["error"])
+
+    def test_retired_pins_are_deduplicated_bounded_and_reset_after_restore(self):
+        window = {"address": "a", "stable_id": 1, "pid": 2}
+        snap = {"windows": [window]}
+        pin = dict(window, zone="right", before="left")
+        dead = dict(pin, stable_id=99)
+        old = {"phase": "ready", "retired_pins": [pin, dead] * 100, "pins": [pin]}
+        self.assertEqual(self.ctl.scenes.retired_pins(old, snap), [pin])
+        old["retired_pins"] = [dict(pin, zone=str(i)) for i in range(1000)]
+        kept = self.ctl.scenes.retired_pins(old, snap)
+        self.assertEqual(len(kept), 512)
+        self.assertEqual(kept[-1], pin)
+        old["phase"] = "restored"
+        self.assertEqual(self.ctl.scenes.retired_pins(old, snap), [])
+
+    def test_scene_layout_catalog_excludes_compile_failures(self):
+        from scenes import Layouts as RealLayouts
+        layouts = RealLayouts()
+        layouts.directory = self.root / "layouts"
+        good = {"name": "good", "spec": {"name": "one"}}
+        bad = {"name": "bad", "spec": {"fill": "invalid"}, "error": "fill must be an array"}
+        with patch.object(layouts, "run", return_value=json.dumps({"layouts": [bad, good]})):
+            self.assertEqual(layouts.all(), [good])
+            with self.assertRaisesRegex(ValueError, "missing"):
+                layouts.get("bad")
+
+    def test_autostart_reports_invalid_state_without_overwriting_it(self):
+        checkout = Path(__file__).resolve().parents[1]
+        state = self.root / "hypertile/scenes/state.json"
+        for body in ('{"version":999}', '[]'):
+            state.write_text(body)
+            env = dict(os.environ, HYPERTILE_SRC=str(checkout), XDG_RUNTIME_DIR=str(self.root / "runtime"),
+                       HYPRLAND_INSTANCE_SIGNATURE="test-invalid-state", XDG_CONFIG_HOME=str(self.root / "config"))
+            result = subprocess.run([sys.executable, str(checkout / "bin/hypertile-scenes"), "list"],
+                                    env=env, text=True, capture_output=True, timeout=3)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("Scene service did not start", result.stderr)
+            self.assertIn("unsupported scene state version", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(state.read_text(), body)
 
     def test_missing_session_times_out_across_service_restart_and_accepts_late_refs(self):
         self.ready()

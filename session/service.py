@@ -184,7 +184,21 @@ class Compositor:
 class Launchers:
     """Explicit recipes first; desktop entry identity second. Never replay cmdline."""
     def __init__(self, config, proc=Path("/proc")):
+        if not isinstance(config, dict):
+            raise ValueError("session configuration must be an object")
         self.apps = config.get("apps", {})
+        if not isinstance(self.apps, dict):
+            raise ValueError("session apps must be an object")
+        for cls, recipe in self.apps.items():
+            if recipe is False or recipe is None:
+                continue
+            if not isinstance(recipe, dict):
+                raise ValueError(f"apps.{cls} must be an object or false")
+            argv = recipe.get("argv")
+            if not isinstance(argv, list) or not argv or not all(isinstance(a, str) and "\0" not in a for a in argv) or not argv[0]:
+                raise ValueError(f"apps.{cls}.argv must be a nonempty array of strings with an executable")
+            if not isinstance(recipe.get("per_window", False), bool):
+                raise ValueError(f"apps.{cls}.per_window must be a boolean")
         # Terminal foreground commands the user has declared safe to run again
         # (for example a TUI that re-attaches to its own server). Anything else
         # comes back as a plain shell: replaying arbitrary commands would rerun
@@ -921,6 +935,8 @@ def main():
             config = read_json(config_path)
         except FileNotFoundError:
             config = {}
+        if not isinstance(config, dict):
+            raise ValueError("session configuration must be an object")
         if config.get("enabled", True) is False:
             return
         compositor = Compositor(instance, runtime)

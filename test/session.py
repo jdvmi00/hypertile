@@ -252,6 +252,35 @@ class SessionTests(unittest.TestCase):
                 recipe = launchers.recipe(window("4", "Home / X", "chrome-x.com__-Default"))
             self.assertEqual(recipe["argv"], ["/opt/google/chrome/chrome", "--app=https://x.com/", "--profile-directory=Default"])
 
+    def test_invalid_app_configuration_fails_before_capture_with_a_clear_error(self):
+        from service import Launchers as RealLaunchers
+        for apps in ([], "terminal", 1, None):
+            with self.assertRaisesRegex(ValueError, "apps must be an object"):
+                RealLaunchers({"apps": apps})
+        for recipe in ([], "terminal", True, {}, {"argv": []}, {"argv": [1]},
+                       {"argv": [""]}, {"argv": ["bad\0command"]}, {"argv": ["terminal"], "per_window": "yes"}):
+            with self.assertRaisesRegex(ValueError, "apps.terminal"):
+                RealLaunchers({"apps": {"terminal": recipe}})
+        with patch.dict(os.environ, XDG_DATA_HOME=str(self.root), XDG_DATA_DIRS=str(self.root)):
+            disabled = RealLaunchers({"apps": {"terminal": False}})
+            self.assertIsNone(disabled.recipe(window("1")))
+            explicit = RealLaunchers({"apps": {"terminal": {"argv": ["terminal", ""]}}})
+            self.assertEqual(explicit.recipe(window("1"))["argv"], ["terminal", ""])
+
+    def test_bad_session_config_daemon_exits_cleanly_and_preserves_checkpoints(self):
+        config = self.root / "hypertile/session.json"
+        config.parent.mkdir(exist_ok=True)
+        for body, message in (("[]", "configuration must be an object"),
+                              ('{"apps":[]}', "apps must be an object")):
+            config.write_text(body)
+            env = dict(os.environ, XDG_CONFIG_HOME=str(self.root), HYPRLAND_INSTANCE_SIGNATURE="test-bad-config")
+            entry = Path(__file__).resolve().parents[1] / "session/service.py"
+            result = subprocess.run([sys.executable, str(entry), "daemon"], env=env, capture_output=True, text=True, timeout=3)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn(message, result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertFalse((self.root / "hypertile/sessions/latest.json").exists())
+
     def test_retry_uses_a_builtin_recipe_the_snapshot_lacked(self):
         saved = record(dict(window("1", "Home / X", "chrome-x.com__-Default"), launch=None))
         comp = FakeCompositor(record()["desktop"])

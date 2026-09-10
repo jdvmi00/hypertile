@@ -54,7 +54,10 @@ def capture(desktop, instance=None, now=None, warnings=None):
             app = record.get("apps", {}).get(key, {})
             ref = app.get("window")
             window = next((w for w in desktop["windows"] if ref and all(w.get(k) == v for k, v in ref.items())), None)
-            if app.get("status") in ("moved", "closed") or (ref and (not window or window["workspace"] != workspace or window.get("pin") != source["zone"] or window.get("floating"))):
+            pins = [source["zone"]]
+            if key in record.get("reconciling", {}):
+                pins.append(record["reconciling"][key])  # The atomic rename may not have reached the compositor yet.
+            if app.get("status") in ("moved", "closed") or (ref and (not window or window["workspace"] != workspace or window.get("pin") not in pins or window.get("floating"))):
                 del doc["sources"][key]  # Recovery preserves user departures; saved definitions stay intact.
             elif window:
                 scene_windows.add(window["address"])

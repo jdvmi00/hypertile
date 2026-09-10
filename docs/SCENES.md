@@ -46,6 +46,11 @@ rechecks placement and may retry a failed/timed-out launch. Closing an app or
 moving it yourself leaves its source marked *Closed* or *Moved*. Changes to the
 saved definition happen only when you save.
 
+Renaming a zone keeps its stable identity and remaps apps that are still placed
+there. It does not launch them again or pull back apps you moved, floated,
+unpinned, or closed. Invalid or unreadable saved scenes appear as individual
+invalid cards; the rest of the catalog remains available.
+
 **Restore previous** restores the prior layout/content and eligible app pins.
 It leaves apps open and does not move departed windows back to their original
 workspace. Changing scenes or cancelling an in-progress scene stops pending

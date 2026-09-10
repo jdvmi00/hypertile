@@ -85,4 +85,46 @@ assert(#calls > before, "a pending app can recreate its vanished empty workspace
 local move
 for i = before + 1, #calls do if calls[i].kind == "move" then move = calls[i] end end
 assert(move and move.workspace == "1" and move.follow == false, "app placement does not take focus")
+-- Reconciliation remaps a placed app by stable zone ID without issuing
+-- another move. The eligibility check and pin transfer are atomic.
+for _, departure in ipairs({ "none", "workspace", "floating", "pin", "identity" }) do
+  hl.get_workspaces = function() return { ws } end
+  session.scene_clear({ workspace = "1" })
+  windows[1].workspace, windows[1].floating, windows[1].stable_id = ws, false, 1
+  engine.provider("test", spec)
+  engine.state.test.pins.a = "left"
+  local content = { workspace = "1", layout = "lua:test", operation = "before-" .. departure,
+    sources = { { type = "app", zone_id = "b", zone = "middle" }, { type = "empty", zone_id = "c", zone = "right" } } }
+  session.scene_content_apply(content)
+  place.operation = content.operation
+  local original = session.scene_app_place(place)
+  assert(original.before == "left")
+  if departure == "workspace" then windows[1].workspace = ws2
+  elseif departure == "floating" then windows[1].floating = true
+  elseif departure == "pin" then engine.state.test.pins.a = "right"
+  elseif departure == "identity" then windows[1].stable_id = 99 end
+  engine.provider("test", { layout_id = "layout", columns = {
+    { name = "left", id = "a" }, { name = "renamed", id = "b" }, { name = "right", id = "c" } },
+    fill = { "left", "renamed", "right" } })
+  content.operation = "after-" .. departure
+  content.preserve_apps = { b = true }
+  local before = #calls
+  local reconciled = session.scene_content_apply(content)
+  for i = before + 1, #calls do assert(calls[i].kind ~= "move", "reconcile must not dispatch another move") end
+  if departure == "none" then
+    assert(engine.state.test.pins.a == "renamed" and engine.state.test.exclusive_pins.a)
+    assert(#reconciled.pins == 1 and reconciled.pins[1].before == "left")
+    before = #calls
+    place.operation = content.operation
+    session.scene_app_place(place)
+    assert(#calls == before, "reconciliation retains the consumed placement")
+    session.scene_content_apply(content)
+    assert(#calls == before, "a lost reconciliation reply is idempotent")
+    session.scene_clear({ workspace = "1" })
+    assert(engine.state.test.pins.a == "left", "later clear restores the original pin")
+  else
+    assert(#reconciled.pins == 0, "departed or recycled windows cannot be reclaimed")
+    assert(engine.state.test.pins.a ~= "renamed", "reconciliation preserves the departure")
+  end
+end
 print("scene adapter: all checks passed")

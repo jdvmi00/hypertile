@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 
 from service import atomic_json, read_json
@@ -17,7 +18,7 @@ class SceneController:
     def __init__(self, root, config, compositor, now=time.time):
         self.root, self.config, self.compositor, self.now = root, config, compositor, now
         self.state = read_json(root / "state.json") if (root / "state.json").exists() else {"version": 1}
-        if self.state.get("version") != 1:
+        if not isinstance(self.state, dict) or self.state.get("version") != 1:
             raise ValueError("unsupported scene state version")
         self.running = True
         self.error = None  # the last failed tick, reported by status until one succeeds
@@ -96,6 +97,29 @@ def paths():
             Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "hypertile/scenes.json")
 
 
+def ensure_started(runtime, entry):
+    try:
+        request(runtime, {"command": "status"}, timeout=1)
+        return
+    except (OSError, ValueError):
+        pass
+    # A file avoids a full stderr pipe blocking a daemon that outlives its CLI.
+    with tempfile.TemporaryFile() as errors:
+        child = subprocess.Popen([sys.executable, str(entry), "daemon"], stdin=subprocess.DEVNULL,
+                                 stdout=subprocess.DEVNULL, stderr=errors, start_new_session=True)
+        for _ in range(50):
+            try:
+                request(runtime, {"command": "status"}, timeout=.2)
+                return
+            except (OSError, ValueError):
+                if child.poll() is not None:
+                    break
+                time.sleep(.1)
+        errors.seek(0)
+        details = errors.read(8192).decode(errors="replace").strip()
+        raise RuntimeError("Scene service did not start" + (": " + details if details else "; no response from its control socket"))
+
+
 def main(argv=None):
     os.umask(0o077)
     parser = argparse.ArgumentParser(description="Save and apply layouts with ordinary desktop apps")
@@ -128,20 +152,10 @@ def main(argv=None):
         if args.action == "validate" and not payload.get("document"):
             raise ValueError("validate requires --file FILE (or - for stdin)")
         if args.action not in ("stop", "status"):
-            try:
-                request(runtime, {"command": "status"}, timeout=1)
-            except (OSError, ValueError):
-                entry = Path(__file__).resolve().parents[1] / "bin/hypertile-scenes"
-                if not entry.exists():
-                    entry = Path.home() / ".local/bin/hypertile-scenes"
-                subprocess.Popen([sys.executable, str(entry), "daemon"], stdin=subprocess.DEVNULL,
-                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-                for _ in range(50):
-                    try:
-                        request(runtime, {"command": "status"}, timeout=.2)
-                        break
-                    except (OSError, ValueError):
-                        time.sleep(.1)
+            entry = Path(__file__).resolve().parents[1] / "bin/hypertile-scenes"
+            if not entry.exists():
+                entry = Path.home() / ".local/bin/hypertile-scenes"
+            ensure_started(runtime, entry)
         print(json.dumps(request(runtime, payload), indent=2))
         return 0
     except (OSError, ValueError, KeyError, RuntimeError, subprocess.TimeoutExpired) as error:

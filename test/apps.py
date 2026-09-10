@@ -119,6 +119,56 @@ class AppTests(unittest.TestCase):
         self.assertNotIn("Placeholder", [a["name"] for a in self.command("catalog")["apps"]])
         self.assertFalse(self.desktop.launched)
 
+    def test_zone_rename_preserves_ready_app_without_relaunch_or_replacement(self):
+        window = self.window()
+        self.start()
+        self.layouts.entries[0]["spec"]["columns"][1]["name"] = "renamed"
+        self.layouts.entries[0]["spec"]["fill"][1] = "renamed"
+        self.tick()  # Schedule reconciliation; a catalog may arrive in between.
+        self.assertEqual(self.command("current")["sources"][0]["status"], "ready")
+        captured = scene_recovery.capture(self.comp.snapshot())
+        self.assertEqual(captured["scenes"][0]["document"]["sources"]["z-right"]["zone"], "renamed")
+        self.assertFalse(captured["windows"], "a queued remap must not drop the app into normal recovery")
+        self.ctl = self.controller()  # The preserved intent survives a writer restart.
+        self.ctl.scenes.apps.desktop = self.desktop
+        original = self.comp.call
+        def remap(method, args):
+            if method == "scene_clear":
+                self.fail("Reconciliation must not clear app ownership in a separate call")
+            result = original(method, args)
+            if method == "scene_content_apply":
+                self.assertEqual(args["preserve_apps"], {"z-right": "right"})
+                window["pin"] = "renamed"  # The adapter's atomic transfer is tested in scenes.lua.
+            return result
+        with patch.object(self.comp, "call", side_effect=remap):
+            self.tick(3)
+        self.assertEqual(self.command("current")["phase"], "ready")
+        self.assertEqual(self.command("current")["sources"][0]["status"], "ready")
+        self.assertEqual(window["pin"], "renamed")
+        self.assertEqual(len(self.placements()), 1)
+        self.assertFalse(self.desktop.launched)
+
+    def test_reconciliation_does_not_relaunch_closed_or_move_departed_apps(self):
+        for change in ("closed", "moved", "floating", "pin"):
+            with self.subTest(change=change):
+                self.comp.desktop["windows"].clear()
+                window = self.window()
+                if not self.ctl.scenes.path("work").exists(): self.save()
+                self.command("apply", name="work")
+                self.tick()
+                if change == "closed": self.comp.desktop["windows"].clear()
+                elif change == "moved": window["workspace"] = "2"
+                elif change == "floating": window["floating"] = True
+                else: window["pin"] = "left"
+                leaf = self.layouts.entries[0]["spec"]["columns"][1]
+                leaf["name"] = "renamed-" + change
+                self.layouts.entries[0]["spec"]["fill"][1] = leaf["name"]
+                before = len(self.placements())
+                self.tick(3)
+                self.assertEqual(len(self.placements()), before)
+                self.assertFalse(self.desktop.launched)
+                self.assertEqual(self.command("current")["sources"][0]["status"], "closed" if change == "closed" else "moved")
+
     def test_standalone_service_does_not_take_stream_lock_or_read_computers(self):
         legacy = self.root / "hypertile/streams"
         legacy.mkdir()

@@ -124,6 +124,9 @@ Configure applications in `~/.config/hypertile/session.json`:
 `replay` holds command names (the executable's basename); the whole argument
 list of the running job is replayed. `apps` keys are exact initial window
 classes (falling back to the current class).
+The service validates the configuration and app recipes before starting.
+Invalid entries produce a specific error and leave existing checkpoints intact;
+correct the configuration before restarting the service.
 `argv` is an argument array, executed without a shell. `per_window` defaults
 to false. The snapshot retains the recipe used at capture time; an explicit
 current configuration overrides it, and a window the snapshot had no recipe

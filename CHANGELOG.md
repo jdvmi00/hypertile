@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Renaming a scene zone preserves eligible app pins by stable zone identity,
+  without another launch or move. Manual departures remain untouched, and
+  checkpoints retain assignments while the rename is being reconciled.
+- Invalid or unreadable scene files no longer break the rest of the catalog;
+  scenes also exclude layouts that failed compilation. Session app recipes
+  are validated before startup, and scene auto-start reports the daemon's
+  actual error instead of just a missing socket.
+- Scene pin recovery history is deduplicated, drops departed window identities,
+  and retains at most 512 entries. Completed restores start a fresh history.
+  Removed obsolete reservation-owner handling and unreachable CLI/engine code.
 - Scene recovery requests are queued durably and retried until acknowledged.
   Undelivered assignments remain in checkpoints, including after a session
   service restart; Freeze pauses delivery and Resume re-enables it.

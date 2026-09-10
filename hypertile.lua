@@ -366,11 +366,8 @@ function M.assign(compiled, targets, state)
     local win = target.window
     local key = window_key(win)
     local slot = key and pins[key]
-    for name, owner in pairs(reserved) do
-      if key == owner then slot = name end
-    end
     if slot and compiled.leaf_set[slot] and not compiled.leaf_opts[slot].spacer
-      and (not reserved[slot] or reserved[slot] == key) then
+      and not reserved[slot] then
       take(slot, i)
     else
       -- Among every rule this window matches, take the slot with the lowest
@@ -591,7 +588,6 @@ function M.recalculate(compiled, ctx, state)
     local ws = w and w.workspace
     jiggle = ws ~= nil and ws.id == jiggle
   end
-  state = state or { pins = {}, sizes = {} }
   local jstate = { pins = state.pins, sizes = state.sizes, jiggle = jiggle and true or false }
   if n == 1 and compiled.single == "collapse" and next(reserved) == nil and not keep_slots then
     -- The lone window takes the whole area, but keeps its slot's shape.

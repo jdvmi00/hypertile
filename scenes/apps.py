@@ -133,6 +133,8 @@ class AppPlacement:
                     self.launches.pop(source["desktop_id"], None)
 
     def observe(self, record, snap):
+        if "reconciling" in record:
+            return False  # The compositor atomically checks departures while remapping pins.
         before = [(k, v["status"]) for k, v in record.get("apps", {}).items()]
         for key, state in record.get("apps", {}).items():
             if state["status"] != "ready":

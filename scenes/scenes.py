@@ -54,7 +54,7 @@ class Layouts:
     def all(self):
         stamp = [(str(p), p.stat().st_mtime_ns, p.stat().st_size) for p in sorted(self.directory.glob("*.lua"))]
         if stamp != self.stamp:
-            self.cache = [v for v in json.loads(self.run("list", "--json"))["layouts"] if v.get("spec")]
+            self.cache = [v for v in json.loads(self.run("list", "--json"))["layouts"] if v.get("spec") and not v.get("error")]
             self.stamp = stamp
         return copy.deepcopy(self.cache)
 
@@ -109,6 +109,7 @@ class Manager:
 
     def resolve(self, doc, migrate=False):
         check(isinstance(doc, dict) and doc.get("version") == 1, "unsupported scene schema")
+        check(isinstance(doc.get("layout"), str), "scene layout must be a name")
         hint = doc.get("layout", "").removeprefix("lua:")
         name(hint)
         entry = self.layouts.get(hint, doc.get("layout_id"))
@@ -237,7 +238,7 @@ class Manager:
         record = {"workspace": workspace, "document": document, "spec": spec, "baseline": baseline,
                   "generation": (old or {}).get("generation", 0) + 1, "operation": uuid.uuid4().hex,
                   "phase": "stopping", "restoring": restoring, "modified": self.modified(document)}
-        record["retired_pins"] = copy.deepcopy((old or {}).get("retired_pins", []) + (old or {}).get("pins", []))
+        record["retired_pins"] = self.retired_pins(old, snap)
         # A new explicit assignment supersedes pending placement elsewhere.
         # An older workspace must not claim the app when its late window arrives.
         for other_ws, other in self.records.items():
@@ -252,6 +253,20 @@ class Manager:
         self.ctl.persist()
         return self.public(record)
 
+    def retired_pins(self, old, snap):
+        if not old or old.get("phase") == "restored":
+            return []
+        live = {(w["address"], w["stable_id"], w["pid"]) for w in snap["windows"]}
+        pins, seen = [], set()
+        for pin in reversed(old.get("retired_pins", []) + old.get("pins", [])):
+            key = json.dumps(pin, sort_keys=True)
+            if key not in seen and (pin["address"], pin["stable_id"], pin["pid"]) in live:
+                pins.append(copy.deepcopy(pin))
+                seen.add(key)
+                if len(pins) == 512:
+                    break
+        return list(reversed(pins))
+
     def command(self, request):
         action = request.get("action", "current")
         if action in ("browse", "browse-end"):
@@ -265,7 +280,7 @@ class Manager:
                     sources = [{k: v for k, v in s.items() if k in ("zone", "type", "desktop_id", "app_name", "app_class")}
                                for s in doc["sources"].values()]
                     entries.append({"name": path.stem, "layout": doc["layout"], "valid": True, "sources": sources})
-                except (ValueError, KeyError, TypeError) as error:
+                except (OSError, ValueError, KeyError, TypeError) as error:
                     entries.append({"name": path.stem, "valid": False, "error": str(error)})
             return {"version": 1, "scenes": entries}
         if action == "show":
@@ -417,8 +432,12 @@ class Manager:
                 sources = [{**value, "zone_id": key} for key, value in record["document"]["sources"].items()]
                 content = self.ctl.compositor.call("scene_content_apply", {"workspace": workspace,
                     "layout": "lua:" + record["document"]["layout"], "sources": sources,
-                    "operation": record["operation"], "allow_missing_workspace": True})
+                    "operation": record["operation"], "allow_missing_workspace": True,
+                    "preserve_apps": record.get("reconciling", {})})
                 record.update(content_applied=True, results=content["results"], pins=content["pins"])
+                if "reconciling" in record:
+                    snap = self.ctl.compositor.snapshot()
+                record.pop("reconciling", None)
             if record.get("content_applied"):
                 results = self.apps.step(record, snap)
                 zones = {r["zone"] for r in results}
@@ -430,7 +449,11 @@ class Manager:
         if live_spec.get("layout_id") == record["document"].get("layout_id"):
             document, spec = self.resolve(record["document"])
             if document != record["document"]:
-                record.update(document=document, spec=spec, content_applied=False, phase="stopping")
+                self.apps.observe(record, snap)
+                keep = {k: record["document"]["sources"][k]["zone"] for k, a in record.get("apps", {}).items() if a["status"] == "ready"}
+                record.update(document=document, spec=spec, content_applied=False, phase="layout",
+                              operation=uuid.uuid4().hex, reconciling=keep)
+                self.ctl.persist()
                 return  # Reconcile the full reservation set before either new name is assigned.
         # A user selected a different layout directly: don't force this scene back.
         if live_ws["layout"] != "lua:" + record["document"]["layout"]:
@@ -438,9 +461,13 @@ class Manager:
             return
         if not record.get("content_applied") or workspace not in snap.get("scene_content", {}):
             sources = [{**value, "zone_id": key} for key, value in record["document"]["sources"].items()]
-            content = self.ctl.compositor.call("scene_content_apply", {"workspace": workspace, "layout": live_ws["layout"], "sources": sources, "operation": record["operation"]})
+            content = self.ctl.compositor.call("scene_content_apply", {"workspace": workspace, "layout": live_ws["layout"], "sources": sources, "operation": record["operation"],
+                "preserve_apps": record.get("reconciling", {})})
             record["results"], record["pins"] = content["results"], content["pins"]
             record["content_applied"] = True
+            if "reconciling" in record:
+                snap = self.ctl.compositor.snapshot()
+            record.pop("reconciling", None)
         app_results = self.apps.step(record, snap)
         app_zones = {r["zone"] for r in app_results}
         record["results"] = [r for r in record.get("results", []) if r["zone"] not in app_zones] + app_results
