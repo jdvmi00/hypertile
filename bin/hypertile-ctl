@@ -60,6 +60,8 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
                              order (those with in_cycle = false skipped), then
                              dwindle; presses within 200 ms become one switch
                              to the layout landed on (--now switches at once)
+                             while the Layouts overlay is open, browse there
+                             instead (Enter keeps, Esc restores); --now bypasses it
   current [--json]           active workspace id, name, and layout; --json adds
                              monitor size, reserved edges, gaps, and layout area
   workspaces [--json]        every workspace with its monitor and layout
@@ -347,6 +349,21 @@ end
 
 function commands.cycle(pos, flags)
   local id, current = cycle_origin(flags)
+  -- The open Layouts overlay owns previews and their restoration. Let it
+  -- move the selection and windows together instead of switching behind it.
+  if not flags["cycle-locked"] and not flags.now then
+    local function quote(value) return "'" .. tostring(value):gsub("'", "'\\''") .. "'" end
+    local pipe = io.popen(quote(bridge.shell_bin) .. " hypertile cycle " .. quote(id)
+      .. " " .. (flags.reverse and "-1" or "1") .. " 2>/dev/null")
+    if pipe then
+      local reply = pipe:read("a")
+      local ok = pipe:close()
+      if ok and reply:match("^%s*handled%s*$") then
+        print("workspace " .. id .. " -> overlay preview")
+        return
+      end
+    end
+  end
   if flags.now or bridge.cycle_debounce_ms <= 0 then
     flags.workspace = flags.workspace or id
     switch_to(bridge.cycle_target(current, bridge.cycle_names(), flags.reverse), flags)

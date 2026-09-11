@@ -538,6 +538,16 @@ Item {
     viewAt((root.viewIndex + delta + root.layouts.length) % root.layouts.length)
   }
 
+  function cycleFromShortcut(workspace, delta) {
+    if (!root.opened || root.dismissing || root.editing || root.contentMode
+        || String(workspace) !== root.workspaceId) return "unhandled"
+    // Consume the shortcut during dialogs or an action as well: falling
+    // through would change the real layout behind the overlay's selection.
+    if (!root.busy && !root.naming && !root.renaming && !root.pendingSwitch
+        && !root.choosingNew && !root.confirmingDelete) root.step(delta < 0 ? -1 : 1)
+    return "handled"
+  }
+
   // Browse to the layout at `index` in the list (arrows, or a click in the
   // rail's layout list).
   function viewAt(index) {
@@ -1765,6 +1775,7 @@ Item {
     function close(): void { root.dismiss() }
     function next(): void { root.step(1) }
     function prev(): void { root.step(-1) }
+    function cycle(workspace: string, delta: int): string { return root.cycleFromShortcut(workspace, delta) }
     function apply(): void { root.applyViewed(false) }
     function use(): void { root.applyViewed(true) }
     function deleteLayout(): void { root.deleteViewed() }
