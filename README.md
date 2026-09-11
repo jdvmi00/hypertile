@@ -138,6 +138,7 @@ sections are open, in `~/.local/state/hypertile/overlay.json`.
 | Key | Action |
 |---|---|
 | arrows or `h` `j` `k` `l`, or a click in the rail's list | browse the layouts on disk; the workspace follows |
+| `SUPER+L`, `SUPER+SHIFT+L` | browse forward/backward, moving the displayed layout and windows together |
 | `Enter` | use the viewed layout on this workspace and close |
 | `Esc`, click outside | close; the workspace goes back to the layout it had |
 | `Space` (hold) | peek: the overlay fades to hairlines |
