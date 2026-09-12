@@ -9,7 +9,7 @@
 #   ~/.config/hypr/hypertile-json.lua      JSON module (bridge)
 #   ~/.config/hypr/hypertile-bridge.lua    bridge library
 #   ~/.config/hypr/hypertile-layouts.lua   loader for layouts/*.lua
-#   ~/.config/hypr/layouts/<name>.lua      one file per layout (only if missing)
+#   ~/.config/hypr/layouts/               directory for user-created layouts
 #   ~/.local/bin/hypertile-ctl             CLI
 #   ~/.config/omarchy/plugins/jmartin.hypertile/
 #                                          the shell plugin: a copy of manifest.json
@@ -23,19 +23,25 @@
 # Then makes sure hyprland.lua requires the loader, reloads, and checks for
 # config errors. Every config file it edits is first copied to
 # <file>.hypertile.bak if that backup does not exist. Existing layout files
-# are never overwritten. Safe to run again after
-# `omarchy plugin update jmartin.hypertile` or a git pull.
+# are never overwritten. The plugin service runs --automatic on enable and
+# update; unchanged runtime files need no installation. Direct invocation is
+# still supported for development and optional menu/keybind preferences.
 #
 # Usage: ./install.sh [--no-keybinds] [--no-menu]
 
 set -euo pipefail
+# Source imports during setup must not create files in the watched plugin
+# checkout and trigger a shell reload while installation is in progress.
+export PYTHONDONTWRITEBYTECODE=1
 
 want_keybinds=1
 want_menu=1
+automatic=0
 for arg in "$@"; do
   case "$arg" in
   --no-keybinds) want_keybinds=0 ;;
   --no-menu) want_menu=0 ;;
+  --automatic) automatic=1 ;;
   -h | --help)
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
     exit 0
@@ -55,12 +61,16 @@ state="${XDG_STATE_HOME:-$HOME/.local/state}/hypertile"
 plugin_id="jmartin.hypertile"
 plugin_dst="$config/omarchy/plugins/$plugin_id"
 
+# Development links use ./dev apply to control when runtime changes go live.
+if (( automatic )) && [[ -L "$plugin_dst" ]]; then
+  exit 0
+fi
+
 # Fail before changing the engine or CLI if the shell checkout is managed
 # elsewhere. Otherwise a refused update could still start a new session service.
 if [[ -d "$plugin_dst/.git" && "$(cd "$plugin_dst" && pwd -P)" != "$src" ]]; then
   echo "install.sh: $plugin_dst is a git checkout managed by omarchy plugin;" >&2
   echo "  update it with: omarchy plugin update $plugin_id" >&2
-  echo "  then run: $plugin_dst/install.sh" >&2
   exit 1
 fi
 
@@ -68,6 +78,31 @@ for tool in lua jq python3 flock; do
   command -v "$tool" >/dev/null 2>&1 || { echo "install.sh: $tool is required" >&2; exit 1; }
 done
 [[ -e "$hypr/hyprland.lua" ]] || { echo "install.sh: $hypr/hyprland.lua not found; is this an Omarchy 4 (Lua config) system?" >&2; exit 1; }
+
+# Serialize setup across service reloads and manual installs. Keep this lock
+# separate from the legacy writer lock, which is shared with running services.
+mkdir -p "$state"
+exec 8>"$state/install.lock"
+flock -x 8
+
+# Remember manual opt-outs when the next plugin update installs automatically.
+options_file="$state/install-options"
+if (( automatic )) && [[ -f "$options_file" ]]; then
+  read -r want_keybinds want_menu <"$options_file"
+  [[ "$want_keybinds $want_menu" =~ ^[01]\ [01]$ ]] || { echo "install.sh: invalid $options_file" >&2; exit 1; }
+fi
+runtime_hash="$(
+  printf '%s\n' "$hypr" "$bin" "${XDG_DATA_HOME:-$HOME/.local/share}" "$want_keybinds" "$want_menu"
+  sha256sum "$src/install.sh" "$src"/hypertile*.lua "$src"/bin/hypertile-* \
+    "$src"/session/*.py "$src"/scenes/*.py
+)"
+runtime_hash="$(printf '%s' "$runtime_hash" | sha256sum | cut -d' ' -f1)"
+runtime_receipt="$state/installed-runtime.sha256"
+if (( automatic )) && [[ -f "$runtime_receipt" && "$(cat "$runtime_receipt")" == "$runtime_hash" && -x "$bin/hypertile-ctl" ]]; then
+  exit 0
+fi
+# Failed or interrupted installs must be retried on the next enable/reload.
+rm -f "$runtime_receipt"
 
 PYTHONPATH="$src/session" python3 - "$state" <<'PY_PREFLIGHT'
 from pathlib import Path
@@ -99,10 +134,12 @@ for name in ("hypertile-scenes", "hypertile-session"):
     if entry.exists():
         status = subprocess.run([str(entry), "status"], env=env, capture_output=True, timeout=5)
         if status.returncode == 0:
-            # A disabled session reports success without a running daemon.
-            # Use its live status, since config may have changed while it ran.
-            if name == "hypertile-session" and json.loads(status.stdout).get("mode") == "disabled":
-                continue
+            # Offline disabled status has no instance. A live disabled writer
+            # still owns its runtime and must stop before files are replaced.
+            if name == "hypertile-session":
+                value = json.loads(status.stdout)
+                if value.get("mode") == "disabled" and not value.get("instance"):
+                    continue
             subprocess.run([str(entry), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
 PY_SERVICES
 
@@ -150,80 +187,74 @@ for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts
   install -m 0644 "$src/$f" "$hypr/$f"
 done
 
-for f in "$src"/layouts/*.lua; do
-  name="$(basename "$f")"
-  if [[ ! -e "$hypr/layouts/$name" ]]; then
-    install -m 0644 "$f" "$hypr/layouts/$name"
-    echo "added layout $name"
-  fi
-done
-
 # ---------------------------------------------------------------- shell plugin
-if [[ -d "$plugin_dst" && "$(cd "$plugin_dst" && pwd -P)" == "$src" ]]; then
-  # Running from the installed plugin itself (omarchy plugin add, or a clone
-  # straight into the plugins directory). The shell reads it in place.
-  echo "shell plugin runs from $plugin_dst"
-else
-  # A development checkout elsewhere: copy what the shell loads.
-  mkdir -p "$plugin_dst/plugin"
-  install -m 0644 "$src/manifest.json" "$plugin_dst/manifest.json"
-  for path in "$src"/plugin/*; do
-    install -m 0644 "$path" "$plugin_dst/plugin/$(basename "$path")"
-  done
-  find "$plugin_dst/plugin" -maxdepth 1 -type f | while read -r installed; do
-    [[ -e "$src/plugin/$(basename "$installed")" ]] || rm -f "$installed"
-  done
-  echo "copied shell plugin to $plugin_dst"
-fi
-
-if command -v omarchy-plugin-validate >/dev/null 2>&1; then
-  # A development link points at the plugin root; validate its contents.
-  omarchy-plugin-validate "$(cd "$plugin_dst" && pwd -P)" >/dev/null || echo "warning: plugin manifest did not validate" >&2
-fi
-
-shell_up=0
-if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
-  shell_up=1
-  # The shell only learns about a new plugin directory after a rescan.
-  omarchy-shell -q shell rescanPlugins || true
-fi
-
-# The shell tracks a plugin by one entry: in the bar layout (which also
-# enables the overlay) or in the plain plugins list. A plugin already listed
-# there is enabled without a bar slot, so the entry is dropped and the plugin
-# re-enabled with a placement. That happens only while the widget is off the
-# bar; one the user has moved stays where they put it.
-shell_json="$config/omarchy/shell.json"
-if (( shell_up )) && command -v omarchy-plugin-enable >/dev/null 2>&1; then
-  if [[ -e "$shell_json" ]] &&
-     ! jq -e --arg id "$plugin_id" '[.bar.layout // {} | .[] | .[]? | .id] | index($id)' "$shell_json" >/dev/null 2>&1; then
-    omarchy-plugin-disable "$plugin_id" >/dev/null 2>&1 || true
-    if omarchy-plugin-enable "$plugin_id" --section left --after omarchy.workspaces >/dev/null; then
-      echo "added the layout widget to the bar after the workspaces"
-    else
-      echo "warning: could not enable $plugin_id (run: omarchy plugin enable $plugin_id --section left)" >&2
-    fi
+if (( ! automatic )); then
+  if [[ -d "$plugin_dst" && "$(cd "$plugin_dst" && pwd -P)" == "$src" ]]; then
+    # Running from the installed plugin itself (omarchy plugin add, or a clone
+    # straight into the plugins directory). The shell reads it in place.
+    echo "shell plugin runs from $plugin_dst"
   else
-    omarchy-plugin-enable "$plugin_id" >/dev/null || echo "warning: could not enable $plugin_id (run: omarchy plugin enable $plugin_id)" >&2
+    # A development checkout elsewhere: copy what the shell loads.
+    mkdir -p "$plugin_dst/plugin"
+    install -m 0644 "$src/manifest.json" "$plugin_dst/manifest.json"
+    for path in "$src"/plugin/*; do
+      install -m 0644 "$path" "$plugin_dst/plugin/$(basename "$path")"
+    done
+    find "$plugin_dst/plugin" -maxdepth 1 -type f | while read -r installed; do
+      [[ -e "$src/plugin/$(basename "$installed")" ]] || rm -f "$installed"
+    done
+    echo "copied shell plugin to $plugin_dst"
   fi
-elif (( ! shell_up )); then
-  echo "shell not running; enable the plugin later with: omarchy plugin enable $plugin_id --section left --after omarchy.workspaces"
-fi
 
-# The shell caches compiled QML for on-demand panels; a rescan does not
-# refresh it, so changed overlay code needs a shell restart to take effect.
-# A hash of the plugin files, kept in the state directory, says whether
-# anything changed since the last install.
-plugin_hash="$(cat "$src/manifest.json" "$src"/plugin/* | sha256sum | cut -d' ' -f1)"
-hash_file="$state/installed-plugin.sha256"
-if [[ ! -e "$hash_file" || "$(cat "$hash_file")" != "$plugin_hash" ]]; then
-  if (( shell_up )); then
-    omarchy restart shell >/dev/null 2>&1 || true
-    echo "restarted the shell to load the updated plugin"
+  if command -v omarchy-plugin-validate >/dev/null 2>&1; then
+    # A development link points at the plugin root; validate its contents.
+    omarchy-plugin-validate "$(cd "$plugin_dst" && pwd -P)" >/dev/null || echo "warning: plugin manifest did not validate" >&2
   fi
-  echo "$plugin_hash" >"$hash_file"
+
+  shell_up=0
+  if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
+    shell_up=1
+    # The shell only learns about a new plugin directory after a rescan.
+    omarchy-shell -q shell rescanPlugins || true
+  fi
+
+  # The shell tracks a plugin by one entry: in the bar layout (which also
+  # enables the overlay) or in the plain plugins list. A plugin already listed
+  # there is enabled without a bar slot, so the entry is dropped and the plugin
+  # re-enabled with a placement. That happens only while the widget is off the
+  # bar; one the user has moved stays where they put it.
+  shell_json="$config/omarchy/shell.json"
+  if (( shell_up )) && command -v omarchy-plugin-enable >/dev/null 2>&1; then
+    if [[ -e "$shell_json" ]] &&
+       ! jq -e --arg id "$plugin_id" '[.bar.layout // {} | .[] | .[]? | .id] | index($id)' "$shell_json" >/dev/null 2>&1; then
+      omarchy-plugin-disable "$plugin_id" >/dev/null 2>&1 || true
+      if omarchy-plugin-enable "$plugin_id" --section left --after omarchy.workspaces >/dev/null; then
+        echo "added the layout widget to the bar after the workspaces"
+      else
+        echo "warning: could not enable $plugin_id (run: omarchy plugin enable $plugin_id --section left)" >&2
+      fi
+    else
+      omarchy-plugin-enable "$plugin_id" >/dev/null || echo "warning: could not enable $plugin_id (run: omarchy plugin enable $plugin_id)" >&2
+    fi
+  elif (( ! shell_up )); then
+    echo "shell not running; enable the plugin later with: omarchy plugin enable $plugin_id --section left --after omarchy.workspaces"
+  fi
+
+  # The shell caches compiled QML for on-demand panels; a rescan does not
+  # refresh it, so changed overlay code needs a shell restart to take effect.
+  # A hash of the plugin files, kept in the state directory, says whether
+  # anything changed since the last install.
+  plugin_hash="$(cat "$src/manifest.json" "$src"/plugin/* | sha256sum | cut -d' ' -f1)"
+  hash_file="$state/installed-plugin.sha256"
+  if [[ ! -e "$hash_file" || "$(cat "$hash_file")" != "$plugin_hash" ]]; then
+    if (( shell_up )); then
+      omarchy restart shell >/dev/null 2>&1 8>&- || true
+      echo "restarted the shell to load the updated plugin"
+    fi
+    echo "$plugin_hash" >"$hash_file"
+  fi
+  echo "installed shell plugin $plugin_id (toggle: omarchy-shell shell toggle $plugin_id)"
 fi
-echo "installed shell plugin $plugin_id (toggle: omarchy-shell shell toggle $plugin_id)"
 
 # ------------------------------------------------------------- menu entry
 # SUPER+SPACE > Layouts.
@@ -257,18 +288,31 @@ fi
 
 # Omarchy closes apps before the compositor exits. Override only stock menu
 # actions; explicit user overrides retain ownership. Guarded commands freeze
-# the durable session before delegating to Omarchy.
+# the durable session before delegating to Omarchy. Omarchy normalizes missing
+# icons/labels before merging overrides, so action-only entries erase them.
 if (( want_menu )) && [[ -e "$menu_ext" ]]; then
   backup "$menu_ext"
   python3 - "$menu_ext" <<'PY'
+import json
 import re
 import sys
 path = sys.argv[1]
-text = open(path).read().rstrip()
+original = open(path).read()
+text = original.rstrip()
 entries = []
-for action in ("logout", "reboot", "shutdown"):
+for action, icon, label in (("logout", "󰍃", "Logout"),
+                            ("reboot", "󰜉", "Reboot"),
+                            ("shutdown", "󰐥", "Shutdown")):
+    command = "hypertile-ctl session " + action
+    item = json.dumps({"icon": icon, "label": label, "action": command},
+                      ensure_ascii=False, separators=(",", ":"))
+    # Upgrade only the action-only entries written by older installers.
+    # Full entries, custom commands, labels, and icons retain user ownership.
+    legacy = (r'("system\.' + action + r'"\s*:\s*)'
+              r'\{\s*"action"\s*:\s*"' + re.escape(command) + r'"\s*\}')
+    text = re.sub(legacy, lambda match: match[1] + item, text)
     if not re.search(r'"system\.' + action + r'"\s*:', text):
-        entries.append('  "system.%s": {"action":"hypertile-ctl session %s"}' % (action, action))
+        entries.append('  "system.%s": %s' % (action, item))
 if entries:
     close = text.rfind("}")
     if close == -1:
@@ -277,7 +321,9 @@ if entries:
     lines = [line for line in head.splitlines() if line.strip() and not line.strip().startswith("//")]
     if lines and not lines[-1].rstrip().endswith(("{", ",")):
         head += ","
-    open(path, "w").write(head + "\n" + ",\n".join(entries) + "\n}\n")
+    text = head + "\n" + ",\n".join(entries) + "\n}"
+if text != original.rstrip():
+    open(path, "w").write(text + "\n")
 PY
 fi
 
@@ -362,4 +408,6 @@ else
   echo "Hyprland is not running; the config changes take effect at the next start"
 fi
 
+printf '%s %s\n' "$want_keybinds" "$want_menu" >"$options_file"
+printf '%s\n' "$runtime_hash" >"$runtime_receipt"
 echo "installed. try: hypertile-ctl list"

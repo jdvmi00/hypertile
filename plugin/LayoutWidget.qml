@@ -18,11 +18,12 @@ BarWidget {
   readonly property string home: Quickshell.env("HOME")
   readonly property string ctl: home + "/.local/bin/hypertile-ctl"
   readonly property string icon: "\u{F1CAC}"
+  readonly property var setupService: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
 
   property string layout: ""         // as the compositor names it: lua:columns, dwindle
   property int workspaceId: 0
   readonly property string label: displayName(layout)
-  SessionStatus { id: sessionReader; ctl: root.ctl }
+  SessionStatus { id: sessionReader; ctl: root.ctl; polling: !root.setupService || root.setupService.ready }
   readonly property bool sessionAttention: Session.attention(sessionReader.data, sessionReader.available, sessionReader.checked)
 
   // A bar is built per monitor, so each instance describes the workspace
@@ -34,8 +35,7 @@ BarWidget {
   // one, so it may report the layout the switch replaced. Run again when it
   // lands rather than dropping the request.
   property bool refreshPending: false
-  // Set when the CLI cannot be started (the plugin was added but install.sh
-  // has not been run); the tooltip then says what to do.
+  // Set when the CLI cannot be started after automatic setup.
   property bool ctlMissing: false
   property bool stalled: false     // the last read was cut short by stallTimer
 
@@ -48,6 +48,7 @@ BarWidget {
   }
 
   function refresh() {
+    if (root.setupService && !root.setupService.ready) return
     if (queryProc.running) {
       refreshPending = true
       return
@@ -61,6 +62,7 @@ BarWidget {
   }
 
   function cycle(reverse) {
+    if (root.setupService && !root.setupService.ready) return
     if (root.bar) root.bar.run(Util.shellQuote(root.ctl) + " cycle" + (reverse ? " --reverse" : "") + (root.workspaceId > 0 ? " --workspace " + root.workspaceId : ""))
   }
 
@@ -74,6 +76,12 @@ BarWidget {
 
   Component.onCompleted: refresh()
   onScreenNameChanged: refresh()
+  onSetupServiceChanged: refresh()
+
+  Connections {
+    target: root.setupService
+    function onReadyChanged() { root.refresh() }
+  }
 
   Connections {
     target: Hyprland
@@ -154,8 +162,9 @@ BarWidget {
     active: root.sessionAttention
     fontSize: Style.font.caption
     horizontalMargin: 6
-    tooltipText: root.ctlMissing
-      ? "hypertile-ctl is not installed: run install.sh in ~/.config/omarchy/plugins/jmartin.hypertile"
+    tooltipText: root.setupService && !root.setupService.ready ? root.setupService.statusText
+      : root.ctlMissing
+      ? "Hypertile runtime is unavailable. Re-enable the plugin to retry setup."
       : (root.label !== "" ? root.label + " on workspace " + root.workspaceId + "\n" : "")
         + Session.summary(sessionReader.data, sessionReader.available, sessionReader.checked) + "\n"
         + "Click: layouts overlay · Scroll or middle-click: next layout"

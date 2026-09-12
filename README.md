@@ -28,24 +28,23 @@ developed against Hyprland 0.56.2 / Omarchy 4.0.3. Local validation uses the
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/jdvmi00/hypertile.git
-~/.config/omarchy/plugins/jmartin.hypertile/install.sh
+omarchy plugin add https://github.com/jdvmi00/hypertile.git --enable
 ```
 
-The first line clones this repository into the Omarchy plugins directory,
-where the shell loads the overlay and the bar widget. The second puts
-everything else in place, and is the one to run again after every update:
+This clones the repository, enables the plugin, and sets up its runtime
+automatically. The widget briefly shows **Setting up Hypertile…** in its
+tooltip while setup finishes. Enabling installs:
 
-- the engine and bridge into `~/.config/hypr/`, and the two shipped layouts
-  into `~/.config/hypr/layouts/` (a layout that already exists is left alone)
+- the engine and bridge into `~/.config/hypr/`, and an empty
+  `~/.config/hypr/layouts/` directory for your layouts (existing layouts are kept)
 - `hypertile-ctl` into `~/.local/bin/`
 - the session recovery and independent Scenes services, started by the layout loader
 - a `require("hypr.hypertile-layouts")` line in `hyprland.lua`
-- the bar widget after the workspaces (skipped when it is already on the bar)
-- a **Layouts** entry in the `SUPER+SPACE` menu (`--no-menu` skips it)
+- the bar widget in the section chosen by Omarchy (left by default)
+- a **Layouts** entry in the `SUPER+SPACE` menu
 - guarded logout/reboot/shutdown menu actions that save the session before
-  Omarchy closes windows (custom actions are left alone; `--no-menu` skips these)
-- three keybinds (`--no-keybinds` skips them): `SUPER+ALT+L` opens the
+  Omarchy closes windows (custom actions are left alone)
+- three keybinds: `SUPER+ALT+L` opens the
   overlay; `SUPER+L` cycles the workspace through your layouts and then
   dwindle, replacing Omarchy's dwindle/scrolling toggle, which cannot
   return to a Lua layout; `SUPER+SHIFT+L` cycles the other way
@@ -61,8 +60,18 @@ The installer then reloads Hyprland and checks `hyprctl configerrors`. Update wi
 
 ```bash
 omarchy plugin update jmartin.hypertile
-~/.config/omarchy/plugins/jmartin.hypertile/install.sh
 ```
+
+Enabled plugins apply runtime updates automatically; disabled plugins apply
+them when next enabled. Shell restarts skip setup when the runtime is current.
+If setup fails, the widget points to `~/.local/state/hypertile/install.log`
+(`$XDG_STATE_HOME/hypertile/install.log` when set). Resolve the reported issue,
+then disable and re-enable Hypertile to retry.
+
+For a manual install with optional integrations omitted, add the plugin
+without `--enable`, then run its `install.sh` with `--no-menu` and/or
+`--no-keybinds`. Automatic updates remember these choices. Development links
+continue to use `./install.sh` once and `./dev apply` after edits.
 
 Uninstall with:
 
@@ -110,6 +119,10 @@ on the next Hyprland session. It restores zone layouts, native window order,
 pins, runtime sizing, workspaces, floating geometry, and focus. Applications
 restore their own tabs/documents; terminal commands are not replayed.
 
+Turn this on or off with **Startup → Save windows for startup** in the
+overlay, or `hypertile-ctl session enable|disable`. The choice takes effect
+immediately and persists across reboots. Enabling saves the current desktop.
+
 Use the guarded Omarchy menu actions or `hypertile-ctl session logout`,
 `reboot`, or `shutdown` so the snapshot is saved before applications close.
 `hypertile-ctl session status` reports progress and unmatched windows. Apps
@@ -134,6 +147,9 @@ docks on the left or the right and remembers that, along with which
 sections are open, in `~/.local/state/hypertile/overlay.json`.
 
 ### Layouts tab
+
+Each tile shows its width × height in pixels beneath its fill-order number,
+updating as you resize the layout.
 
 | Key | Action |
 |---|---|
@@ -353,7 +369,8 @@ hl.dsp.layout("size center 1.0")
 hl.dsp.layout("reset")
 ```
 
-Two layouts ship:
+The repository includes two example layouts for reference and tests; neither
+is installed automatically:
 
 - `ultrawide`: 20/60/20 columns, fill center, right, left, then cycle.
 - `quad`: same columns, but the center is four quadrants filled top-left,
@@ -380,12 +397,12 @@ session/service.py    session watcher, durable snapshots, app launch and matchin
 session/scene_recovery.py  checkpoint and delivery of scene assignments across restarts
 session/upgrade.py    preserve daemon state while replacing installed runtime files
 scenes/*.py            scenes service: saved scenes, the app catalog, one-shot placement
-layouts/*.lua          shipped layouts: ultrawide, quad
+layouts/*.lua          example layouts for reference and tests: ultrawide, quad
 bin/hypertile-ctl      CLI over the bridge
 bin/hypertile-session  session service entry point (also via hypertile-ctl session)
 bin/hypertile-scenes   scenes service entry point (also via hypertile-ctl scene)
 dev                    link the checkout, check changes, and reload affected components
-install.sh             puts the engine, CLI, layouts, keybinds, and menu entry in place
+install.sh             puts the engine, CLI, keybinds, and menu entry in place
 uninstall.sh           takes them out again
 probe.lua              live probe (logs everything the API hands a layout)
 docs/README.md         development workflow, testing, and backup/recovery paths

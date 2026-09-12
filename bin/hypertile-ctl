@@ -68,7 +68,7 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
   windows [--json]           open windows (class, title, workspace)
   scene <command> [...]     list, save, apply, current, restore, retry, content;
                              see docs/SCENES.md
-  session <command> [name]   status, save <name>, restore [name], freeze, resume,
+  session <command> [name]   status, enable, disable, save <name>, restore [name], freeze, resume,
                              stop, logout, reboot, shutdown; see docs/SESSIONS.md
   default [name|BUILTINS] [--no-reload]
                              show or set the default layout (general.layout
