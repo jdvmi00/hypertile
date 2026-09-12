@@ -47,6 +47,18 @@ import sys
 check_legacy(Path(sys.argv[1]))
 PY_PREFLIGHT
 
+# Wait for any setup already in progress, then disable the service before
+# removing runtime files. An enabled service would reinstall them on reload.
+mkdir -p "$state"
+exec 8>"$state/install.lock"
+flock -x 8
+shell_up=0
+if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
+  shell_up=1
+  omarchy-plugin-disable "$plugin_id" >/dev/null 2>&1 || true
+fi
+rm -f "$state/installed-runtime.sha256"
+
 # Stop the writer before removing its code; retain recovery snapshots unless
 # --purge was requested. A missing/stopped service is harmless.
 if [[ -x "$bin/hypertile-session" ]]; then
@@ -146,13 +158,27 @@ if [[ -e "$menu_ext" ]] && grep -qE "\"layouts\":.*$plugin_id|hypertile-ctl sess
   backup "$menu_ext"
   if command -v python3 >/dev/null 2>&1; then
     python3 - "$menu_ext" "$plugin_id" <<'PY'
+import json
 import sys
 path, pid = sys.argv[1], sys.argv[2]
 lines = open(path).read().split("\n")
 lines = [l for l in lines if not (l.lstrip().startswith('"layouts"') and pid in l)]
-lines = [l for l in lines if not any(
-    l.strip() == '"system.%s": {"action":"hypertile-ctl session %s"}%s' % (a, a, comma)
-    for a in ("logout", "reboot", "shutdown") for comma in ("", ","))]
+def owned_power_entry(line):
+    try:
+        row = json.loads("{" + line.strip().removesuffix(",") + "}")
+    except ValueError:
+        return False
+    for action, icon, label in (("logout", "󰍃", "Logout"),
+                                ("reboot", "󰜉", "Reboot"),
+                                ("shutdown", "󰐥", "Shutdown")):
+        command = "hypertile-ctl session " + action
+        # Remove both the legacy action-only form and complete stock entries.
+        # User-customized entries are kept.
+        if row in ({"system." + action: {"action": command}},
+                   {"system." + action: {"icon": icon, "label": label, "action": command}}):
+            return True
+    return False
+lines = [line for line in lines if not owned_power_entry(line)]
 # The entry before it may now be the last one and must lose its comma.
 body = [i for i, l in enumerate(lines) if l.strip() and not l.strip().startswith("//")]
 if len(body) >= 2:
@@ -199,11 +225,6 @@ else
 fi
 
 # Shell plugin.
-shell_up=0
-if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
-  shell_up=1
-  omarchy-plugin-disable "$plugin_id" >/dev/null 2>&1 || true
-fi
 if [[ -d "$plugin_dst" && ! -d "$plugin_dst/.git" && "$(cd "$plugin_dst" && pwd -P)" != "$src" ]]; then
   rm -rf "$plugin_dst"
   echo "removed the shell plugin copy at $plugin_dst"

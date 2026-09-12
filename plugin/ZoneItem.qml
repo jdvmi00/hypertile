@@ -165,7 +165,7 @@ Item {
     elide: Text.ElideRight
   }
 
-  // Under the numeral while scenes are edited: what an unassigned zone does.
+  // Under the numeral: tile dimensions in Layouts, or the local-window hint in Scenes.
   Rectangle {
     visible: localHint.visible
     anchors.centerIn: localHint
@@ -176,13 +176,14 @@ Item {
   }
   Text {
     id: localHint
-    visible: zone.content && zone.roomy && !zone.peek && !zone.showCentre
+    visible: (!zone.content || zone.roomy) && !zone.peek && !zone.showCentre
     anchors.top: numeral.bottom
     anchors.topMargin: zone.pad
     anchors.horizontalCenter: parent.horizontalCenter
     width: parent.width - zone.pad * 2
     textFormat: Text.PlainText
-    text: zone.modelData.spacer === true ? "Spacer  ·  never holds windows"
+    text: !zone.content ? zone.modelData.w + " × " + zone.modelData.h + " px"
+      : zone.modelData.spacer === true ? "Spacer  ·  never holds windows"
       : zone.isSpacer ? "Empty  ·  nothing opens here"
       : "Local windows  ·  fill order"
     color: zone.overlay.mutedForeground

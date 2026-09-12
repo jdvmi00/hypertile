@@ -26,10 +26,12 @@ Item {
 
   property var shell: null
   property var manifest: null
+  property var service: null
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string ctl: home + "/.local/bin/hypertile-ctl"
-  readonly property string missingCtlText: "hypertile-ctl is not installed: run install.sh in the plugin directory (~/.config/omarchy/plugins/jmartin.hypertile)"
+  readonly property string missingCtlText: service && !service.ready ? service.statusText
+    : "Hypertile runtime is unavailable. Re-enable the plugin to retry setup."
   readonly property string runtimeDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/hypertile"
   readonly property string stateDir: (Quickshell.env("XDG_STATE_HOME") || (home + "/.local/state")) + "/hypertile"
 
@@ -45,11 +47,22 @@ Item {
 
   property bool opened: false
   property bool dismissing: false
-  SessionStatus { id: sessionReader; ctl: root.ctl; polling: root.opened && !root.dismissing }
+  SessionStatus { id: sessionReader; ctl: root.ctl; polling: root.opened && !root.dismissing && (!root.service || root.service.ready) }
+  Connections {
+    target: root.service
+    function onReadyChanged() { if (root.opened && !root.dismissing) root.refresh() }
+    function onErrorChanged() { if (root.opened) root.errorText = root.service.error }
+  }
   readonly property var sessionStatus: sessionReader.data
   readonly property bool sessionAvailable: sessionReader.available
   readonly property bool sessionChecked: sessionReader.checked
   property bool showSessionDetails: false
+
+  function setSessionEnabled(enabled) {
+    runCtl(["session", enabled ? "enable" : "disable"],
+      enabled ? "Enabling session saving…" : "Disabling session saving…",
+      enabled ? "Session saving enabled" : "Session saving disabled")
+  }
 
   function resumeSession() {
     runCtl(["session", "resume"], "Resuming session saving…", "Session saving resumed")
@@ -513,6 +526,11 @@ Item {
   // --------------------------------------------------------------- data
 
   function refresh() {
+    if (root.service && !root.service.ready) {
+      root.statusText = root.service.statusText
+      return
+    }
+    if (root.service) root.statusText = ""
     currentProc.running = true
     workspacesProc.running = true
     windowsProc.running = true
@@ -536,6 +554,16 @@ Item {
   function step(delta) {
     if (root.editing || root.layouts.length === 0) return
     viewAt((root.viewIndex + delta + root.layouts.length) % root.layouts.length)
+  }
+
+  function cycleFromShortcut(workspace, delta) {
+    if (!root.opened || root.dismissing || root.editing || root.contentMode
+        || String(workspace) !== root.workspaceId) return "unhandled"
+    // Consume the shortcut during dialogs or an action as well: falling
+    // through would change the real layout behind the overlay's selection.
+    if (!root.busy && !root.naming && !root.renaming && !root.pendingSwitch
+        && !root.choosingNew && !root.confirmingDelete) root.step(delta < 0 ? -1 : 1)
+    return "handled"
   }
 
   // Browse to the layout at `index` in the list (arrows, or a click in the
@@ -1381,6 +1409,7 @@ Item {
     id: ctlProc
     stdout: StdioCollector { id: ctlOutput; waitForEnd: true }
     onFinished: function(code, status) {
+      if (code === 0 && status === 0 && command[1] === "session") sessionReader.acceptCommand(ctlOutput.text)
       sessionReader.refresh()
       root.busy = false
       if (code !== 0 || status !== 0) {
@@ -1765,6 +1794,7 @@ Item {
     function close(): void { root.dismiss() }
     function next(): void { root.step(1) }
     function prev(): void { root.step(-1) }
+    function cycle(workspace: string, delta: int): string { return root.cycleFromShortcut(workspace, delta) }
     function apply(): void { root.applyViewed(false) }
     function use(): void { root.applyViewed(true) }
     function deleteLayout(): void { root.deleteViewed() }

@@ -100,7 +100,7 @@ Card {
     if (overlay.contentMode) return [["↑ ↓ (no zone)", "select scene"], ["Enter / Delete", "use / delete selected scene"], ["click / ← →", "select zone"], ["Tab", "next zone (keep search)"], ["1 – 9 (outside search)", "zone by number"], ["type", "search apps"], ["↑ ↓ (search)", "pick a match"], ["Enter (search)", "assign match"], ["Esc", "clear the search, else close"], ["?", "hide keys"]]
     if (overlay.numbering) return [["click", "next in order"], ["click again", "stack"], ["Backspace", "undo"], ["Enter", "done"]]
     if (overlay.editing) return [["click / ← → ↑ ↓", "select zone"], ["Shift + arrows", "resize 1%"], ["Tab", "next zone"], ["drag", "resize"], ["c", "split columns"], ["r", "split rows"], ["x", "delete"], ["s", "spacer"], ["f", "renumber"], ["u", "undo"], ["Space", "hold to peek"], ["w / Ctrl+S", "save"], ["Esc", "leave"], ["?", "hide keys"]]
-    return [["← → ↑ ↓ / hjkl", "browse layouts"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
+    return [["← → ↑ ↓ / hjkl", "browse layouts"], ["Super+L / Shift+Super+L", "next / previous layout"], ["Enter", "use and close"], ["Space", "hold to peek"], ["e", "edit"], ["n", "new"], ["F2", "rename"], ["d", "delete"], ["r", "refresh"], ["Esc", "close"], ["?", "hide keys"]]
   }
 
   readonly property string metaText: {
@@ -677,6 +677,17 @@ Card {
           spacing: Style.spacing.sm
           Action { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName) : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
           Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.pendingSwitch = null }
+        }
+      }
+
+      Section {
+        title: "STARTUP"
+        Switch {
+          label: "Save windows for startup"
+          description: "Save open windows and restore them when you log in"
+          checked: overlay.sessionAvailable && overlay.sessionStatus && overlay.sessionStatus.mode !== "disabled"
+          enabled: overlay.sessionAvailable && !overlay.busy
+          onClicked: overlay.setSessionEnabled(overlay.sessionStatus.mode === "disabled")
         }
       }
 

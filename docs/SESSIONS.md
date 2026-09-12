@@ -13,10 +13,25 @@ belong to the application: browser tabs and editor documents require the
 app's own session recovery. Terminal commands and running processes are not
 replayed.
 
+## Turn saving on or off
+
+Open the Hypertile overlay and use **Startup → Save windows for startup**.
+The setting is on by default and takes effect immediately. Turning it off
+stops automatic checkpoints and recovery, including on subsequent logins or
+reboots. Turning it back on saves the current desktop for the next startup;
+it does not reopen an older snapshot. Existing snapshots are kept.
+
+The switch updates `enabled` in `~/.config/hypertile/session.json` while
+preserving app recipes and other settings. The service stays available to
+handle the switch while disabled. Named save/restore and Resume require
+saving to be enabled first.
+
 ## Commands
 
 ```sh
 hypertile-ctl session status          # mode, matched/unmatched windows, errors
+hypertile-ctl session enable          # save the current desktop and enable startup recovery
+hypertile-ctl session disable         # stop saving and startup recovery, persistently
 hypertile-ctl session save work       # independent named snapshot
 hypertile-ctl session restore work    # restore that snapshot, preserving other open windows
 hypertile-ctl session restore         # retry incomplete recovery, or restore the latest snapshot
@@ -131,8 +146,8 @@ correct the configuration before restarting the service.
 to false. The snapshot retains the recipe used at capture time; an explicit
 current configuration overrides it, and a window the snapshot had no recipe
 for is retried with the current built-in recipes. After changing configuration, run
-`hypertile-ctl session stop`, then `hyprctl reload`. Set `enabled` to false
-to disable the watcher on subsequent starts.
+`hypertile-ctl session stop`, then `hyprctl reload`. Use the overlay switch or
+`session enable|disable` to change `enabled` without restarting the service.
 The guarded menu actions delegate directly to Omarchy while it is disabled.
 
 Old window addresses are only usable in the same compositor instance and

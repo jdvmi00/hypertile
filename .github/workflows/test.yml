@@ -31,8 +31,8 @@ jobs:
     container: archlinux:latest
     steps:
       # The engine targets the Lua that Hyprland embeds (5.5); Arch tracks it.
-      - name: Install Lua, Node, jq, and shellcheck
-        run: pacman -Syu --noconfirm --needed lua nodejs jq git shellcheck python && lua -v
+      - name: Install test dependencies
+        run: pacman -Syu --noconfirm --needed lua nodejs jq git shellcheck python quickshell && lua -v
       - uses: actions/checkout@v4
       - name: Scripts
         run: shellcheck install.sh uninstall.sh

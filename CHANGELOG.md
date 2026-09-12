@@ -1,5 +1,34 @@
 # Changelog
 
+## 1.2.0 (2026-09-12)
+
+- Enabling the plugin installs its runtime automatically. Enabled updates
+  refresh it without a separate install command, skip unchanged runtime files,
+  and report setup failures in the widget and overlay. Setup preserves user
+  layouts, shell placement, and manual menu/keybinding opt-outs. Development
+  links continue to use `dev apply`.
+- The overlay adds **Startup → Save windows for startup**, with matching
+  `hypertile-ctl session enable` and `disable` commands. The choice takes
+  effect immediately and persists across reboots. Disabling stops automatic
+  saving and recovery while keeping snapshots; enabling saves the current
+  desktop without reopening an older snapshot. Reinstallation stops a live
+  disabled writer before replacing its runtime.
+- `SUPER+L` and `SUPER+SHIFT+L` browse through the open Layouts overlay, keeping
+  its selected layout and preview together. Enter keeps the selection; Esc
+  restores the previous layout. Dialogs consume cycling shortcuts so they
+  cannot change the layout behind the overlay.
+- Layout tiles display their width and height in pixels beneath their
+  fill-order numbers.
+- Fresh installations start with an empty layouts directory. The repository's
+  `quad` and `ultrawide` examples remain available for reference and tests;
+  existing user layouts are preserved.
+- Guarded power menu entries retain their stock icons and labels. Uninstall
+  recognizes both old and current owned entries, preserves customizations,
+  and disables automatic setup before removing runtime files.
+- Regression coverage includes automatic setup through Quickshell, repeated
+  and concurrent installation, disabled writers, persistent session toggles,
+  interrupted enabling, and layout cycling through the overlay.
+
 ## 1.1.2 (2026-09-10)
 
 - Refresh the local Hyprland size-ack backport recipe for Arch's 0.56.2-2

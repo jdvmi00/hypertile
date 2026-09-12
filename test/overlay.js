@@ -41,6 +41,43 @@ function fixture() {
   return {root, context, calls}
 }
 
+// SUPER+L browses the displayed layout and windows through the same preview
+// path, in both directions, without changing the committed layout.
+for (const managedContent of [false, true]) {
+  const {root, context, calls} = fixture()
+  Object.assign(root, {managedContent, contentCatalog: {}})
+  assert.equal(root.cycleFromShortcut("1", 1), "handled")
+  assert.equal(root.viewed.name, "wide")
+  assert.equal(context.browseTimer.running, true)
+  root.browseTo("lua:" + root.viewed.name)
+  assert.equal(root.liveLayout, "lua:wide")
+  assert.equal(root.committedLayout, "lua:quad")
+  assert.deepEqual(clone(context.browseProc.command).slice(1, managedContent ? 4 : 3),
+    managedContent ? ["scene", "browse", "lua:wide"] : ["apply", "lua:wide"])
+  context.browseProc.running = false
+  assert.equal(root.cycleFromShortcut("1", -1), "handled")
+  assert.equal(root.viewed.name, "quad")
+  assert.equal(root.cycleFromShortcut("1", -1), "handled")
+  assert.equal(root.viewed.name, "wide", "reverse wraps through the layout list")
+  root.dismiss()
+  assert.equal(root.liveLayout, "lua:quad")
+  assert.equal(calls[0][managedContent ? 2 : 1], managedContent ? "browse-end" : "apply")
+}
+for (const changes of [{opened: false}, {dismissing: true}, {editing: true}, {contentMode: true}, {workspaceId: "2"}]) {
+  const {root, context} = fixture()
+  Object.assign(root, changes)
+  assert.equal(root.cycleFromShortcut("1", 1), "unhandled")
+  assert.equal(root.viewIndex, 0)
+  assert.equal(context.browseTimer.running, false)
+}
+for (const changes of [{busy: true}, {pendingSwitch: {}}, {naming: true}, {renaming: true}, {choosingNew: true}, {confirmingDelete: true}]) {
+  const {root, context} = fixture()
+  Object.assign(root, changes)
+  assert.equal(root.cycleFromShortcut("1", 1), "handled", "a dialog must not fall through to a compositor-only cycle")
+  assert.equal(root.viewIndex, 0)
+  assert.equal(context.browseTimer.running, false)
+}
+
 // A copied layout cannot use its source's name; an edit of the original can.
 {
   const {root, calls} = fixture()

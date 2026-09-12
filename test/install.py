@@ -1,5 +1,6 @@
 """Exercise install/uninstall in isolated homes, with no desktop access."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -76,6 +77,132 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
     def backup(self, path):
         return Path(str(path) + ".hypertile.bak")
 
+    def plugin_checkout(self):
+        plugin = self.config / "omarchy/plugins/jmartin.hypertile"
+        shutil.copytree(ROOT, plugin, ignore=shutil.ignore_patterns(
+            ".git", "__pycache__", "docs", "test", "preview.png", "probe.log"))
+        (plugin / ".git").mkdir()
+        self.env["TEST_SOURCE"] = str(plugin)
+        return plugin
+
+    def test_automatic_setup_keeps_shell_placement_and_skips_unchanged_runtime(self):
+        plugin = self.plugin_checkout()
+        shell = self.config / "omarchy/shell.json"
+        shell.write_text('{"bar":{"layout":{"right":[{"id":"jmartin.hypertile"}]}}}\n')
+        # Any attempt to manage the shell during automatic setup is a bug.
+        for name in ("omarchy", "omarchy-shell", "omarchy-plugin-enable", "omarchy-plugin-disable"):
+            command = self.tools / name
+            command.write_text('#!/usr/bin/env bash\necho unexpected-shell-call >>"$HOME/shell-calls"\nexit 1\n')
+            command.chmod(0o755)
+        original = shell.read_bytes()
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.assertEqual(list((self.hypr / "layouts").iterdir()), [])
+        runtime = self.hypr / "hypertile.lua"
+        stamp = runtime.stat().st_mtime_ns
+        # A no-op must not even query/stop the running services.
+        entry = self.home / ".local/bin/hypertile-session"
+        entry.write_text('#!/usr/bin/env bash\necho unexpected-service-call >>"$HOME/service-calls"\nexit 1\n')
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.assertEqual(runtime.stat().st_mtime_ns, stamp)
+        self.assertEqual(shell.read_bytes(), original)
+        self.assertFalse((self.home / "shell-calls").exists())
+        self.assertFalse((self.home / "service-calls").exists())
+        self.assertFalse(list(plugin.rglob("__pycache__")))
+
+    def test_automatic_update_preserves_layouts_and_manual_opt_outs(self):
+        plugin = self.plugin_checkout()
+        originals = {p: p.read_bytes() for p in (self.bindings, self.menu)}
+        self.run_script(plugin / "install.sh", "--no-menu", "--no-keybinds")
+        self.assertEqual(list((self.hypr / "layouts").iterdir()), [])
+        layout = self.hypr / "layouts/quad.lua"
+        layout.write_text('-- my layout\n')
+        source = plugin / "hypertile.lua"
+        source.write_text(source.read_text() + '\n-- updated engine\n')
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.assertEqual((self.hypr / source.name).read_bytes(), source.read_bytes())
+        self.assertEqual(layout.read_text(), '-- my layout\n')
+        for path, original in originals.items():
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_automatic_failure_can_retry_and_uninstall_clears_receipt(self):
+        receipt = self.state / "hypertile/installed-runtime.sha256"
+        command = self.tools / "hyprctl"
+        command.write_text('#!/usr/bin/env bash\n[[ "$1" != configerrors ]] || echo "bad config"\n')
+        command.chmod(0o755)
+        self.run_script("install.sh", "--automatic", success=False)
+        self.assertFalse(receipt.exists())
+        command.unlink()
+        self.run_script("install.sh", "--automatic")
+        self.assertTrue(receipt.exists())
+        self.run_script("uninstall.sh")
+        self.assertFalse(receipt.exists())
+
+    def test_concurrent_automatic_loads_install_once(self):
+        command = [str(ROOT / "install.sh"), "--automatic"]
+        first = subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        second = subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        outputs = []
+        for process in (first, second):
+            stdout, stderr = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+            outputs.append(stdout)
+        self.assertEqual(sum('installed. try:' in output for output in outputs), 1)
+
+    def test_automatic_setup_leaves_development_links_to_dev_apply(self):
+        plugin = self.config / "omarchy/plugins/jmartin.hypertile"
+        plugin.parent.mkdir(parents=True)
+        plugin.symlink_to(ROOT, target_is_directory=True)
+        self.run_script("install.sh", "--automatic")
+        self.assertFalse((self.hypr / "hypertile.lua").exists())
+
+    @unittest.skipUnless(shutil.which("qs"), "Quickshell is needed for the service integration test")
+    def test_enabled_service_installs_runtime_and_reports_failures(self):
+        plugin = self.plugin_checkout()
+        manifest = json.loads((plugin / "manifest.json").read_text())
+        self.assertIn("service", manifest["kinds"])
+        service_url = (plugin / manifest["entryPoints"]["service"]).as_uri()
+        harness = self.home / "shell.qml"
+        harness.write_text('''import QtQuick
+import Quickshell
+ShellRoot {
+  property var service: null
+  Component.onCompleted: {
+    var component = Qt.createComponent(%s)
+    if (component.status !== Component.Ready) throw new Error(component.errorString())
+    service = component.createObject(null)
+  }
+  Timer {
+    interval: 50; running: true; repeat: true
+    onTriggered: {
+      if (service && (service.ready || service.error !== "")) {
+        console.log(service.ready ? "SETUP_READY" : "SETUP_FAILED: " + service.error)
+        Qt.quit()
+      }
+    }
+  }
+}
+''' % json.dumps(service_url))
+        environment = dict(self.env, QT_QPA_PLATFORM="offscreen")
+        # Quickshell must not see the live desktop's D-Bus or Wayland socket.
+        environment["XDG_RUNTIME_DIR"] = str(self.home / "run")
+        os.chmod(environment["XDG_RUNTIME_DIR"], 0o700)
+        def load_service():
+            result = subprocess.run([shutil.which("qs"), "--no-color", "-p", str(harness)],
+                                    env=environment, capture_output=True, text=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return result.stdout + result.stderr
+        self.assertIn("SETUP_READY", load_service())
+        self.assertTrue((self.hypr / "hypertile.lua").exists())
+        self.assertTrue((self.home / ".local/bin/hypertile-ctl").is_file())
+        self.assertIn('require("hypr.hypertile-layouts")', self.main.read_text())
+        self.assertFalse(list(plugin.rglob("__pycache__")))
+        stamp = (self.hypr / "hypertile.lua").stat().st_mtime_ns
+        self.assertIn("SETUP_READY", load_service())
+        self.assertEqual((self.hypr / "hypertile.lua").stat().st_mtime_ns, stamp)
+        self.main.unlink()
+        self.assertIn("SETUP_FAILED", load_service())
+        self.assertIn("hyprland.lua not found", (self.state / "hypertile/install.log").read_text())
+
     def test_original_backups_survive_repeat_install_and_uninstall(self):
         originals = {path: path.read_bytes() for path in (self.main, self.bindings, self.menu)}
         self.run_script("install.sh")
@@ -119,18 +246,19 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         config.parent.mkdir(parents=True, exist_ok=True)
         config.write_text('{"enabled": false}\n')
         entry = self.home / ".local/bin/hypertile-session"
-        entry.write_text('''#!/usr/bin/env bash
+        for mode in ("watching", "disabled"):
+            entry.write_text('''#!/usr/bin/env bash
 if [[ "$1" == status ]]; then
-  echo '{"instance":"test","mode":"watching"}'
+  echo '{"instance":"test","mode":"%s"}'
 else
   echo 'session stop refused' >&2
   exit 1
 fi
-''')
-        before = entry.read_bytes()
-        result = self.run_script("install.sh", success=False)
-        self.assertIn("session stop refused", result.stderr)
-        self.assertEqual(entry.read_bytes(), before)
+''' % mode)
+            before = entry.read_bytes()
+            result = self.run_script("install.sh", success=False)
+            self.assertIn("session stop refused", result.stderr)
+            self.assertEqual(entry.read_bytes(), before)
 
     def test_legacy_blocks_with_internal_blanks_keep_adjacent_user_lines(self):
         original = self.bindings.read_text().rstrip()
@@ -186,6 +314,36 @@ o.bind("SUPER + U", "User", "keep-me")
         self.assertEqual(json.loads(self.menu.read_text())["system.logout"]["action"], "custom-logout")
         self.run_script("uninstall.sh")
         self.assertEqual(json.loads(self.menu.read_text()), {"system.logout": {"action": "custom-logout"}})
+
+    def test_power_menu_entries_keep_names_and_icons_on_install_and_upgrade(self):
+        expected = {
+            "logout": ("󰍃", "Logout"),
+            "reboot": ("󰜉", "Reboot"),
+            "shutdown": ("󰐥", "Shutdown"),
+        }
+        # Exercise both a fresh install and migration of the old action-only
+        # overrides, including whitespace from a manually formatted JSON file.
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                menu = {"custom": {"action": "keep-me"}}
+                if legacy:
+                    menu.update({"system." + action: {"action": "hypertile-ctl session " + action}
+                                 for action in expected})
+                self.menu.write_text(json.dumps(menu, indent=2) + '\n')
+                self.run_script("install.sh", "--automatic")
+                installed = json.loads(self.menu.read_text())
+                for action, (icon, label) in expected.items():
+                    self.assertEqual(installed["system." + action], {
+                        "icon": icon, "label": label, "action": "hypertile-ctl session " + action})
+                self.run_script("uninstall.sh")
+                self.assertEqual(json.loads(self.menu.read_text()), {"custom": {"action": "keep-me"}})
+
+    def test_power_menu_custom_names_and_icons_survive_install(self):
+        custom = {"icon": "custom-icon", "label": "Restart my desktop",
+                  "action": "hypertile-ctl session reboot", "description": "My custom entry"}
+        self.menu.write_text(json.dumps({"system.reboot": custom}, indent=2) + '\n')
+        self.run_script("install.sh")
+        self.assertEqual(json.loads(self.menu.read_text())["system.reboot"], custom)
 
     def test_options_leave_menu_and_bindings_untouched(self):
         originals = {path: path.read_bytes() for path in (self.bindings, self.menu)}

@@ -378,6 +378,7 @@ esac
   local fake_shell = tmp .. "/fake-shell"
   local sf = assert(io.open(fake_shell, "w"))
   sf:write("#!/usr/bin/env bash\necho \"$*\" >> '" .. tmp .. "/shell.log'\n")
+  sf:write('if [[ "$1 $2" == "hypertile cycle" ]]; then echo "${TEST_OVERLAY_REPLY:-unhandled}"; fi\n')
   sf:close()
   os.execute("chmod +x '" .. fake_shell .. "'")
   bridge.shell_bin = fake_shell
@@ -551,6 +552,18 @@ do
   check(not alog:find("osd", 1, true), "cli apply --quiet skips the OSD: " .. alog)
   -- The fake's active workspace (3) reports lua:quad whatever was applied,
   -- so both directions step from quad through whatever is on disk.
+  for _, reverse in ipairs({ false, true }) do
+    local before_rules = slurp(tmp .. "/rule.log")
+    local before_saved = slurp(tmp .. "/workspace-rules/3.lua")
+    os.remove(tmp .. "/shell.log")
+    local result, exit_code = run("cycle" .. (reverse and " --reverse" or ""), nil,
+      "TEST_OVERLAY_REPLY=handled HYPERTILE_CYCLE_DEBOUNCE_MS=200")
+    check(exit_code == 0 and result:find("overlay preview", 1, true), "open overlay handles cycle: " .. result)
+    check(slurp(tmp .. "/shell.log") == "hypertile cycle 3 " .. (reverse and "-1" or "1") .. "\n",
+      "cycle passes workspace and direction to overlay once")
+    check(slurp(tmp .. "/rule.log") == before_rules and slurp(tmp .. "/workspace-rules/3.lua") == before_saved
+      and not exists(tmp .. "/runtime/hypertile/cycle-3.json"), "handled preview never starts a persisted compositor cycle")
+  end
   local on_disk = bridge.cycle_names()
   run("save - --no-reload", '{"name": "aside", "spec": {"columns": [{"name": "a"}], "in_cycle": false}}')
   local names_after = bridge.cycle_names()

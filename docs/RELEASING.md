@@ -1,26 +1,25 @@
 # Releases and marketplace approval
 
-## Current release preparation
+## Current release state
 
-- Prepared version: **1.1.2**, a fixes release covering the September 10 review.
-  Scene recovery, session saving, layout validation/browsing, installer backups,
-  overlay input/feedback/readability, and documentation are included. The feature
-  proposals from the review are deferred; none is included in this release.
-- Published version: **1.1.1**, tag `v1.1.1`, at
-  `7e1171579fccbf3ae5493742d843028f4e60b1da`. Remote `main` still points there
-  and remains the default branch, locked including for administrators.
-- Marketplace state checked on **2026-09-10**: the registry's
-  `listingValidatedCommit` is the same 1.1.1 SHA. Initial submission
-  [#5181](https://github.com/omacom/omarchy-plugin-marketplace/issues/5181)
-  is closed and listed; registry publication was recorded on September 8.
-  Issue #4893 is superseded. The next publication is an **update verification**,
-  not an edit to the initial submission.
-- Prepare and review 1.1.2 on `develop` before a release PR targets `main`.
-  The September 10 changelog date is the planned release date; update it before
-  promotion if publication moves to another day. No 1.1.2 tag or marketplace
-  snapshot exists until the promotion steps below complete.
-- Preserve published tags, including `v1.1.1`, `v1.1.0`, `v1.0.1`, and
-  `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
+- Prepared release: **1.2.0**, covering automatic runtime setup, persistent
+  startup recovery controls, overlay cycling, and tile dimensions. Its
+  changelog and manifest are ready; promote through the steps below and bind
+  the `v1.2.0` tag and marketplace request to the resulting full `main` SHA.
+- Previous published version: **1.1.2**, tag `v1.1.2`, at
+  `fb41d5d4fe49d2e5d1189276bda70343592be58e` (merge of PR #15 from `develop`
+  on 2026-09-10).
+- Marketplace baseline for this release: **1.1.2** was verified and published
+  on 2026-09-11 through
+  [#6233](https://github.com/omacom/omarchy-plugin-marketplace/issues/6233),
+  with maintainer acceptance of the `installer` capability and no findings.
+  That closed request and initial submission #5181 remain historical records.
+  Submit a new update request for 1.2.0; the old approval does not cover it.
+- `main` is the default branch and is locked including for administrators.
+  Unlock only for the authorized promotion, then lock it again immediately.
+  Keep it fixed while the marketplace reviews and publishes that exact commit.
+- Preserve published tags, including `v1.1.2`, `v1.1.1`, `v1.1.0`, `v1.0.1`,
+  and `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
   installed plugin contents. CI rejects tracked instruction files; an ignore
   rule alone does not remove local files from a linked installation.
 

@@ -2,16 +2,18 @@
   "schemaVersion": 1,
   "id": "jmartin.hypertile",
   "name": "Hypertile",
-  "version": "1.1.2",
+  "version": "1.2.0",
   "author": "Jim Martin",
-  "description": "Zone-based tiling layouts for Hyprland's Lua layout API: browse and edit layouts at true scale in a fullscreen overlay, with a bar widget showing the current layout. Run install.sh after adding the plugin.",
+  "description": "Zone-based tiling layouts for Hyprland's Lua layout API: browse and edit layouts at true scale in a fullscreen overlay, with a bar widget showing the current layout.",
   "kinds": [
     "overlay",
-    "bar-widget"
+    "bar-widget",
+    "service"
   ],
   "entryPoints": {
     "overlay": "plugin/Overlay.qml",
-    "barWidget": "plugin/LayoutWidget.qml"
+    "barWidget": "plugin/LayoutWidget.qml",
+    "service": "plugin/Service.qml"
   },
   "barWidget": {
     "displayName": "Hypertile layout",
