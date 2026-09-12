@@ -87,8 +87,8 @@ illustrates isolation, but its assertions are specific to the sizing backport.
 ## Layout and CLI experiments
 
 The helper does not overwrite your saved layouts, workspace rules, session
-snapshots, menu customizations, or bindings. `layouts/*.lua` are sample layouts;
-the installer only copies them when no user layout of that name exists.
+snapshots, menu customizations, or bindings. `layouts/*.lua` are sample layouts
+for reference and tests; the installer does not copy them into your config.
 
 Preview a JSON layout on a test workspace:
 

@@ -3,6 +3,7 @@ import copy
 import json
 import os
 from pathlib import Path
+import socket
 import stat
 import subprocess
 import sys
@@ -11,7 +12,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "session"))
-from service import Recovery, Service, Store, match_windows
+from service import Recovery, Service, Store, match_windows, read_config, request
 
 
 def window(address, title="", cls="terminal"):
@@ -95,6 +96,165 @@ class SessionTests(unittest.TestCase):
         self.assertEqual(self.store.load(), saved)
         restarted.command({"command": "resume"})
         self.assertEqual(self.store.load()["desktop"]["windows"], [])
+
+    def test_disabling_stops_capture_and_survives_a_new_compositor(self):
+        config = self.root / "session.json"
+        settings = {"replay": ["herdr"], "apps": {"terminal": False}, "custom": 42}
+        config.write_text(json.dumps(settings))
+        comp = FakeCompositor(record(window("1"))["desktop"])
+        daemon = Service(self.store, comp, Launchers(), config)
+        daemon.startup()
+        saved = self.store.load()
+        status = daemon.command({"command": "disable"})
+        self.assertEqual(read_config(config), dict(settings, enabled=False))
+        self.assertEqual(status["mode"], "disabled")
+        self.assertIsNone(status["saving"]["since"])
+        self.assertFalse(status["saving"]["can_resume"])
+        comp.instance = "rebooted"
+        restarted = Service(self.store, comp, Launchers(), config, enabled=read_config(config)["enabled"])
+        with patch.object(comp, "snapshot", side_effect=AssertionError("disabled capture")):
+            daemon.dirty(1)
+            daemon.checkpoint()
+            restarted.startup()
+            self.assertEqual(restarted.command({"command": "freeze"})["mode"], "disabled")
+            for command in ("save", "restore", "resume"):
+                with self.assertRaisesRegex(ValueError, "session saving is disabled"):
+                    restarted.command({"command": command, "name": "work"})
+        self.assertEqual(comp.calls, [])
+        self.assertEqual(self.store.load(), saved)
+
+    def test_enabling_after_cancelled_recovery_saves_only_the_current_desktop(self):
+        config = self.root / "session.json"
+        saved = record(window("1"))
+        saved["desktop"]["scenes"] = [{"workspace": "1", "document": {"sources": {}}}]
+        self.store.checkpoint(saved)
+        comp = FakeCompositor(record()["desktop"])
+        daemon = Service(self.store, comp, Launchers(), config)
+        with patch("service.scene_recovery.deliver", side_effect=OSError("offline")):
+            daemon.startup()
+        self.assertEqual(daemon.mode, "restoring")
+        self.assertTrue(daemon.scene_delivery.pending)
+        with patch("service.subprocess.Popen") as launch:
+            daemon.command({"command": "disable"})
+            self.assertIsNone(daemon.recovery)
+            self.assertTrue(daemon.scene_delivery.paused)
+            comp.calls.clear()
+            comp.desktop = record(window("2"))["desktop"]
+            daemon.command({"command": "enable"})
+            self.assertEqual(read_config(config), {"enabled": True})
+            self.assertEqual(daemon.mode, "watching")
+            self.assertEqual(daemon.scene_delivery.pending, [])
+            self.assertFalse(daemon.scene_delivery.paused)
+            self.assertEqual(self.store.load()["desktop"]["windows"], [window("2")])
+            daemon = Service(self.store, comp, Launchers(), config)
+            daemon.startup()
+            self.assertEqual(daemon.mode, "watching")
+            self.assertEqual(comp.calls, [])
+            launch.assert_not_called()
+        self.assertEqual(json.loads((self.root / "recovery.json").read_text()), saved)
+
+    def test_enable_is_idempotent_and_does_not_resume_a_frozen_session(self):
+        config = self.root / "session.json"
+        daemon = Service(self.store, FakeCompositor(record()["desktop"]), Launchers(), config)
+        daemon.startup()
+        daemon.command({"command": "freeze"})
+        self.assertEqual(daemon.command({"command": "enable"})["mode"], "frozen")
+
+    def test_setting_write_failure_does_not_disable_the_running_writer(self):
+        config = self.root / "session.json"
+        config.write_text('{"enabled":true}')
+        daemon = Service(self.store, FakeCompositor(record()["desktop"]), Launchers(), config)
+        with patch("service.atomic_json", side_effect=OSError("disk full")):
+            with self.assertRaisesRegex(OSError, "disk full"):
+                daemon.command({"command": "disable"})
+        self.assertEqual(daemon.mode, "watching")
+        self.assertEqual(read_config(config), {"enabled": True})
+        config.write_text("[]")
+        with self.assertRaisesRegex(ValueError, "configuration must be an object"):
+            daemon.command({"command": "disable"})
+        self.assertEqual(config.read_text(), "[]")
+
+    def test_enable_capture_failure_does_not_restore_stale_windows_on_restart(self):
+        config = self.root / "session.json"
+        self.store.checkpoint(record(window("1")))
+        comp = FakeCompositor(record(window("2"))["desktop"])
+        daemon = Service(self.store, comp, Launchers(), config, enabled=False)
+        daemon.startup()
+        with patch.object(comp, "snapshot", side_effect=ValueError("preview active")):
+            with self.assertRaisesRegex(ValueError, "preview active"):
+                daemon.command({"command": "enable"})
+        restarted = Service(self.store, comp, Launchers(), config)
+        restarted.startup()
+        self.assertEqual(restarted.mode, "watching")
+        self.assertEqual(comp.calls, [])
+        self.assertEqual(self.store.load()["desktop"]["windows"], [window("2")])
+
+    def test_restart_after_enabling_was_persisted_accepts_the_current_desktop(self):
+        config = self.root / "session.json"
+        self.store.checkpoint(record(window("1")))
+        comp = FakeCompositor(record(window("2"))["desktop"])
+        Service(self.store, comp, Launchers(), config, enabled=False).startup()
+        # Simulate interruption between persisting enabled=true and capture.
+        config.write_text('{"enabled":true}')
+        restarted = Service(self.store, comp, Launchers(), config, enabled=read_config(config)["enabled"])
+        restarted.startup()
+        self.assertEqual(restarted.mode, "watching")
+        self.assertEqual(comp.calls, [])
+        self.assertEqual(self.store.load()["desktop"]["windows"], [window("2")])
+
+    def test_cli_starts_an_idle_writer_and_toggles_it_over_ipc(self):
+        # Real CLI/daemon processes and sockets, with an isolated compositor.
+        # The fake hyprctl supplies snapshots but refuses any recovery mutation.
+        fake_bin = self.root / "bin"
+        fake_bin.mkdir()
+        scripts = {
+            "systemd-inhibit": "#!/bin/sh\nexit 1\n",
+            "hyprctl": "#!/usr/bin/env python3\nimport json, pathlib, re, sys\n"
+                        "code = sys.argv[-1]\nassert '.snapshot(v)' in code, code\n"
+                        "answer = re.search(r'io.open\\(\"([^\"]+\\.answer)\"', code)[1]\n"
+                        f"pathlib.Path(answer).write_text({json.dumps(json.dumps(record()['desktop']))})\n",
+        }
+        for tool, body in scripts.items():
+            path = fake_bin / tool
+            path.write_text(body)
+            path.chmod(0o700)
+        env = dict(os.environ, PATH=str(fake_bin) + os.pathsep + os.environ["PATH"],
+                   XDG_CONFIG_HOME=str(self.root), XDG_DATA_HOME=str(self.root), XDG_DATA_DIRS=str(self.root),
+                   HYPRLAND_INSTANCE_SIGNATURE="test-toggle")
+        event_path = self.root / "hypr/test-toggle/.socket2.sock"
+        event_path.parent.mkdir(parents=True)
+        runtime = self.root / "hypertile-session"
+        state = self.root / "hypertile/sessions"
+        Store(state).checkpoint(record(window("1")))
+        config = self.root / "hypertile/session.json"
+        config.write_text('{"enabled":false,"replay":["herdr"]}')
+        entry = Path(__file__).resolve().parents[1] / "session/service.py"
+        def cli(command):
+            result = subprocess.run([sys.executable, str(entry), command], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return json.loads(result.stdout)
+        with socket.socket(socket.AF_UNIX) as events:
+            events.bind(str(event_path))
+            events.listen(1)
+            try:
+                self.assertEqual(cli("disable")["mode"], "disabled")
+                self.assertEqual(Store(state).load()["desktop"]["windows"], [window("1")])
+                self.assertEqual(cli("enable")["mode"], "watching")
+                self.assertEqual(Store(state).load()["desktop"]["windows"], [])
+                self.assertEqual(cli("disable")["mode"], "disabled")
+                self.assertEqual(cli("status")["mode"], "disabled")
+                self.assertEqual(read_config(config), {"enabled": False, "replay": ["herdr"]})
+            finally:
+                try:
+                    request(runtime, "stop")
+                except OSError:
+                    pass
+                # Wait for the daemon to close its event stream before removing
+                # its isolated state (and surface a stuck daemon as a failure).
+                events.settimeout(5)
+                with events.accept()[0] as connection:
+                    connection.settimeout(5)
+                    self.assertEqual(connection.recv(1), b"")
 
     def test_partial_restore_keeps_source_and_launch_intent_across_restart(self):
         saved = record(window("1"))
@@ -236,6 +396,17 @@ class SessionTests(unittest.TestCase):
             result = self.power_action("reboot")
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual((self.root / "log.omarchy").read_text().split(), ["system", "reboot"], body)
+
+    def test_disabled_power_actions_do_not_warn_or_save(self):
+        config = self.root / "hypertile/session.json"
+        config.parent.mkdir(parents=True)
+        config.write_text('{"enabled":false}')
+        for command in ("logout", "reboot", "shutdown"):
+            (self.root / "log.omarchy").unlink(missing_ok=True)
+            result = self.power_action(command)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((self.root / "log.omarchy").read_text().split(), ["system", command])
+            self.assertFalse((self.root / "log.notify-send").exists())
 
     def test_chromium_app_windows_get_a_web_app_recipe(self):
         from service import Launchers as RealLaunchers

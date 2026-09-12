@@ -48,6 +48,16 @@ def read_json(path):
         return json.load(stream)
 
 
+def read_config(path):
+    try:
+        value = read_json(path)
+    except FileNotFoundError:
+        value = {}
+    if not isinstance(value, dict):
+        raise ValueError("session configuration must be an object")
+    return value
+
+
 def notify(summary, body, urgency="normal"):
     """Desktop notification plus stderr; the menu runs actions without a terminal."""
     print(f"hypertile-session: {summary}: {body}", file=sys.stderr)
@@ -536,9 +546,10 @@ class Recovery:
 
 
 class Service:
-    def __init__(self, store, compositor, launchers):
+    def __init__(self, store, compositor, launchers, config_path=None, enabled=True):
         self.store, self.compositor, self.launchers = store, compositor, launchers
-        self.mode = "watching"
+        self.config_path = config_path
+        self.mode = "watching" if enabled else "disabled"
         self.recovery = None
         self.last = None
         self.dirty_since = self.changed_at = None
@@ -562,7 +573,7 @@ class Service:
     def status(self):
         value = {"instance": self.compositor.instance, "mode": self.mode, "error": self.error}
         paused = self.mode != "watching" or bool(self.error)
-        if paused:
+        if paused and self.mode != "disabled":
             self.paused_since = self.paused_since or time.time()
         else:
             self.paused_since = None
@@ -634,12 +645,21 @@ class Service:
         return validate(read_json(self.store.root / "recovery.json"))
 
     def begin(self):
+        if self.mode == "disabled":
+            self.status()
+            return
         try:
             previous = read_json(self.store.root / "status.json")
         except (FileNotFoundError, ValueError):
             previous = {}
         if not isinstance(previous, dict):
             previous = {}
+        if previous.get("mode") == "disabled":
+            # Also covers a crash after enabling was persisted but before its
+            # first checkpoint, and enabling by editing the config file.
+            self.scene_delivery.save([], False)
+            self.checkpoint()
+            return
         same = previous.get("instance") == self.compositor.instance
         if same:
             self.paused_since = previous.get("saving", {}).get("since")
@@ -653,7 +673,9 @@ class Service:
                 self.restore(source, previous.get("progress") if same else None)
                 return
         record = self.store.load()
-        if record and record["instance"] != self.compositor.instance:
+        # Once this compositor has accepted the current desktop (including
+        # enabling saving), a failed first capture must not revive old windows.
+        if record and record["instance"] != self.compositor.instance and not (same and previous.get("mode") == "watching"):
             self.restore(record)
         elif previous.get("mode") == "frozen" and same:
             self.scene_delivery.load()
@@ -668,10 +690,38 @@ class Service:
             if note:
                 notify("Session recovery", note)
 
+    def set_enabled(self, enabled):
+        config = read_config(self.config_path)
+        config["enabled"] = enabled
+        if enabled and self.mode == "disabled":
+            # Accept today's desktop; do not deliver old recovery requests
+            # or reopen the snapshot left behind when saving was disabled.
+            self.scene_delivery.save([], False)
+            self.scene_delivery.error = None
+        atomic_json(self.config_path, config)
+        if not enabled:
+            self.mode = "disabled"
+            self.scene_delivery.paused = True
+            self.recovery = None
+            self.progress = {}
+            self.error = self.capture_warning = None
+            self.dirty_since = self.changed_at = None
+        elif self.mode == "disabled":
+            self.mode = "watching"
+            self.last = None
+            self.checkpoint()
+        return self.status()
+
     def command(self, request):
         command, name = request["command"], request.get("name")
         if command == "status":
             return self.status()
+        if command in ("enable", "disable"):
+            return self.set_enabled(command == "enable")
+        if self.mode == "disabled" and command == "freeze":
+            return dict(self.status(), saved=False)
+        if self.mode == "disabled" and command in ("save", "restore", "resume"):
+            raise ValueError("session saving is disabled; use hypertile-ctl session enable first")
         if command == "save":
             if not name:
                 raise ValueError("save requires a session name")
@@ -811,7 +861,7 @@ class Service:
                     if self.recovery:
                         self.recovery.reap()
                     try:
-                        if self.mode != "frozen":
+                        if self.mode not in ("frozen", "disabled"):
                             self.scene_delivery.tick(now)
                             self.status()
                         if self.mode == "restoring":
@@ -875,13 +925,37 @@ def request(runtime, command, name=None):
     return response["result"]
 
 
+def configure(runtime, command):
+    try:
+        return request(runtime, command)
+    except (FileNotFoundError, ConnectionRefusedError):
+        # Older disabled installations have no writer. Start an idle one so
+        # the setting and the first checkpoint still have a single owner.
+        process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "daemon", "--idle"],
+                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                   stderr=subprocess.DEVNULL, start_new_session=True)
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            try:
+                return request(runtime, command)
+            except (FileNotFoundError, ConnectionRefusedError):
+                if process.poll() not in (None, 0):
+                    break
+                time.sleep(0.1)
+        raise RuntimeError("session service could not start; check the session configuration and Hyprland")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Save and restore Hypertile desktop sessions")
-    parser.add_argument("command", choices=["daemon", "status", "save", "restore", "freeze", "resume", "stop", "logout", "reboot", "shutdown"])
+    parser.add_argument("command", choices=["daemon", "status", "enable", "disable", "save", "restore", "freeze", "resume", "stop", "logout", "reboot", "shutdown"])
     parser.add_argument("name", nargs="?")
+    parser.add_argument("--idle", action="store_true", help=argparse.SUPPRESS)
     args = parser.parse_args()
     state, runtime, config_path = paths()
     if args.command != "daemon":
+        if args.command in ("enable", "disable"):
+            print(json.dumps(configure(runtime, args.command), indent=2))
+            return
         power_action = args.command in ("logout", "reboot", "shutdown")
         if power_action:
             try:
@@ -914,7 +988,7 @@ def main():
             notify("Desktop session not saved", f"session service unavailable ({error}); "
                    f"{args.command} continues without a snapshot", urgency="critical")
         else:
-            if not isinstance(value, dict) or not value.get("saved"):
+            if not isinstance(value, dict) or (not value.get("saved") and value.get("mode") != "disabled"):
                 reasons = {"partial": "an incomplete restore still protects the previous snapshot",
                            "frozen": "the session was frozen earlier and later changes were not saved",
                            "restoring": "a restore is still running"}
@@ -931,16 +1005,10 @@ def main():
         except BlockingIOError:
             return  # Config reload: the original service retains ownership.
         instance = os.environ["HYPRLAND_INSTANCE_SIGNATURE"]
-        try:
-            config = read_json(config_path)
-        except FileNotFoundError:
-            config = {}
-        if not isinstance(config, dict):
-            raise ValueError("session configuration must be an object")
-        if config.get("enabled", True) is False:
-            return
+        config = read_config(config_path)
         compositor = Compositor(instance, runtime)
-        service = Service(store, compositor, Launchers(config))
+        service = Service(store, compositor, Launchers(config), config_path,
+                          enabled=config.get("enabled", True) is not False and not args.idle)
         def stop(_signum, _frame):
             # Signals are not evidence that a final compositor query is safe.
             service.running = False

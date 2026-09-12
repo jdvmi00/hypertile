@@ -680,6 +680,17 @@ Card {
         }
       }
 
+      Section {
+        title: "STARTUP"
+        Switch {
+          label: "Save windows for startup"
+          description: "Save open windows and restore them when you log in"
+          checked: overlay.sessionAvailable && overlay.sessionStatus && overlay.sessionStatus.mode !== "disabled"
+          enabled: overlay.sessionAvailable && !overlay.busy
+          onClicked: overlay.setSessionEnabled(overlay.sessionStatus.mode === "disabled")
+        }
+      }
+
       // ---- Session saving, when it needs attention: a notice with its actions.
       Prompt {
         id: sessionNotice
