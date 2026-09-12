@@ -2,20 +2,22 @@
 
 ## Current release state
 
-- Published version: **1.1.2**, tag `v1.1.2`, at
+- Prepared release: **1.2.0**, covering automatic runtime setup, persistent
+  startup recovery controls, overlay cycling, and tile dimensions. Its
+  changelog and manifest are ready; promote through the steps below and bind
+  the `v1.2.0` tag and marketplace request to the resulting full `main` SHA.
+- Previous published version: **1.1.2**, tag `v1.1.2`, at
   `fb41d5d4fe49d2e5d1189276bda70343592be58e` (merge of PR #15 from `develop`
-  on 2026-09-10). Remote `main` points there, remains the default branch, and
-  is locked including for administrators.
-- Marketplace state: the listed snapshot is still 1.1.1
-  (`7e1171579fccbf3ae5493742d843028f4e60b1da`). The update verification for
-  the 1.1.2 commit is
+  on 2026-09-10).
+- Marketplace baseline for this release: **1.1.2** was verified and published
+  on 2026-09-11 through
   [#6233](https://github.com/omacom/omarchy-plugin-marketplace/issues/6233),
-  filed 2026-09-10 through the Plugin verification form, action "Verify and
-  publish a newer upstream commit". Until a maintainer applies
-  `approved-and-verified` and publication succeeds, the listing shows
-  `Update unverified`. Initial submission #5181 stays closed as history.
-- Nothing is prepared for the next version yet. Bump `manifest.json` beyond
-  1.1.2 and start a new changelog entry on `develop` when work for it begins.
+  with maintainer acceptance of the `installer` capability and no findings.
+  That closed request and initial submission #5181 remain historical records.
+  Submit a new update request for 1.2.0; the old approval does not cover it.
+- `main` is the default branch and is locked including for administrators.
+  Unlock only for the authorized promotion, then lock it again immediately.
+  Keep it fixed while the marketplace reviews and publishes that exact commit.
 - Preserve published tags, including `v1.1.2`, `v1.1.1`, `v1.1.0`, `v1.0.1`,
   and `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
   installed plugin contents. CI rejects tracked instruction files; an ignore

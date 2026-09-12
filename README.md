@@ -13,7 +13,9 @@ Requires Omarchy 4 (the Lua Hyprland config and the Omarchy shell);
 developed against Hyprland 0.56.2 / Omarchy 4.0.3. Local validation uses the
 `0.56.2-2.1` size-ack backport described in the
 [sizing diagnostics](docs/HYPRLAND-SIZING-BUG.md); it is installed separately.
-`lua`, `jq`, and Python 3 ship with Omarchy.
+Runtime and setup use the Omarchy shell (Quickshell), Bash, `lua`, `jq`,
+Python 3, coreutils, and `flock` from util-linux, included with Omarchy.
+Setup runs as your user; it does not install packages or patch the compositor.
 
 ![Browsing layouts with the arrow keys while the windows follow, then dragging a divider in edit mode](docs/demo.gif)
 
