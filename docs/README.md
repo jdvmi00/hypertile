@@ -156,13 +156,17 @@ Run the suites relevant to the change. The complete list is in the root
 
 ```sh
 python3 test/dev.py     # deployment preservation, selective restarts, failed apply
-lua test/harness.lua   # engine placement
-lua test/bridge.lua    # bridge and CLI
-node test/geometry.js  # overlay geometry
-node test/editor.js    # editor operations
-python3 test/session.py
-lua test/session.lua
+python3 test/install.py # installer and uninstaller
+lua test/harness.lua    # engine placement
+lua test/bridge.lua     # bridge and CLI
+lua test/navigation.lua && node test/tile_picker.js   # window moves and the tile picker
+node test/geometry.js   # overlay geometry
+node test/editor.js     # editor operations
+python3 test/session.py && lua test/session.lua       # session recovery
+python3 test/scenes.py && node test/content.js         # scenes
 ```
+
+`.github/workflows/test.yml` is the authoritative list; CI runs every suite.
 
 See also [session recovery](SESSIONS.md), [engine internals](INTERNALS.md), and
 the [Hyprland sizing bug](HYPRLAND-SIZING-BUG.md).

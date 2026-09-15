@@ -46,6 +46,12 @@ Item {
   ]
 
   property bool opened: false
+  property bool moveMode: false
+  TilePicker {
+    id: tilePicker
+    ctl: root.ctl
+    onFinished: root.dismiss()
+  }
   property bool dismissing: false
   SessionStatus { id: sessionReader; ctl: root.ctl; polling: root.opened && !root.dismissing && (!root.service || root.service.ready) }
   Connections {
@@ -480,6 +486,15 @@ Item {
   // ------------------------------------------------------------- lifecycle
 
   function open(payloadJson) {
+    var payload = ({})
+    try { payload = JSON.parse(payloadJson || "{}") || ({}) } catch (e) {}
+    if (payload.mode === "move" && payload.request) {
+      root.moveMode = true
+      root.dismissing = false
+      tilePicker.open(payload.request)
+      return
+    }
+    root.moveMode = false
     root.dismissing = false
     root.opened = true
     root.errorText = ""
@@ -499,6 +514,12 @@ Item {
   }
 
   function close() {
+    if (root.moveMode) {
+      tilePicker.close()
+      root.moveMode = false
+      root.dismissing = true
+      return
+    }
     root.dismissing = true
     root.pendingSwitch = null
     root.sceneFeedback = null
@@ -557,6 +578,7 @@ Item {
   }
 
   function cycleFromShortcut(workspace, delta) {
+    if (root.moveMode) return "handled"
     if (!root.opened || root.dismissing || root.editing || root.contentMode
         || String(workspace) !== root.workspaceId) return "unhandled"
     // Consume the shortcut during dialogs or an action as well: falling
@@ -1792,6 +1814,7 @@ Item {
   IpcHandler {
     target: "hypertile"
     function close(): void { root.dismiss() }
+    function moveTo(number: int): void { if (root.moveMode) tilePicker.chooseNumber(String(number)) }
     function next(): void { root.step(1) }
     function prev(): void { root.step(-1) }
     function cycle(workspace: string, delta: int): string { return root.cycleFromShortcut(workspace, delta) }

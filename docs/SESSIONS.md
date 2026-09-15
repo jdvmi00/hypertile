@@ -1,9 +1,10 @@
 # Session recovery
 
 Hypertile automatically checkpoints the desktop while it is running and
-restores it when a new Hyprland session starts. Install/update with
-`./install.sh`. The Python service starts from the layout loader; config
-reloads do not launch a second watcher or restore the session twice.
+restores it when a new Hyprland session starts. The service is part of the
+runtime that enabling the plugin installs (see the README); the Python
+service starts from the layout loader, and config reloads do not launch a
+second watcher or restore the session twice.
 
 The service saves workspace layouts (including their specs), native tiled
 window order, explicit zone pins, runtime size adjustments, workspace-to-monitor
