@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Show numbered tile destinations during SUPER + left mouse window drags and place the dragged window into the tile under the pointer on release.
+
+- `SUPER+ALT+T` opens a numbered tile picker for moving the active window to an
+  empty layout tile or swapping with an occupied one. The picker supports
+  clicks, multi-digit fill numbers, and cancellation, highlights the current
+  tile, and rejects stale window or layout selections.
+- Tile-picker outlines honor aspect ratio and scale, showing only the fitted
+  window area instead of its larger layout slot.
+- `uninstall.sh --purge` removes the saved scenes directory
+  (`~/.config/hypertile/scenes/`); it previously only looked for a
+  `scenes.json` file that Scenes never wrote.
+- New user manual at `docs/MANUAL.md`. Documentation refreshed for the 1.2.0
+  release state, the plugin's service kind, the saved scenes directory, and
+  the full test list.
+
 ## 1.2.0 (2026-09-12)
 
 - Enabling the plugin installs its runtime automatically. Enabled updates

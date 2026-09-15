@@ -158,7 +158,6 @@ Renaming/reordering zones preserves IDs. Splitting retains the original ID on
 one half and gives the other a new ID. Copied layouts get new IDs. Deleted or
 ambiguous identities require choosing replacements; reusing a name does not
 revive a deleted zone. Keep one fill/cycle zone available for local overflow.
-No monitor-input source is enabled without a validated hardware profile.
 
 ## Service and recovery
 

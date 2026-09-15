@@ -6,7 +6,7 @@
 #
 # Kept unless --purge is given: your layouts (~/.config/hypr/layouts/) and
 # hypertile's state (~/.local/state/hypertile/: workspace rules, overlay
-# preferences), and saved scenes (~/.config/hypertile/scenes.json).
+# preferences), and saved scenes (~/.config/hypertile/scenes/).
 #
 # The plugin directory itself is removed only when it is a plain copy made by
 # install.sh. A git checkout made by `omarchy plugin add` is left for
@@ -215,6 +215,7 @@ echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then
   rm -rf "$hypr/layouts" "$state"
+  rm -rf "$config/hypertile/scenes"
   rm -f "$config/hypertile/scenes.json"
   for service in session scenes; do
     rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/$service/__pycache__"

@@ -43,7 +43,7 @@ jobs:
       - name: Engine
         run: lua test/harness.lua && lua test/loader.lua
       - name: Window navigation
-        run: lua test/navigation.lua
+        run: lua test/navigation.lua && node test/tile_picker.js
       - name: Bridge and CLI
         run: lua test/bridge.lua
       - name: Session recovery

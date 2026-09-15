@@ -17,6 +17,10 @@ Runtime and setup use the Omarchy shell (Quickshell), Bash, `lua`, `jq`,
 Python 3, coreutils, and `flock` from util-linux, included with Omarchy.
 Setup runs as your user; it does not install packages or patch the compositor.
 
+New here? The [user manual](docs/MANUAL.md) walks through daily use, designing
+layouts, scenes, session recovery, and troubleshooting. This README is the
+reference.
+
 ![Browsing layouts with the arrow keys while the windows follow, then dragging a divider in edit mode](docs/demo.gif)
 
 ![The overlay over the quad layout: eight windows, numbered zones, the inspector rail on the left](docs/screenshots/overlay-view.jpg)
@@ -55,6 +59,21 @@ tooltip while setup finishes. Enabling installs:
   occupied slot swaps windows. Other apps stay in their slots; spacers and scene
   slots marked Empty are skipped. Moving into a collapsed slot reveals the full
   layout on that workspace until the layout is reset.
+- `SUPER+ALT+T` shows numbered destinations for the active window. Release the
+  modifiers and type a tile number, or click a tile, to move there (or swap with
+  its occupant). `Esc` cancels; the current tile is highlighted. Numbers match
+  the layout's fill order, including multiple numbers for a stacked zone.
+  When a number is also a prefix (for example, 1 and 10), press `Enter` to select
+  the shorter number; `Backspace` corrects input. Spacers and scene slots marked
+  Empty are excluded. A zone without a fill number can still be clicked.
+  Outlines follow each tile's fitted window area, including aspect ratio and
+  scale, so unused space outside that area is not outlined.
+
+`SUPER` + left mouse drag also shows those destinations for a tiled window.
+Drop over a tile to move there (or swap if occupied); the hovered tile is
+highlighted. Dropping outside the outlined tiles keeps Hyprland's normal drag
+result. Destinations stay on the starting workspace and monitor. Floating
+windows and other layouts keep their normal mouse behavior.
 
 Every config file it edits is first copied to `<file>.hypertile.bak` if that
 backup does not exist. Later installs and uninstalls preserve that first backup.
@@ -85,7 +104,7 @@ omarchy plugin remove jmartin.hypertile
 The uninstaller removes what the installer added, sets the default layout
 back to dwindle if it pointed at a hypertile layout, and keeps your layouts
 (`~/.config/hypr/layouts/`), state (`~/.local/state/hypertile/`), and saved scenes
-(`~/.config/hypertile/scenes.json`) unless `--purge` is given. Purging also removes
+(`~/.config/hypertile/scenes/`) unless `--purge` is given. Purging also removes
 the services' Python caches; session settings are kept. If a
 custom binding still references `hypertile-navigation`, uninstall retains the
 runtime files and asks you to remove that reference before running it again.
@@ -103,6 +122,7 @@ returning to an official package that includes the upstream correction.
 |---|---|
 | `SUPER+L`, `SUPER+SHIFT+L` | next or previous layout on this workspace; the name flashes in the OSD |
 | `SUPER+ALT+L`, the bar widget, `SUPER+SPACE` > Layouts | open the overlay |
+| `SUPER+ALT+T`, then a tile number | move the active window to that tile, swapping if occupied; `Esc` cancels |
 | bar widget | the layout on this monitor's workspace; scroll or middle-click cycles |
 | `hypertile-ctl list` | the layouts on disk, the one in use starred |
 
@@ -383,12 +403,14 @@ is installed automatically:
 ## Layout of this repository
 
 ```
-manifest.json          the Omarchy plugin manifest (kinds: overlay, bar-widget)
+manifest.json          the Omarchy plugin manifest (kinds: overlay, bar-widget, service)
 plugin/                the shell plugin: Overlay.qml, Rail.qml (inspector), ZoneItem.qml,
                        Divider.qml, Thumb.qml, Card.qml, Chip.qml, Geometry.js (drawing),
                        Editor.js (edits); ContentPane.qml and Content.js (the Scenes tab);
+                       TilePicker.qml and TilePicker.js (numbered tile destinations);
                        LayoutWidget.qml (bar widget); SessionStatus.qml and Session.js
-                       (session status); Readability.js (text contrast)
+                       (session status); Service.qml (automatic setup on enable and
+                       update); Readability.js (text contrast)
 hypertile.lua          engine: spec -> layout provider (hot-swappable)
 hypertile-bridge.lua   bridge: load/serialize/JSON/save/preview/apply
 hypertile-json.lua     JSON encode/decode (pure Lua)
@@ -407,9 +429,14 @@ dev                    link the checkout, check changes, and reload affected com
 install.sh             puts the engine, CLI, keybinds, and menu entry in place
 uninstall.sh           takes them out again
 probe.lua              live probe (logs everything the API hands a layout)
+docs/MANUAL.md         user manual: daily use, designing layouts, scenes, sessions, troubleshooting
+docs/SCENES.md         scenes and content: placement, recovery, app identity, the scene CLI
+docs/SESSIONS.md       session recovery: commands, app recipes, shutdown integration, storage
 docs/README.md         development workflow, testing, and backup/recovery paths
 docs/INTERNALS.md      what the compositor API does and does not do, what shapes the overlay,
                        and the stale-window forensics
+docs/HYPRLAND-SIZING-BUG.md  the 0.56.2 size-ack bug and the local compositor backport
+docs/RELEASING.md      release and marketplace verification procedure
 CHANGELOG.md           release notes
 test/                  engine, bridge, CLI, geometry, and editor tests
 ```
@@ -444,15 +471,24 @@ refuses to overwrite a different Git checkout.
 Run the tests from the repository root:
 
 ```bash
-lua test/harness.lua    # engine: placement, rules, capacity, messages, hot swap
-python3 test/dev.py     # deployment: preservation, selective restarts, failure handling
-python3 test/session.py # recovery: interrupted writes, shutdown, restart, identity
-lua test/session.lua    # recovery adapter: window order, layout specs, against a fake compositor
-lua test/bridge.lua     # bridge and CLI: JSON, round trips, save/list/remove, against a fake hyprctl
-node test/geometry.js   # overlay drawing math
-node test/editor.js     # editor operations, every result validated by the engine
+shellcheck install.sh uninstall.sh
+python3 test/dev.py && python3 test/upgrade.py   # deployment helper: preservation, restarts, failures
+python3 test/install.py                          # installer and uninstaller
+lua test/harness.lua && lua test/loader.lua      # engine: placement, rules, capacity, messages, hot swap
+lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
+lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl
+python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lua && node test/session.js
+                                                 # recovery: durable writes, shutdown, restart, identity
+python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && lua test/swap.lua
+node test/content.js && node test/content_keys.js  # scenes, app catalog, placement, the Scenes tab
+python3 test/browse.py && node test/browse.js    # managed layout browsing
+node test/geometry.js                            # overlay drawing math
+node test/editor.js && node test/overlay.js && node test/readability.js
+                                                 # editor operations (validated by the engine), overlay, contrast
 omarchy plugin validate .
 ```
+
+`.github/workflows/test.yml` runs the same steps in CI.
 
 The harness also checks that the `ultrawide` spec places 1 to 9 windows
 where the hand-written provider in `test/fixtures/legacy-ultrawide.lua`

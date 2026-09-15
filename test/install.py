@@ -363,7 +363,8 @@ o.bind("SUPER + U", "User", "keep-me")
 
     def test_purge_removes_scenes_and_caches_only_when_requested(self):
         self.run_script("install.sh")
-        saved = [self.config / "hypertile/scenes.json",
+        saved = [self.config / "hypertile/scenes/work.json",
+                 self.config / "hypertile/scenes.json",
                  self.state / "hypertile/sessions/current.json"]
         caches = [self.data / "hypertile" / service / "__pycache__/old.pyc"
                   for service in ("session", "scenes")]
