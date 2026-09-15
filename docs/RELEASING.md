@@ -2,16 +2,19 @@
 
 ## Current release state
 
-- Prepared release: **1.3.0**, covering the numbered tile picker, drag
-  destinations, the user manual, and the uninstall purge fix. Its changelog
-  and manifest are ready; promote through the steps below and bind the
-  `v1.3.0` tag and marketplace request to the resulting full `main` SHA.
+- Published version: **1.3.0**, tag `v1.3.0`, at
+  `20ee1c30823bdc967a7c04402699e58bc744f6eb` (merge of PR #23 into `main` on
+  2026-09-15), with a GitHub release. Marketplace update verification was
+  requested the same day through
+  [#7073](https://github.com/omacom/omarchy-plugin-marketplace/issues/7073);
+  until a maintainer applies approved-and-verified, 1.2.0 remains the listed
+  snapshot and the listing may read "Update unverified". Keep `main` frozen
+  until that request is published.
 - Previous published version: **1.2.0**, tag `v1.2.0`, at
-  `2c02a8210780bf503e2d96fafe8e7df0ced753a1` (merge of PR #20 into `main` on
-  2026-09-12), verified and published by the marketplace on 2026-09-13 through
+  `2c02a8210780bf503e2d96fafe8e7df0ced753a1`, verified and published on
+  2026-09-13 through
   [#6562](https://github.com/omacom/omarchy-plugin-marketplace/issues/6562)
-  with no findings. That approval does not cover 1.3.0; submit a new update
-  request.
+  with no findings.
 - Earlier verifications, kept as historical records: **1.1.2** through
   [#6233](https://github.com/omacom/omarchy-plugin-marketplace/issues/6233)
   on 2026-09-11 (maintainer acceptance of the `installer` capability), and
@@ -19,7 +22,7 @@
 - `main` is the default branch and is locked including for administrators.
   Unlock only for the authorized promotion, then lock it again immediately.
   Keep it fixed while the marketplace reviews and publishes that exact commit.
-- Preserve published tags, including `v1.2.0`, `v1.1.2`, `v1.1.1`, `v1.1.0`,
+- Preserve published tags, including `v1.3.0`, `v1.2.0`, `v1.1.2`, `v1.1.1`, `v1.1.0`,
   `v1.0.1`, and `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
   installed plugin contents. CI rejects tracked instruction files; an ignore
   rule alone does not remove local files from a linked installation.
