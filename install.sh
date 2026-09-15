@@ -340,11 +340,11 @@ if (( want_keybinds )) && [[ -e "$bindings" ]]; then
     cat >>"$bindings" <<'LUA'
 
 -- hypertile: begin navigation
--- Focus and swap across gaps, replacing Omarchy's directional bindings.
+-- Focus and swap across gaps; SUPER+ALT+T chooses a numbered destination.
 require("hypr.hypertile-navigation").bind()
 -- hypertile: end
 LUA
-    echo "bound SUPER+arrows and SUPER+SHIFT+arrows to gap-aware focus and swaps (replaces stock directional bindings)"
+    echo "bound SUPER+arrows and SUPER+SHIFT+arrows to gap-aware focus and swaps; SUPER+ALT+T selects a tile"
   fi
   if ! grep -q "Layouts overlay" "$bindings"; then
     backup "$bindings"

@@ -66,6 +66,7 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
                              monitor size, reserved edges, gaps, and layout area
   workspaces [--json]        every workspace with its monitor and layout
   windows [--json]           open windows (class, title, workspace)
+  tile-move <request-json>   move/swap the captured window to its selected tile
   scene <command> [...]     list, save, apply, current, restore, retry, content;
                              see docs/SCENES.md
   session <command> [name]   status, enable, disable, save <name>, restore [name], freeze, resume,
@@ -140,6 +141,14 @@ local function load_json_arg(path)
 end
 
 local commands = {}
+
+commands["tile-move"] = function(pos)
+  local request = pos[1] or die("tile-move needs a captured request")
+  local source = "local json = require('hypr.hypertile-json')\n"
+    .. "require('hypr.hypertile-navigation').move(json.decode(" .. string.format("%q", request) .. "))"
+  local _, err = bridge.eval_file(source)
+  if err then die(err) end
+end
 
 function commands.session(pos)
   local command = src and src ~= "" and (src .. "/bin/hypertile-session")

@@ -541,6 +541,9 @@ local function fit_box(box, opts)
   return { x = box.x + (box.w - w) / 2, y = box.y + (box.h - h) / 2, w = w, h = h }
 end
 
+-- Destination overlays use the same fitted area as window placement.
+M.fit_box = fit_box
+
 local function place_stack(targets, box, dir, jiggle)
   local n = #targets
   if jiggle then

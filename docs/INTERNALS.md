@@ -2,7 +2,8 @@
 
 What the engine, bridge, and overlay rely on from Hyprland's Lua layout
 API, the constraints that shaped the overlay, and the forensics behind the
-one hard bug so far. The user guide is `README.md`.
+one hard bug so far. The user guide is `MANUAL.md`; `README.md` is the
+reference.
 
 ## What the live probe established (Hyprland 0.56.2)
 

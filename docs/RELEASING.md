@@ -2,24 +2,25 @@
 
 ## Current release state
 
-- Prepared release: **1.2.0**, covering automatic runtime setup, persistent
-  startup recovery controls, overlay cycling, and tile dimensions. Its
-  changelog and manifest are ready; promote through the steps below and bind
-  the `v1.2.0` tag and marketplace request to the resulting full `main` SHA.
-- Previous published version: **1.1.2**, tag `v1.1.2`, at
-  `fb41d5d4fe49d2e5d1189276bda70343592be58e` (merge of PR #15 from `develop`
-  on 2026-09-10).
-- Marketplace baseline for this release: **1.1.2** was verified and published
-  on 2026-09-11 through
-  [#6233](https://github.com/omacom/omarchy-plugin-marketplace/issues/6233),
-  with maintainer acceptance of the `installer` capability and no findings.
-  That closed request and initial submission #5181 remain historical records.
-  Submit a new update request for 1.2.0; the old approval does not cover it.
+- Prepared release: **1.3.0**, covering the numbered tile picker, drag
+  destinations, the user manual, and the uninstall purge fix. Its changelog
+  and manifest are ready; promote through the steps below and bind the
+  `v1.3.0` tag and marketplace request to the resulting full `main` SHA.
+- Previous published version: **1.2.0**, tag `v1.2.0`, at
+  `2c02a8210780bf503e2d96fafe8e7df0ced753a1` (merge of PR #20 into `main` on
+  2026-09-12), verified and published by the marketplace on 2026-09-13 through
+  [#6562](https://github.com/omacom/omarchy-plugin-marketplace/issues/6562)
+  with no findings. That approval does not cover 1.3.0; submit a new update
+  request.
+- Earlier verifications, kept as historical records: **1.1.2** through
+  [#6233](https://github.com/omacom/omarchy-plugin-marketplace/issues/6233)
+  on 2026-09-11 (maintainer acceptance of the `installer` capability), and
+  the initial submission #5181.
 - `main` is the default branch and is locked including for administrators.
   Unlock only for the authorized promotion, then lock it again immediately.
   Keep it fixed while the marketplace reviews and publishes that exact commit.
-- Preserve published tags, including `v1.1.2`, `v1.1.1`, `v1.1.0`, `v1.0.1`,
-  and `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
+- Preserve published tags, including `v1.2.0`, `v1.1.2`, `v1.1.1`, `v1.1.0`,
+  `v1.0.1`, and `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
   installed plugin contents. CI rejects tracked instruction files; an ignore
   rule alone does not remove local files from a linked installation.
 
