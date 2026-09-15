@@ -1,13 +1,14 @@
 # Changelog
 
-## Unreleased
-
-- Show numbered tile destinations during SUPER + left mouse window drags and place the dragged window into the tile under the pointer on release.
+## 1.3.0 (2026-09-15)
 
 - `SUPER+ALT+T` opens a numbered tile picker for moving the active window to an
   empty layout tile or swapping with an occupied one. The picker supports
   clicks, multi-digit fill numbers, and cancellation, highlights the current
   tile, and rejects stale window or layout selections.
+- `SUPER` + left mouse drag shows the same numbered destinations for a tiled
+  window and places it into the tile under the pointer on release; dropping
+  elsewhere keeps Hyprland's normal drag result.
 - Tile-picker outlines honor aspect ratio and scale, showing only the fitted
   window area instead of its larger layout slot.
 - `uninstall.sh --purge` removes the saved scenes directory

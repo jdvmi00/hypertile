@@ -2,20 +2,20 @@
 
 ## Current release state
 
-- Published version: **1.2.0**, tag `v1.2.0`, at
+- Prepared release: **1.3.0**, covering the numbered tile picker, drag
+  destinations, the user manual, and the uninstall purge fix. Its changelog
+  and manifest are ready; promote through the steps below and bind the
+  `v1.3.0` tag and marketplace request to the resulting full `main` SHA.
+- Previous published version: **1.2.0**, tag `v1.2.0`, at
   `2c02a8210780bf503e2d96fafe8e7df0ced753a1` (merge of PR #20 into `main` on
-  2026-09-12). The marketplace verified and published that commit on
-  2026-09-13 through
+  2026-09-12), verified and published by the marketplace on 2026-09-13 through
   [#6562](https://github.com/omacom/omarchy-plugin-marketplace/issues/6562)
-  with no findings.
+  with no findings. That approval does not cover 1.3.0; submit a new update
+  request.
 - Earlier verifications, kept as historical records: **1.1.2** through
   [#6233](https://github.com/omacom/omarchy-plugin-marketplace/issues/6233)
   on 2026-09-11 (maintainer acceptance of the `installer` capability), and
   the initial submission #5181.
-- Next release: unreleased work on `develop` (the numbered tile picker and
-  drag destinations) needs a version bump beyond 1.2.0, changelog and README
-  updates, and a new marketplace update request; the 1.2.0 approval does not
-  cover it.
 - `main` is the default branch and is locked including for administrators.
   Unlock only for the authorized promotion, then lock it again immediately.
   Keep it fixed while the marketplace reviews and publishes that exact commit.
