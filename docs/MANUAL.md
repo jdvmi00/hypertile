@@ -613,18 +613,26 @@ a scene waiting for recovery offers **Retry** or **Dismiss**;
 `hypertile-ctl session status` prints the same information.
 
 **Something else changed in my Hyprland config.** Every file setup edits has
-a `<file>.hypertile.bak` copy from before the first install, and it is never
-overwritten by later installs or uninstalls.
+a `<file>.hypertile.bak` copy from before the first install. Repeated installs
+preserve it; uninstall includes it in the archive and removes the live copy.
 
-**Starting over.** Run the uninstaller, then remove the plugin:
+**Starting over.** Run:
 
 ```bash
-~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh   # add --purge to drop layouts, state, and scenes
-omarchy plugin remove jmartin.hypertile
+~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh
 ```
 
-Without `--purge` your layouts, workspace rules, scenes, and snapshots are
-kept for the next install.
+Uninstall archives settings in `~/Backups/hypertile-uninstall-<timestamp>/`,
+then removes the plugin, layouts, preferences, scenes, state, runtime files,
+and installer backups. It restarts the shell to clear cached UI. Your next
+install starts fresh. Use `--archive DIR` to choose a new archive directory,
+or `--purge` to discard settings without archiving. No separate
+`omarchy plugin remove` command is needed.
+
+To recover your layouts later, copy the archive's `layouts/` contents into
+`~/.config/hypr/layouts/` (under `$XDG_CONFIG_HOME` if customized) and run
+`hyprctl reload`. The archive's `README.txt` describes the other saved data.
+Monitor settings and unrelated desktop customizations are retained.
 
 ## 12. Where everything lives
 

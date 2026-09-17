@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Uninstall now archives settings by default (`--archive DIR` chooses a location;
+  `--purge` skips archiving), wipes all Hypertile settings and runtime data,
+  removes the installed plugin, and restarts the shell so cached development UI
+  cannot survive a clean reinstall. Recognizes the older swap-navigation binding.
+
 - Closing the overlay with unsaved edits (a click outside, the shell close
   request) now asks to discard, save, or keep editing, like `Esc`; hiding it
   with `SUPER+ALT+L` puts the saved layout back instead of leaving the unsaved

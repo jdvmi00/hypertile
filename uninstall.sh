@@ -1,36 +1,28 @@
 #!/usr/bin/env bash
-# Undo install.sh: the engine files and the loader require line in
-# ~/.config/hypr, the CLI, the keybinds and the menu entry it added, and the
-# shell plugin's bar entry. Workspaces fall back to Hyprland's default layout.
-# Config backups at <file>.hypertile.bak are created only when absent.
-#
-# Kept unless --purge is given: your layouts (~/.config/hypr/layouts/) and
-# hypertile's state (~/.local/state/hypertile/: workspace rules, overlay
-# preferences), and saved scenes (~/.config/hypertile/scenes/).
-#
-# The plugin directory itself is removed only when it is a plain copy made by
-# install.sh. A git checkout made by `omarchy plugin add` is left for
-# `omarchy plugin remove jmartin.hypertile`, which also works when this script
-# is run from inside it.
-#
-# Usage: ./uninstall.sh [--purge]
+# Completely remove Hypertile, including settings and the installed plugin.
+# By default, archive settings in ~/Backups/hypertile-uninstall-<timestamp>/.
+# --archive DIR chooses a new archive directory; --purge skips the archive.
+# Unrelated desktop settings and development symlink targets are preserved.
+# Usage: ./uninstall.sh [--archive DIR | --purge]
 
 set -euo pipefail
+export PYTHONDONTWRITEBYTECODE=1
 
+archive=""
 purge=0
-for arg in "$@"; do
-  case "$arg" in
-  --purge) purge=1 ;;
+while (( $# )); do
+  case "$1" in
+  --purge) purge=1; shift ;;
+  --archive)
+    [[ $# -ge 2 && -n "$2" ]] || { echo "--archive requires a directory" >&2; exit 2; }
+    archive="$2"; shift 2 ;;
   -h | --help)
     sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
-    exit 0
-    ;;
-  *)
-    echo "uninstall.sh: unknown option: $arg" >&2
-    exit 2
-    ;;
+    exit 0 ;;
+  *) echo "uninstall.sh: unknown option: $1" >&2; exit 2 ;;
   esac
 done
+[[ $purge == 0 || -z "$archive" ]] || { echo "--archive and --purge are mutually exclusive" >&2; exit 2; }
 
 src="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 config="${XDG_CONFIG_HOME:-$HOME/.config}"
@@ -40,11 +32,18 @@ state="${XDG_STATE_HOME:-$HOME/.local/state}/hypertile"
 plugin_id="jmartin.hypertile"
 plugin_dst="$config/omarchy/plugins/$plugin_id"
 
-PYTHONPATH="$src/session" python3 - "$state" <<'PY_PREFLIGHT'
+PYTHONPATH="$src/session" python3 - "$state" "$config/omarchy/shell.json" <<'PY_PREFLIGHT'
 from pathlib import Path
 from upgrade import check_legacy
 import sys
 check_legacy(Path(sys.argv[1]))
+# Validate before removal even when the shell is offline.
+import json
+shell = Path(sys.argv[2])
+if shell.exists():
+    value = json.loads(shell.read_text())
+    if not isinstance(value, dict):
+        sys.exit("uninstall.sh: shell.json must contain an object")
 PY_PREFLIGHT
 
 # Wait for any setup already in progress, then disable the service before
@@ -52,15 +51,18 @@ PY_PREFLIGHT
 mkdir -p "$state"
 exec 8>"$state/install.lock"
 flock -x 8
+# Preserve shell placement/preferences before disabling the plugin.
+if (( ! purge )) && [[ -f "$config/omarchy/shell.json" ]]; then
+  cp "$config/omarchy/shell.json" "$state/uninstall-shell.json"
+fi
 shell_up=0
 if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
   shell_up=1
-  omarchy-plugin-disable "$plugin_id" >/dev/null 2>&1 || true
+  omarchy-plugin-disable "$plugin_id" >/dev/null
 fi
-rm -f "$state/installed-runtime.sha256"
 
-# Stop the writer before removing its code; retain recovery snapshots unless
-# --purge was requested. A missing/stopped service is harmless.
+# Stop writers before archiving or removing their data. An offline service
+# may reject stop; writer locks below prove that it has actually exited.
 if [[ -x "$bin/hypertile-displays" ]]; then
   "$bin/hypertile-displays" stop >/dev/null
 fi
@@ -77,7 +79,7 @@ fi
 
 mkdir -p "$state/displays"
 exec 7>"$state/displays/daemon.lock"
-flock -xn 7 || { echo "uninstall.sh: display service is still running" >&2; exit 1; }
+flock -x -w 5 7 || { echo "uninstall.sh: display service is still running" >&2; exit 1; }
 
 # Keep pending host recovery tools intact and prevent legacy writer restarts.
 mkdir -p "$state/streams"
@@ -89,6 +91,84 @@ from upgrade import check_legacy
 import sys
 check_legacy(Path(sys.argv[1]))
 PY_CHECK
+
+# Stop requests can return before the daemon exits. Hold every writer lock
+# through archive and removal; a failed stop must never erase live state.
+mkdir -p "$state/sessions" "$state/scenes"
+exec 5>"$state/sessions/writer.lock"
+flock -x -w 5 5 || { echo "uninstall.sh: session service is still running" >&2; exit 1; }
+exec 6>"$state/scenes/writer.lock"
+flock -x -w 5 6 || { echo "uninstall.sh: scenes service is still running" >&2; exit 1; }
+
+# Copy and verify stopped services before removing files. Archive failure
+# leaves the installation on disk, with services stopped/disabled.
+if (( ! purge )); then
+  python3 - "$archive" "$config" "$state" "$plugin_dst" <<'PY_ARCHIVE'
+from pathlib import Path
+import datetime
+import hashlib
+import json
+import os
+import shutil
+import sys
+
+requested, config, state, plugin = sys.argv[1:]
+config, state, plugin = map(Path, (config, state, plugin))
+data = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local/share") / "hypertile"
+sources = {"layouts": config / "hypr/layouts", "settings": config / "hypertile",
+           "state": state, "runtime-code": data, "plugin": plugin}
+for name in ("hyprland.lua", "bindings.lua", "looknfeel.lua", "monitors.lua"):
+    sources["desktop/" + name] = config / "hypr" / name
+for name in ("shell.json", "extensions/omarchy-menu.jsonc"):
+    sources["desktop/omarchy/" + name] = config / "omarchy" / name
+if (state / "uninstall-shell.json").exists():
+    sources["desktop/omarchy/shell.json"] = state / "uninstall-shell.json"
+for directory in (config / "hypr", config / "omarchy/extensions"):
+    for path in directory.glob("*.hypertile.bak"):
+        sources["installer-backups/" + str(path.relative_to(config))] = path
+if requested:
+    destination = Path(requested).expanduser().absolute()
+else:
+    parent = Path.home() / "Backups"
+    parent.mkdir(parents=True, exist_ok=True)
+    destination = parent / ("hypertile-uninstall-" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S-%f"))
+for source in sources.values():
+    if destination.resolve().is_relative_to(source.resolve()):
+        sys.exit("Archive must be outside the installation and settings directories")
+destination.parent.mkdir(parents=True, exist_ok=True)
+destination.mkdir(mode=0o700)
+checks = {}
+for name, source in sources.items():
+    if not source.exists():
+        continue
+    target = destination / name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if source.is_dir():
+        shutil.copytree(source, target, symlinks=True)
+        files = [p for p in source.rglob("*") if p.is_file() and not p.is_symlink()]
+    else:
+        shutil.copy2(source, target)
+        files = [source]
+    for original in files:
+        copied = target / original.relative_to(source) if source.is_dir() else target
+        def digest(path):
+            with path.open("rb") as stream:
+                return hashlib.file_digest(stream, "sha256").hexdigest()
+        expected = digest(original)
+        if digest(copied) != expected:
+            sys.exit("Archive verification failed: " + str(original))
+        checks[str(copied.relative_to(destination))] = expected
+(destination / "checksums.json").write_text(json.dumps(checks, indent=2) + "\n")
+(destination / "README.txt").write_text(
+    "Hypertile settings archived before uninstall.\n"
+    "After reinstalling, copy layouts/ contents into $XDG_CONFIG_HOME/hypr/layouts/ "
+    "(normally ~/.config/hypr/layouts/), then run hyprctl reload.\n"
+    "settings/ contains scenes and preferences; state/ contains workspace rules and recovery data.\n"
+    "Restore selectively after stopping the relevant services. Do not restore old state for a clean-install test.\n"
+    "desktop/ and installer-backups/ are reference copies; do not overwrite current desktop configuration blindly.\n")
+print("Verified archive: " + str(destination), flush=True)
+PY_ARCHIVE
+fi
 
 # Preserve the original pre-install backup, including on repeated uninstalls.
 backup() {
@@ -130,6 +210,8 @@ text = re.sub(r'^-- hypertile: begin [^\n]+\n(?:(?!^-- hypertile: begin ).)*?'
 # Match only the original installer-owned lines, allowing blank lines within
 # each block. A user line after a block must survive even without a separator.
 legacy = [
+    ['-- hypertile: swap across gaps, replacing Omarchy\'s directional swap bindings.',
+     'require("hypr.hypertile-navigation").bind()'],
     ['-- hypertile: focus and swap across gaps, replacing Omarchy\'s directional bindings.',
      'require("hypr.hypertile-navigation").bind()'],
     ['-- hypertile: fullscreen layout overlay (browse with arrows, Enter uses and closes).',
@@ -223,28 +305,52 @@ for source in "$src"/displays/*.py; do
 done
 echo "removed the engine files and hypertile-ctl"
 
-if (( purge )); then
-  rm -rf "$hypr/layouts" "$state"
-  rm -rf "$config/hypertile/scenes"
-  rm -f "$config/hypertile/scenes.json" "$config/hypertile/displays.json"
-  for service in session scenes displays; do
-    rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/$service/__pycache__"
-  done
-  echo "removed layouts, state, saved scenes, and Python caches"
-else
-  echo "kept layouts, state, and saved scenes (use --purge to remove them)"
-fi
+# Remove full application-owned trees, including obsolete settings/modules.
+# rm removes a development symlink itself, never its source checkout.
+rm -rf "$hypr/layouts" "$state" "$config/hypertile" "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile"
+# The caller may have cd'd into the installed checkout. Keep subsequent
+# Python invocations out of a directory we are about to delete.
+cd "$HOME"
+rm -rf "$plugin_dst"
+python3 - "$config" <<'PY_CLEAN'
+from pathlib import Path
+import json
+import os
+import shutil
+import sys
+config = Path(sys.argv[1])
+shell = config / "omarchy/shell.json"
+if shell.exists():
+    value = json.loads(shell.read_text())
+    def clean(value):
+        if isinstance(value, list):
+            return [clean(item) for item in value if item != "jmartin.hypertile"
+                    and not (isinstance(item, dict) and item.get("id") == "jmartin.hypertile")]
+        if isinstance(value, dict):
+            return {key: clean(item) for key, item in value.items() if key != "jmartin.hypertile"}
+        return value
+    updated = clean(value)
+    if updated != value:
+        shell.write_text(json.dumps(updated, indent=2) + "\n")
+for directory in (config / "hypr", config / "omarchy/extensions"):
+    for path in directory.glob("*.hypertile.bak"):
+        path.unlink()
+runtime = Path(os.environ.get("XDG_RUNTIME_DIR") or "/tmp")
+for name in ("hypertile", "hypertile-scenes", "hypertile-session", "hypertile-tile-drag.json"):
+    path = runtime / name
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.is_dir():
+        shutil.rmtree(path)
+PY_CLEAN
+echo "removed layouts, settings, state, runtime files, installer backups, and shell plugin"
 
-# Shell plugin.
-if [[ -d "$plugin_dst" && ! -d "$plugin_dst/.git" && "$(cd "$plugin_dst" && pwd -P)" != "$src" ]]; then
-  rm -rf "$plugin_dst"
-  echo "removed the shell plugin copy at $plugin_dst"
-elif [[ -d "$plugin_dst/.git" ]]; then
-  echo "disabled the shell plugin; remove the checkout with: omarchy plugin remove $plugin_id"
-elif [[ -d "$plugin_dst" ]]; then
-  echo "disabled the shell plugin; remove $plugin_dst by hand"
+# A rescan retains compiled QML for this plugin URL. Restart after removal,
+# otherwise its enabled service can reinstall the runtime.
+if (( shell_up )); then
+  omarchy restart shell 5>&- 6>&- 7>&- 8>&- 9>&-
+  echo "restarted the shell to clear cached plugin UI"
 fi
-(( shell_up )) && { omarchy-shell -q shell rescanPlugins || true; }
 
 if command -v hyprctl >/dev/null 2>&1 && hyprctl version >/dev/null 2>&1; then
   hyprctl reload >/dev/null || { echo "hyprctl reload failed" >&2; exit 1; }

@@ -76,7 +76,8 @@ result. Destinations stay on the starting workspace and monitor. Floating
 windows and other layouts keep their normal mouse behavior.
 
 Every config file it edits is first copied to `<file>.hypertile.bak` if that
-backup does not exist. Later installs and uninstalls preserve that first backup.
+backup does not exist. Later installs preserve that first backup; uninstall
+archives it by default before removing the live copy.
 The installer then reloads Hyprland and checks `hyprctl configerrors`. Update with:
 
 ```bash
@@ -97,17 +98,34 @@ continue to use `./install.sh` once and `./dev apply` after edits.
 Uninstall with:
 
 ```bash
-~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh   # --purge also drops your layouts and state
-omarchy plugin remove jmartin.hypertile
+~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh
+# Choose the archive location instead:
+# .../uninstall.sh --archive ~/Backups/my-hypertile-settings
+# Or permanently discard settings without an archive:
+# .../uninstall.sh --purge
 ```
 
-The uninstaller removes what the installer added, sets the default layout
-back to dwindle if it pointed at a hypertile layout, and keeps your layouts
-(`~/.config/hypr/layouts/`), state (`~/.local/state/hypertile/`), and saved scenes
-(`~/.config/hypertile/scenes/`) unless `--purge` is given. Purging also removes
-the services' Python caches; session settings are kept. If a
-custom binding still references `hypertile-navigation`, uninstall retains the
-runtime files and asks you to remove that reference before running it again.
+Uninstall first copies and verifies an archive in
+`~/Backups/hypertile-uninstall-<timestamp>/` (or the new directory supplied
+with `--archive`). It then removes layouts, all Hypertile settings, scenes,
+state, runtime files and caches, installer-created `.hypertile.bak` files,
+and the installed plugin checkout. Development symlinks are unlinked without
+removing their source checkout. The shell restarts to clear cached plugin UI,
+so reinstalling another version cannot show the old version's menus.
+
+The archive includes `layouts/`, `settings/`, `state/`, reference copies of
+desktop configuration, and the plugin checkout. Its `README.txt` explains
+restoration. To restore only layouts after testing a clean install, copy the
+contents of `layouts/` into `~/.config/hypr/layouts/` (or
+`$XDG_CONFIG_HOME/hypr/layouts/`) and run `hyprctl reload`. Existing archive
+paths are refused; if archiving fails, uninstall stops before removing files.
+`--purge` explicitly skips archiving; both modes leave a clean installation.
+
+The default layout returns to dwindle if it used Hypertile. Monitor settings
+and unrelated desktop customizations remain. If a custom binding still
+references `hypertile-navigation`, uninstall retains runtime files and asks
+you to remove that reference before running it again. Active legacy remote
+connections must also be restored before uninstalling.
 
 ## Using it
 
