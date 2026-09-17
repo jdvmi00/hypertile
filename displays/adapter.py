@@ -40,7 +40,22 @@ def normalized(monitors):
                            width=m['width'], height=m['height'], refresh=m['refreshRate'],
                            x=m['x'], y=m['y'], scale=m['scale'], transform=m.get('transform', 0),
                            modes=m.get('availableModes', []), awake=m.get('dpmsStatus', True)))
+    by_name = {d['connector']: d['id'] for d in result}
+    by_number = {str(m['id']): m['name'] for m in monitors if 'id' in m}
+    for d, m in zip(result, monitors):
+        source = str(m.get('mirrorOf', 'none'))
+        source = by_number.get(source, source)
+        d['mirror_connector'] = source if source and source not in ('none', 'None') else None
+        d['mirror_of'] = by_name.get(d['mirror_connector'], 'connector:' + d['mirror_connector'] if d['mirror_connector'] else None)
     return result
+
+
+def independent(d):
+    return d['enabled'] and not (d.get('mirror_of') or d.get('mirror_connector'))
+
+
+def apply_order(d):
+    return 2 if not d['enabled'] else 1 if d.get('mirror_of') or d.get('mirror_connector') else 0
 
 
 def same(a, b):
@@ -48,7 +63,10 @@ def same(a, b):
         return False
     if not a.get('enabled'):
         return True
-    return all(a.get(k) == b.get(k) for k in ('width', 'height', 'x', 'y', 'transform')) and abs(a['scale'] - b['scale']) < .001 and abs(a['refresh'] - b['refresh']) < .1
+    if (a.get('mirror_connector') or a.get('mirror_of')) != (b.get('mirror_connector') or b.get('mirror_of')):
+        return False
+    geometry = ('width', 'height', 'transform') if a.get('mirror_of') or a.get('mirror_connector') else ('width', 'height', 'x', 'y', 'transform')
+    return all(a.get(k) == b.get(k) for k in geometry) and abs(a['scale'] - b['scale']) < .001 and abs(a['refresh'] - b['refresh']) < .1
 
 
 def bounds(d):
@@ -71,6 +89,17 @@ def match(saved, current):
     return None
 
 
+def runtime_mirrors(document, current):
+    """Follow configuration-owned topology without rewriting saved preferences."""
+    displays = [dict(d) for d in document.get('displays', [])]
+    matches = [(d, match(d, current)) for d in displays]
+    ids = {actual['connector']: d['id'] for d, actual in matches if actual}
+    for d, actual in matches:
+        if actual:
+            d['mirror_of'] = ids.get(actual.get('mirror_connector'), actual.get('mirror_of'))
+    return dict(document, displays=displays)
+
+
 def validate(document, current):
     if not isinstance(document, dict) or document.get('version') != 1 or not isinstance(document.get('displays'), list):
         raise DisplayError('Expected version 1 settings with a displays array.')
@@ -82,6 +111,13 @@ def validate(document, current):
         if not isinstance(d.get('id'), str) or d['id'] in seen:
             raise DisplayError('Every display needs a unique stable id.')
         seen.add(d['id'])
+        position = d.get('extended_position')
+        if position is not None and (not isinstance(position, dict) or any(type(position.get(k)) is not int or abs(position[k]) > 100000 for k in ('x', 'y'))):
+            raise DisplayError('Saved extended position must contain integer x and y coordinates.')
+        target = d.get('mirror_of')
+        if target is not None and (not isinstance(target, str) or not target):
+            raise DisplayError('Mirror source must be a display id or null.')
+        d.pop('mirror_connector', None)  # Resolve trusted runtime connectors below.
         actual = match(d, current)
         if not isinstance(d.get('enabled'), bool):
             raise DisplayError('Enabled must be true or false.')
@@ -113,7 +149,19 @@ def validate(document, current):
         result.append(d)
     merged = {d['connector']: d for d in current}
     merged.update({d['connector']: d for d in result})
-    active = [d for d in merged.values() if d['enabled']]
+    by_id = {d['id']: d for d in document['displays']}
+    for d in result:
+        target = d.get('mirror_of')
+        if not target:
+            continue
+        source = by_id.get(target)
+        actual = match(source, current) if source else None
+        if target == d['id'] or not source or source.get('mirror_of'):
+            raise DisplayError('Choose an independent display as the mirror source; chains and cycles are not supported.')
+        if d['enabled'] and (not actual or not source['enabled']):
+            raise DisplayError('Mirror source must be connected and enabled.')
+        d['mirror_connector'] = actual['connector'] if actual else source['connector']
+    active = [d for d in merged.values() if independent(d)]
     if not active:
         raise DisplayError('Cannot disable the last usable display.')
     for i, a in enumerate(active):
@@ -121,7 +169,7 @@ def validate(document, current):
         for b in active[i + 1:]:
             bx, by, bw, bh = bounds(b)
             if min(ax + aw, bx + bw) - max(ax, bx) > 1 and min(ay + ah, by + bh) - max(ay, by) > 1:
-                raise DisplayError('Displays overlap; move their edges apart. Mirroring is not supported.')
+                raise DisplayError('Displays overlap; move their edges apart or choose a mirror source.')
     return result
 
 
@@ -143,7 +191,8 @@ class Adapter:
         if d['enabled']:
             fields += ['mode=' + lua_string(f"{d['width']}x{d['height']}@{d['refresh']:.5f}"),
                        'position=' + lua_string(f"{d['x']}x{d['y']}"), 'scale=' + str(d['scale']),
-                       'transform=' + str(d['transform']), 'disabled=false']
+                       'transform=' + str(d['transform']), 'disabled=false',
+                       'mirror=' + lua_string(d.get('mirror_connector') or '')]
         else:
             fields += ['disabled=true']
         self.run('eval', 'hl.monitor({' + ','.join(fields) + '})')
@@ -154,8 +203,8 @@ class Adapter:
             if all(d['connector'] in current and same(d, current[d['connector']]) for d in desired):
                 return list(current.values())
             time.sleep(.1)
-        fields = ('enabled', 'width', 'height', 'refresh', 'x', 'y', 'scale', 'transform')
-        detail = '; '.join(d['connector'] + ': requested ' + str({k: d[k] for k in fields}) +
+        fields = ('enabled', 'width', 'height', 'refresh', 'x', 'y', 'scale', 'transform', 'mirror_of', 'mirror_connector')
+        detail = '; '.join(d['connector'] + ': requested ' + str({k: d.get(k) for k in fields}) +
                            ', received ' + str({k: current.get(d['connector'], {}).get(k) for k in fields})
                            for d in desired if d['connector'] not in current or not same(d, current[d['connector']]))
         raise DisplayError('Hyprland did not apply the requested display settings. Reverting. ' + detail)

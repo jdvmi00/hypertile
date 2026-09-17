@@ -12,7 +12,7 @@ function bounds(display) {
 
 function extent(displays) {
     var active = displays.filter(function(display) {
-        return display.connected && display.enabled
+        return display.connected && display.enabled && !display.mirror_of
     })
     if (!active.length) return {x: 0, y: 0, w: 1920, h: 1080}
 
@@ -33,7 +33,7 @@ function snap(displays, index, x, y, threshold) {
     var rect = bounds(displays[index])
     var bestX = threshold, bestY = threshold, snappedX = x, snappedY = y
     displays.forEach(function(display, otherIndex) {
-        if (otherIndex === index || !display.enabled || !display.connected) return
+        if (otherIndex === index || !display.enabled || !display.connected || display.mirror_of) return
         var other = bounds(display)
         var xs = [other.x, other.x + other.w, other.x - rect.w, other.x + other.w - rect.w]
         var ys = [other.y, other.y + other.h, other.y - rect.h, other.y + other.h - rect.h]
@@ -115,9 +115,56 @@ function matchSavedDisplay(document, index, connector) {
     }).map(function(display) {
         return display.id === saved.id && !display.connected ? matched : display
     })
+    next.displays.forEach(function(display) {
+        if (display.mirror_of === live.id) display.mirror_of = saved.id
+    })
     Object.keys(next.workspaces || {}).forEach(function(workspace) {
         var preference = next.workspaces[workspace]
         if (preference.monitor === live.id) preference.monitor = saved.id
     })
+    return next
+}
+
+// Each independent display owns one desktop rectangle, with its mirrors grouped.
+function groupLabel(displays, index) {
+    return displays.map(function(d, i) {
+        return i === index || (d.enabled && d.connected && d.mirror_of === displays[index].id) ? String(i + 1) : null
+    }).filter(function(x) { return x !== null }).join(" + ")
+}
+
+function usageOptions(displays, selected) {
+    var options = [{label: "Extended display", value: "extended"}, {label: "Disabled", value: "disabled"}]
+    displays.forEach(function(d, i) {
+        if (d.id !== selected.id && d.connected && d.enabled && !d.mirror_of)
+            options.push({label: "Mirror display " + (i + 1) + " · " + d.connector, value: d.id})
+    })
+    if (selected.mirror_of && !options.some(function(o) { return o.value === selected.mirror_of }))
+        options.push({label: "Mirror source unavailable", value: selected.mirror_of})
+    return options
+}
+
+function setUsage(document, index, value) {
+    var next = clone(document), d = next.displays[index]
+    if (value !== "extended" && value !== "disabled") {
+        if (!d.mirror_of) d.extended_position = {x: d.x, y: d.y}
+        d.mirror_of = value
+        d.enabled = true
+    } else {
+        var wasMirror = !!d.mirror_of, wasDisabled = !d.enabled
+        if (value === "disabled" && !wasMirror && d.enabled)
+            d.extended_position = {x: d.x, y: d.y}
+        d.enabled = value === "extended"
+        if (value === "extended" && (wasMirror || wasDisabled)) {
+            d.mirror_of = null
+            if (d.extended_position) {
+                d.x = d.extended_position.x
+                d.y = d.extended_position.y
+            } else if (wasMirror) {
+                var rect = extent(next.displays.filter(function(other) { return other.id !== d.id }))
+                d.x = Math.round(rect.x + rect.w)
+                d.y = Math.round(rect.y)
+            }
+        }
+    }
     return next
 }

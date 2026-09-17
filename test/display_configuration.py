@@ -184,5 +184,25 @@ class ConfigurationTests(unittest.TestCase):
         self.assertTrue(self.config.rollback(plan))
         self.assertTrue(self.config.path.read_text().startswith('-- edited elsewhere'))
 
+    def test_mirror_save_preserves_source_and_clear_is_explicit(self):
+        self.doc['displays'][1]['mirror_of'] = self.doc['displays'][0]['id']
+        plan = self.plan()
+        self.assertIn('mirror = "DP-1"', plan['after'])
+        self.assertIn('-- keep the mode comment', plan['after'])
+        self.assertIn('scale = monitor_scale', plan['after'])
+        self.config.path.write_text(plan['after'])
+        self.before[1].update(mirror_of=self.before[0]['id'], mirror_connector='DP-1')
+        self.doc['displays'][1]['mirror_of'] = None
+        plan = self.plan()
+        self.assertIn('mirror = ""', plan['after'])
+        self.assertNotIn('mirror = "DP-1"', plan['after'])
+
+    def test_enabling_disabled_mirror_explicitly_clears_inactive_config(self):
+        self.config.path.write_text(SOURCE + '\nhl.monitor({output="DP-2",disabled=true,mirror="DP-1"})\n')
+        self.before[1]['enabled'] = False
+        self.doc['displays'][1]['mirror_of'] = None
+        plan = self.plan()
+        self.assertIn('mirror=""', plan['after'])
+
 if __name__ == '__main__':
     unittest.main()

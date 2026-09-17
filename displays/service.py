@@ -14,7 +14,7 @@ import sys
 import time
 import uuid
 
-from adapter import Adapter, DisplayError, match, same, validate
+from adapter import Adapter, DisplayError, match, same, validate, independent, apply_order
 from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules
 from configuration import Configuration
 
@@ -93,7 +93,7 @@ class Service:
                 # Stable saved references survive connector changes and a pair
                 # of identical displays temporarily becoming one display.
                 actual['id'] = saved['id']
-                for key in ('default_layout', 'initial_workspace', 'explicit_match'):
+                for key in ('default_layout', 'initial_workspace', 'explicit_match', 'extended_position'):
                     if key in saved:
                         actual[key] = saved[key]
             if not actual:
@@ -101,6 +101,10 @@ class Service:
         if self.configuration:
             for display in current:
                 display['explicit_match'] = True
+        ids = {d['connector']: d['id'] for d in current}
+        for d in current:
+            if d.get('mirror_connector'):
+                d['mirror_of'] = ids.get(d['mirror_connector'], d.get('mirror_of'))
         current.extend(disconnected)
         return dict(version=1, displays=current, confirmed=confirmed,
                     pending=read(self.pending_path), configuration=str(self.configuration.path) if self.configuration else None,
@@ -120,7 +124,14 @@ class Service:
             desired = validate(document, before)
             if self.policy:
                 self.policy.validate_changes(document)
-            document = dict(document)
+            document = copy.deepcopy(document)
+            resolved = {d['id']: d for d in desired}
+            for d in document['displays']:
+                if d['id'] in resolved:
+                    d['connector'] = resolved[d['id']]['connector']
+                    old = match(d, before)
+                    if d.get('mirror_of') and old and independent(old):
+                        d['extended_position'] = dict(x=old['x'], y=old['y'])
             document.pop('takeover', None)
             baseline = before + [d for d in read(self.confirmed_path, {}).get('displays', [])
                                  if not any(m['connector'] == d['connector'] for m in before)]
@@ -143,8 +154,8 @@ class Service:
                     raise
             try:
                 # Establish destinations first, move assigned workspaces, disable sources last.
-                for d in sorted(desired, key=lambda d: not d['enabled']):
-                    if not d['enabled'] and not pending.get('placed'):
+                for d in sorted(desired, key=apply_order):
+                    if not independent(d) and not pending.get('placed'):
                         self.reconcile(document, 'preview')
                         pending['placed'] = True
                     pending['touched'].append(d['connector'])
@@ -188,20 +199,23 @@ class Service:
                 report['external'].append(name)
                 continue
             restore.append(old)
-        for d in sorted(restore, key=lambda d: not d['enabled']):
+        for d in sorted(restore, key=apply_order):
             # Never disable the only output left after a physical unplug.
             live = self.adapter.displays()
-            if not d['enabled'] and sum(bool(x['enabled']) for x in live) <= 1:
+            if not d['enabled'] and sum(independent(x) for x in live) <= 1:
                 report['fallback'] = True
                 continue
             try:
+                if d.get('mirror_connector') and not any(x['connector'] == d['mirror_connector'] and independent(x) for x in live):
+                    d = dict(d, mirror_of=None, mirror_connector=None)
+                    report['fallback'] = True
                 self.adapter.apply(d)
                 self.adapter.verify([d])
             except Exception as error:
                 report['errors'].append(str(error))
         live = self.adapter.displays()
-        if live and not any(d['enabled'] for d in live):
-            rescue = dict(live[0], enabled=True, scale=1, transform=0, x=0, y=0)
+        if live and not any(independent(d) for d in live):
+            rescue = dict(live[0], enabled=True, mirror_of=None, mirror_connector=None, scale=1, transform=0, x=0, y=0)
             if rescue['modes']:
                 import re
                 m = re.fullmatch(r'(\d+)x(\d+)@([\d.]+)Hz', rescue['modes'][0])
@@ -210,7 +224,7 @@ class Service:
             self.adapter.apply(rescue)
             self.adapter.verify([rescue])
             report['fallback'] = True
-        enabled = {d['connector'] for d in self.adapter.displays() if d['enabled']}
+        enabled = {d['connector'] for d in self.adapter.displays() if independent(d)}
         for w in pending['workspaces']:
             if w.get('monitor') in enabled and w['monitor'] not in report['external']:
                 try:
@@ -347,7 +361,7 @@ class Service:
             before_workspaces = self.policy.capture_workspaces() if self.policy else self.adapter.workspaces()
             applied = []
             try:
-                for d in sorted(desired, key=lambda d: not d['enabled']):
+                for d in sorted(desired, key=apply_order):
                     applied.append(d)
                     self.adapter.apply(d)
                     self.adapter.verify([d])
@@ -360,7 +374,7 @@ class Service:
                 recovery.update(reason=reason, fallback=True)
                 recovery['errors'].append(str(error))
             live = self.adapter.displays()
-            if live and not any(d['enabled'] for d in live):
+            if live and not any(independent(d) for d in live):
                 # Reuse recovery's safe-mode rescue when no remaining output is usable.
                 self._rollback(dict(before=[], workspaces=[], expected={}, touched=[]))
                 recovery['fallback'] = True
@@ -512,7 +526,7 @@ def daemon(service):
                     except BlockingIOError:
                         pass
                 current = service.adapter.displays()
-                topology = tuple((d['id'], d['connector'], d['enabled']) for d in current)
+                topology = tuple((d['id'], d['connector'], d['enabled'], d.get('mirror_connector')) for d in current)
                 if not service.pending_path.exists():
                     if reloaded:
                         service.restore('configreload')

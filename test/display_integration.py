@@ -87,16 +87,35 @@ def main():
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
                 document = dict(version=1, displays=outputs)
+                # Mirror preview, rollback to Extended, persistence, and explicit clear.
+                mirrored = dict(version=1, displays=display('list')['displays'], workspaces={})
+                source, target = mirrored['displays']
+                target['mirror_of'] = source['id']
+                pending = display('preview', '--json', json.dumps(mirrored))
+                assert next(d for d in display('list')['displays'] if d['connector'] == target['connector'])['mirror_of'] == source['id']
+                display('revert', pending['token'])
+                assert not display('status')['recovery']['errors'], display('status')['recovery']
+                pending = display('preview', '--json', json.dumps(mirrored))
+                display('keep', pending['token'])
+                assert 'mirror' in monitors.read_text()
+                ctl('reload')
+                assert next(d for d in display('list')['displays'] if d['connector'] == target['connector'])['mirror_of'] == source['id']
+                extended = dict(version=1, displays=display('list')['displays'], workspaces={})
+                extended['displays'][1].update(mirror_of=None, x=1280, y=0)
+                pending = display('preview', '--json', json.dumps(extended))
+                display('keep', pending['token'])
+                assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == target['connector'])['mirrorOf'] == 'none'
+                print('PASS: mirror preview, rollback, Keep, reload and return to Extended')
                 # Retain current modes, test rotation, placement, readback and rollback.
                 second = next(d for d in document['displays'] if d['connector'] == 'WAYLAND-2')
                 second.update(x=1280, y=0, transform=1)
                 response = display('preview', '--json', json.dumps(document))
                 token = response.get('token', response.get('pending', {}).get('token'))
                 assert token, response
-                actual = json.loads(ctl('-j', 'monitors'))
+                actual = json.loads(ctl('-j', 'monitors', 'all'))
                 assert next(m for m in actual if m['name'] == 'WAYLAND-2')['transform'] == 1
                 display('revert', token)
-                actual = json.loads(ctl('-j', 'monitors'))
+                actual = json.loads(ctl('-j', 'monitors', 'all'))
                 assert next(m for m in actual if m['name'] == 'WAYLAND-2')['transform'] == 0
                 assert not display('status').get('pending')
                 assert not display('status')['recovery']['errors'], display('status')['recovery']
@@ -170,9 +189,9 @@ def main():
                     policy_daemon.wait(timeout=5)
                 before_power = [(w['id'], w['monitor']) for w in json.loads(ctl('-j', 'workspaces'))]
                 display('sleep', 'WAYLAND-2')
-                assert not next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['dpmsStatus']
+                assert not next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['dpmsStatus']
                 display('wake', 'WAYLAND-2')
-                assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['dpmsStatus']
+                assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['dpmsStatus']
                 assert [(w['id'], w['monitor']) for w in json.loads(ctl('-j', 'workspaces'))] == before_power
                 # Keep, reload, and restart share exactly the production CLI path.
                 document['displays'] = display('list')['displays']
@@ -184,7 +203,7 @@ def main():
                 assert display('status')['confirmed']['configuration_backed']
                 ctl('reload')
                 display('restore')
-                assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
+                assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
                 daemon = subprocess.Popen([str(ROOT / 'bin/hypertile-displays'), 'daemon'], env=env,
                                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 try:
@@ -192,7 +211,7 @@ def main():
                     ctl('reload')
                     deadline = time.monotonic() + 5
                     while time.monotonic() < deadline:
-                        actual = json.loads(ctl('-j', 'monitors'))
+                        actual = json.loads(ctl('-j', 'monitors', 'all'))
                         if next(m for m in actual if m['name'] == 'WAYLAND-2')['transform'] == 1:
                             break
                         time.sleep(.1)
@@ -203,13 +222,14 @@ def main():
                     monitors.write_text(saved_source.replace('transform = 1', 'transform = 0'))
                     ctl('reload')
                     time.sleep(1)
-                    assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['transform'] == 0
+                    assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['transform'] == 0
                     monitors.write_text(saved_source)
                     ctl('reload')
                     time.sleep(.5)
                     # A SIGKILL cannot strand a preview: the independent process owns timeout.
                     transient = copy.deepcopy(document)
                     transient['displays'][1]['transform'] = 0
+                    transient['displays'][1]['mirror_of'] = transient['displays'][0]['id']
                     pending = display('preview', '--json', json.dumps(transient))
                     daemon.kill()
                     daemon.wait(timeout=5)
@@ -218,7 +238,7 @@ def main():
                     while time.monotonic() < deadline and display('status')['pending']:
                         time.sleep(.25)
                     assert not display('status')['pending'], 'Watchdog did not recover after daemon SIGKILL'
-                    assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
+                    assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
                     assert display('status')['confirmed']['displays'][1]['transform'] == 1
                 finally:
                     if daemon.poll() is None:
@@ -228,7 +248,17 @@ def main():
                 pending = display('preview', '--json', json.dumps(transient))
                 display('restore')
                 assert not display('status')['pending']
-                assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
+                assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
+                # Physically remove the nested source during preview; recovery must
+                # leave the remaining output usable without persisting the preview.
+                pending = display('preview', '--json', json.dumps(transient))
+                ctl('output', 'remove', 'WAYLAND-1')
+                time.sleep(.3)
+                display('revert', pending['token'])
+                remaining = display('list')
+                assert not remaining['pending']
+                assert any(d['connected'] and d['enabled'] and not d.get('mirror_of') for d in remaining['displays']), remaining
+                print('PASS: mirror watchdog and source removal recovery')
                 print('PASS: isolated two-display rotation, power, placement, inherited/explicit layouts, future named workspaces, Keep, reload, startup recovery, independent watchdog after daemon SIGKILL')
             except Exception:
                 log.flush()

@@ -79,6 +79,20 @@ class PolicyTests(unittest.TestCase):
         with self.assertRaises(ValueError): validate(self.document)
 
 
+    def test_mirror_preferences_route_to_source_and_return_to_extended(self):
+        doc = copy.deepcopy(self.document)
+        doc['displays'][1]['mirror_of'] = 'wide'
+        ws = [self.ws('DP-2', 'name:work')]
+        moves = self.policy.plan(doc, ws, {'wide': 'DP-1'}, 'apply')
+        self.assertEqual(moves, [{'workspace': 'name:work', 'monitor': 'DP-1'}])
+        self.assertEqual(doc['workspaces']['name:work']['monitor'], 'portrait')
+        layouts = self.policy.layouts(doc, ws, {'wide': 'DP-1'}, {}, 'dwindle')
+        self.assertEqual(layouts[0]['layout'], 'lua:quad')
+        doc['displays'][1]['mirror_of'] = None
+        moves = self.policy.plan(doc, [self.ws('DP-1', 'name:work')], self.both, 'apply')
+        self.assertEqual(moves, [{'workspace': 'name:work', 'monitor': 'DP-2'}])
+
+
 class RuntimeTests(unittest.TestCase):
     class Adapter:
         def __init__(self):
@@ -167,6 +181,15 @@ class RuntimeTests(unittest.TestCase):
         self.policy.reconcile(self.doc, "reconnect")
         self.assertFalse(any(args[0] == "apply" for args in self.commands))
 
+
+    def test_mirror_inherits_source_layout_without_changing_saved_assignment(self):
+        self.doc['displays'][1]['mirror_of'] = 'wide'
+        self.doc['workspaces']['1']['monitor'] = 'portrait'
+        result = self.policy.reconcile(self.doc, 'preview')
+        self.assertEqual(self.adapter.moves, [('1', 'DP-1')])
+        self.assertEqual(result['layouts'][0]['layout'], 'dwindle')
+        self.assertEqual(self.doc['workspaces']['1']['monitor'], 'portrait')
+        self.assertEqual(self.doc['displays'][1]['default_layout'], 'master')
 
 if __name__ == "__main__":
     unittest.main()

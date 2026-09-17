@@ -209,6 +209,8 @@ class WorkspacePolicy:
             identity = preference.get("monitor")
             if not identity or key not in locations:
                 continue
+            source = next((d.get('mirror_of') for d in document.get('displays', []) if d['id'] == identity), None)
+            identity = source or identity
             # The first move when an output disappears is compositor evacuation,
             # not a user decision. Subsequent changes while absent suppress return.
             if (reason not in ("apply", "startup") and identity not in previously_available
@@ -260,6 +262,7 @@ class WorkspacePolicy:
         current = self.adapter.displays()
         return {d["id"]: actual["connector"] for d in document.get("displays", [])
                 if d.get("enabled", True) and (actual := match(d, current)) and actual["enabled"]
+                and not actual.get("mirror_of") and not d.get("mirror_of")
                 and (not actual.get("ambiguous") or d.get("explicit_match"))}
 
     def _save_runtime(self):
@@ -300,6 +303,9 @@ class WorkspacePolicy:
                 raise ValueError("Layout " + qualified[4:] + " is unavailable; choose a saved layout before applying display preferences")
 
     def reconcile(self, document, reason="event"):
+        if reason not in ("preview", "apply"):
+            from adapter import runtime_mirrors
+            document = runtime_mirrors(document, self.adapter.displays())
         validate(document)
         if not document.get("displays"):
             return {"moves": [], "layouts": []}
@@ -407,7 +413,7 @@ class WorkspacePolicy:
         # Startup alone selects initial workspaces. Reconnect never changes
         # focus; there are no persistent compositor monitor rules to fight a
         # later manual workspace move.
-        choices = [(d.get("initial_workspace"), available.get(d["id"])) for d in document.get("displays", [])]
+        choices = [(d.get("initial_workspace"), available.get(d["id"])) for d in document.get("displays", []) if not d.get("mirror_of")]
         choices = [(key, connector) for key, connector in choices if key and connector]
         if not choices:
             return
@@ -422,7 +428,7 @@ class WorkspacePolicy:
 
     def rollback(self, snapshot):
         """Best effort location recovery after monitor rollback, without focus."""
-        active = {d["connector"] for d in self.adapter.displays() if d["enabled"]}
+        active = {d["connector"] for d in self.adapter.displays() if d["enabled"] and not d.get("mirror_of")}
         existing = {selector(w) for w in self.adapter.workspaces()}
         for workspace in snapshot:
             key = selector(workspace)
@@ -450,7 +456,9 @@ def project_session(desktop, document, available, rules=None, fallback="dwindle"
         if not valid_workspace(key):
             continue
         preference = document.get("workspaces", {}).get(key, {})
-        destination = available.get(preference.get("monitor"))
+        identity = preference.get("monitor")
+        source = next((d.get("mirror_of") for d in document["displays"] if d["id"] == identity), None)
+        destination = available.get(source or identity)
         if destination:
             workspace["monitor"] = destination
         elif workspace.get("monitor") not in reverse and available:

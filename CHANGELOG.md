@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- Collapse optional display workspace preferences and remove the initial workspace
+  control from the UI, preserving saved preferences.
+
+- Add per-display mirroring in Displays, with grouped arrangement labels,
+  retained extended positions and workspace preferences, source selection,
+  source-preserving Lua saves, and preview/recovery support.
+
+
 ## Unreleased — displays and workspace placement
 
 - Automatically adopt existing monitor configuration; remove the takeover step.

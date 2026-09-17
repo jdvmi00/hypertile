@@ -22,7 +22,30 @@ closing during preview, or letting the countdown expire restores the previous
 arrangement and workspace placement where possible. A separate watchdog runs
 outside the overlay and display watcher. Confirmation is required even when
 only workspace or layout preferences change. Unsupported modes and overlapping
-screens produce an error before application; mirroring is outside this release.
+independent screens produce an error before application.
+
+## Mirroring
+
+Select a display and choose **Use as → Mirror display …** to duplicate an
+independent display. **Extended display** restores its separate desktop and
+previous position; **Disabled** removes it from the desktop. Sleep remains a
+separate temporary action.
+
+The diagram groups mirrors with their source (for example, **1 + 2**). Select
+individual physical displays from the list to change resolution and refresh.
+Mirrors have no independent desktop position, initial workspace, or default
+layout. Their saved workspace assignments temporarily use the source; their
+independent preferences remain available when returning to Extended.
+
+A mirror source must be connected, enabled, and independent. Multiple displays
+can mirror one source, alongside other extended displays. Self-mirroring,
+chains, and cycles are rejected. Different aspect ratios may stretch the image;
+mirroring does not render extra detail for a higher-resolution target.
+
+Mirroring uses the same preview countdown, Keep, and rollback as other display
+changes. Keep writes the `mirror` field into the existing Lua declaration.
+Returning to Extended explicitly clears that field. Recovery establishes source
+displays first and keeps a remaining output usable if a source disappears.
 
 ## Sleep and disable
 
@@ -39,6 +62,9 @@ hardware availability.
 
 ## Workspace preferences
 
+Expand **Workspace preferences** in the selected display’s settings to adjust
+optional layout defaults and workspace assignments. This section starts collapsed.
+
 Add a numbered workspace, or a named workspace using `name:research`, and choose
 its preferred screen. The workspace need not exist yet. Apply moves an existing
 workspace immediately; the preference also applies at startup and when the
@@ -50,9 +76,9 @@ manual move while it is absent suppresses automatic return until the assignment
 is explicitly reapplied or a new compositor session begins. Reconnect does not
 select the returning workspace or relaunch scene applications.
 
-A display's **Initial workspace** is selected during startup. Initial choices
-are coordinated with session restoration. Config reload and monitor reconnect
-preserve the user's focus.
+Previously saved initial workspace preferences still apply at startup and are
+coordinated with session restoration. This setting is no longer exposed in the
+Displays UI. Config reload and monitor reconnect preserve the user's focus.
 
 ## Layout inheritance
 
@@ -154,7 +180,10 @@ A settings document has `version: 1`, a `displays` array, and a `workspaces`
 object. Start from `display list` rather than inventing display identities.
 Each display has `id`, `identity`, `connector`, `enabled`, `width`, `height`,
 `refresh`, `scale`, `transform`, `x`, and `y`. Optional preferences are
-`default_layout`, `initial_workspace`, and `explicit_match`. Workspace entries
+`default_layout`, `initial_workspace`, `explicit_match`, and `mirror_of` (a saved
+display ID, or `null` for Extended). `extended_position` retains `{ "x": …,
+"y": … }` for returning from mirroring. `mirror_connector` is runtime readback;
+preview resolves connectors from `mirror_of` rather than trusting that field. Workspace entries
 use selectors as keys and `{ "monitor": "saved-display-id", "layout": null }`
 as values; `null` inherits, while a layout string is explicit. Custom layouts
 use the `lua:` prefix. Display transforms use Hyprland's values 0–7.

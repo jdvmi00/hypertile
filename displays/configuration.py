@@ -167,6 +167,12 @@ class Configuration:
             fields = {key: values[key] for key, names in groups.items()
                       if any(abs(float(d[n]) - float(old[n])) > (0.01 if n == 'refresh' else .0001 if n == 'scale' else 0)
                              if n in old else True for n in names)}
+            target = d.get('mirror_of')
+            source = next((m for m in document['displays'] if m['id'] == target), None)
+            mirror = source['connector'] if source else ''
+            old_mirror = old.get('mirror_connector') or ''
+            if mirror != old_mirror or ('disabled' in fields and ('mirror_of' in d or old.get('mirror_of'))):
+                fields['mirror'] = lua_string(mirror)
             if fields:
                 changes.append((d, fields))
         if not changes:

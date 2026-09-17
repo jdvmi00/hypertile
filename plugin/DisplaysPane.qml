@@ -28,6 +28,7 @@ Card {
             value: display.connector
         };
     }))
+    property bool workspacePreferencesExpanded: false
     property bool dirty: false
     property bool closeAfterRevert: false
     property string error: ""
@@ -142,6 +143,8 @@ Card {
         dirty = true;
     }
     function setPosition(index, x, y) {
+        if (draft.displays[index].mirror_of)
+            return;
         var next = Displays.clone(draft);
         next.displays[index].x = Math.round(x);
         next.displays[index].y = Math.round(y);
@@ -544,14 +547,15 @@ Card {
                             readonly property var modelData: pane.draft.displays[index]
                             required property int index
                             readonly property var logical: Displays.bounds(modelData)
-                            visible: modelData.connected && modelData.enabled
+                            readonly property bool selectedGroup: index === pane.selectedIndex || (!!pane.selectedDisplay && pane.selectedDisplay.mirror_of === modelData.id)
+                            visible: modelData.connected && modelData.enabled && !modelData.mirror_of
                             x: (logical.x - diagram.extent.x) * diagram.factor + (diagram.width - diagram.extent.w * diagram.factor) / 2
                             y: (logical.y - diagram.extent.y) * diagram.factor + (diagram.height - diagram.extent.h * diagram.factor) / 2
                             width: Math.max(16, logical.w * diagram.factor)
                             height: Math.max(16, logical.h * diagram.factor)
                             radius: 8
-                            color: Util.alpha(pane.overlay.accent, index === pane.selectedIndex ? .25 : .07)
-                            border.color: index === pane.selectedIndex ? pane.overlay.accent : Util.alpha(pane.fg, .45)
+                            color: Util.alpha(pane.overlay.accent, selectedGroup ? .25 : .07)
+                            border.color: selectedGroup ? pane.overlay.accent : Util.alpha(pane.fg, .45)
                             border.width: activeFocus ? 3 : 2
                             activeFocusOnTab: true
                             Accessible.role: Accessible.Button
@@ -579,7 +583,7 @@ Card {
                                 spacing: 4
                                 Label {
                                     width: parent.width
-                                    text: String(screen.index + 1)
+                                    text: Displays.groupLabel(pane.draft.displays, screen.index)
                                     font.pixelSize: Math.min(pane.overlay.uiFont * 1.5, screen.height * .45)
                                     font.bold: true
                                     horizontalAlignment: Text.AlignHCenter
@@ -633,7 +637,9 @@ Card {
                         Action {
                             readonly property var modelData: pane.draft.displays[index]
                             required property int index
-                            text: (index + 1) + " · " + modelData.connector + (!modelData.connected ? " · disconnected" : !modelData.enabled ? " · disabled" : "")
+                            text: (index + 1) + " · " + modelData.connector + (!modelData.connected ? " · disconnected" : !modelData.enabled ? " · disabled" : modelData.mirror_of ? " · mirrors " + ((pane.draft.displays.findIndex(function (d) {
+                                            return d.id === modelData.mirror_of;
+                                        })) + 1) : "")
                             primary: index === pane.selectedIndex
                             onClicked: pane.selectedIndex = index
                         }
@@ -742,13 +748,34 @@ Card {
                         color: pane.muted
                     }
 
+                    Label {
+                        text: "Use as"
+                        font.bold: true
+                    }
+                    Choice {
+                        width: parent.width
+                        accessibleLabel: "Use display as"
+                        enabled: !!pane.selectedDisplay && pane.selectedDisplay.connected
+                        model: pane.selectedDisplay ? Displays.usageOptions(pane.draft.displays, pane.selectedDisplay) : []
+                        textRole: "label"
+                        currentIndex: Math.max(0, model.findIndex(function (o) {
+                            return o.value === (!pane.selectedDisplay.enabled ? "disabled" : pane.selectedDisplay.mirror_of || "extended");
+                        }))
+                        onActivated: function (index) {
+                            pane.draft = Displays.setUsage(pane.draft, pane.selectedIndex, model[index].value);
+                            pane.dirty = true;
+                        }
+                    }
+                    Label {
+                        width: parent.width
+                        visible: !!pane.selectedDisplay && !!pane.selectedDisplay.mirror_of
+                        text: "Workspaces and layout follow display " + (pane.selectedDisplay ? pane.draft.displays.findIndex(function (d) {
+                                return d.id === pane.selectedDisplay.mirror_of;
+                            }) + 1 : "") + ". Independent preferences are retained for Extended display. Different aspect ratios may stretch the image."
+                        color: pane.muted
+                    }
                     Row {
                         spacing: 8
-                        Action {
-                            text: pane.selectedDisplay && pane.selectedDisplay.enabled ? "Disable display" : "Enable display"
-                            enabled: !!pane.selectedDisplay && pane.selectedDisplay.connected
-                            onClicked: pane.setDisplay("enabled", !pane.selectedDisplay.enabled)
-                        }
                         Action {
                             text: "Identify"
                             enabled: !!pane.selectedDisplay && pane.selectedDisplay.connected
@@ -842,6 +869,7 @@ Card {
                     Row {
                         width: parent.width
                         spacing: 12
+                        enabled: !!pane.selectedDisplay && !pane.selectedDisplay.mirror_of
                         Repeater {
                             model: ["x", "y"]
                             Column {
@@ -871,112 +899,115 @@ Card {
                         height: 1
                         color: Util.alpha(pane.fg, .2)
                     }
-                    Label {
-                        text: "Default layout for this monitor"
-                        font.bold: true
-                    }
-                    Choice {
+                    Action {
                         width: parent.width
-                        accessibleLabel: "Default layout for this monitor"
-                        model: pane.layoutOptions
-                        textRole: "label"
-                        currentIndex: Math.max(0, pane.layoutOptions.findIndex(function (l) {
-                            return l.value === (pane.selectedDisplay ? pane.selectedDisplay.default_layout || null : null);
-                        }))
-                        onActivated: function (index) {
-                            pane.setDisplay("default_layout", pane.layoutOptions[index].value);
-                        }
+                        text: (pane.workspacePreferencesExpanded ? "▾ " : "▸ ") + "Workspace preferences"
+                        Accessible.name: "Workspace preferences"
+                        Accessible.description: pane.workspacePreferencesExpanded ? "Expanded" : "Collapsed"
+                        onClicked: pane.workspacePreferencesExpanded = !pane.workspacePreferencesExpanded
                     }
-                    Label {
-                        width: parent.width
-                        text: "Applies to inheriting workspaces, including future ones. Explicit workspace layouts stay unchanged."
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
-                    }
-                    Label {
-                        text: "Initial workspace"
-                        font.bold: true
-                    }
-                    Entry {
-                        width: parent.width
-                        accessibleLabel: "Initial workspace"
-                        placeholderText: "Automatic"
-                        text: pane.selectedDisplay ? pane.selectedDisplay.initial_workspace || "" : ""
-                        onEditingFinished: pane.setDisplay("initial_workspace", text.trim() || null)
-                    }
-                    Label {
-                        text: "Workspaces on this monitor"
-                        font.bold: true
-                    }
-                    Repeater {
-                        model: pane.selectedAssignments()
-                        Column {
-                            required property string modelData
-                            width: settings.width
-                            spacing: 6
-                            Label {
-                                width: parent.width
-                                text: "Workspace " + modelData.replace(/^name:/, "")
-                            }
-                            Row {
-                                width: parent.width
-                                spacing: 8
-                                Choice {
-                                    width: parent.width - removeAssignment.width - parent.spacing
-                                    accessibleLabel: "Layout for workspace " + modelData.replace(/^name:/, "")
-                                    model: [
-                                        {
-                                            label: "Monitor default",
-                                            value: null
-                                        }
-                                    ].concat(pane.layoutOptions.slice(1))
-                                    textRole: "label"
-                                    currentIndex: Math.max(0, model.findIndex(function (l) {
-                                        return l.value === (pane.draft.workspaces[modelData].layout || null);
-                                    }))
-                                    onActivated: function (index) {
-                                        pane.setAssignment(modelData, model[index].value);
-                                    }
-                                }
-                                Action {
-                                    id: removeAssignment
-                                    text: "Remove"
-                                    Accessible.name: "Remove monitor assignment for workspace " + modelData.replace(/^name:/, "")
-                                    onClicked: {
-                                        var next = Displays.clone(pane.draft);
-                                        delete next.workspaces[modelData].monitor;
-                                        pane.draft = next;
-                                        pane.dirty = true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Row {
+                    Column {
                         width: parent.width
                         spacing: 8
-                        Entry {
-                            id: workspaceField
-                            width: parent.width - addAssignment.width - parent.spacing
-                            placeholderText: "Number or workspace name"
-                            onAccepted: {
-                                pane.setAssignment(text, null, true);
-                                text = "";
+                        visible: pane.workspacePreferencesExpanded
+                        enabled: !!pane.selectedDisplay && !pane.selectedDisplay.mirror_of
+                        Label {
+                            text: "Default layout for this monitor"
+                            font.bold: true
+                        }
+                        Choice {
+                            width: parent.width
+                            accessibleLabel: "Default layout for this monitor"
+                            model: pane.layoutOptions
+                            textRole: "label"
+                            currentIndex: Math.max(0, pane.layoutOptions.findIndex(function (l) {
+                                return l.value === (pane.selectedDisplay ? pane.selectedDisplay.default_layout || null : null);
+                            }))
+                            onActivated: function (index) {
+                                pane.setDisplay("default_layout", pane.layoutOptions[index].value);
                             }
                         }
-                        Action {
-                            id: addAssignment
-                            text: "Add"
-                            Accessible.name: "Assign workspace to this monitor"
-                            enabled: workspaceField.text.trim() !== ""
-                            onClicked: {
-                                pane.setAssignment(workspaceField.text, null, true);
-                                workspaceField.text = "";
+                        Label {
+                            width: parent.width
+                            text: "Applies to inheriting workspaces, including future ones. Explicit workspace layouts stay unchanged."
+                            color: pane.muted
+                            font.pixelSize: pane.overlay.uiCaption
+                        }
+                        Label {
+                            text: "Workspaces on this monitor"
+                            font.bold: true
+                        }
+                        Repeater {
+                            model: pane.selectedAssignments()
+                            Column {
+                                required property string modelData
+                                width: settings.width
+                                spacing: 6
+                                Label {
+                                    width: parent.width
+                                    text: "Workspace " + modelData.replace(/^name:/, "")
+                                }
+                                Row {
+                                    width: parent.width
+                                    spacing: 8
+                                    Choice {
+                                        width: parent.width - removeAssignment.width - parent.spacing
+                                        accessibleLabel: "Layout for workspace " + modelData.replace(/^name:/, "")
+                                        model: [
+                                            {
+                                                label: "Monitor default",
+                                                value: null
+                                            }
+                                        ].concat(pane.layoutOptions.slice(1))
+                                        textRole: "label"
+                                        currentIndex: Math.max(0, model.findIndex(function (l) {
+                                            return l.value === (pane.draft.workspaces[modelData].layout || null);
+                                        }))
+                                        onActivated: function (index) {
+                                            pane.setAssignment(modelData, model[index].value);
+                                        }
+                                    }
+                                    Action {
+                                        id: removeAssignment
+                                        text: "Remove"
+                                        Accessible.name: "Remove monitor assignment for workspace " + modelData.replace(/^name:/, "")
+                                        onClicked: {
+                                            var next = Displays.clone(pane.draft);
+                                            delete next.workspaces[modelData].monitor;
+                                            pane.draft = next;
+                                            pane.dirty = true;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        Row {
+                            width: parent.width
+                            spacing: 8
+                            Entry {
+                                id: workspaceField
+                                width: parent.width - addAssignment.width - parent.spacing
+                                placeholderText: "Number or workspace name"
+                                onAccepted: {
+                                    pane.setAssignment(text, null, true);
+                                    text = "";
+                                }
+                            }
+                            Action {
+                                id: addAssignment
+                                text: "Add"
+                                Accessible.name: "Assign workspace to this monitor"
+                                enabled: workspaceField.text.trim() !== ""
+                                onClicked: {
+                                    pane.setAssignment(workspaceField.text, null, true);
+                                    workspaceField.text = "";
+                                }
                             }
                         }
                     }
                     Label {
                         width: parent.width
+                        visible: pane.workspacePreferencesExpanded
                         text: "Applying moves existing workspaces and remembers placement for future workspaces. Active scenes keep their required layout; replace the scene from Layouts to change it."
                         color: pane.muted
                         font.pixelSize: pane.overlay.uiCaption

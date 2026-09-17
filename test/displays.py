@@ -337,4 +337,84 @@ class Tests(unittest.TestCase):
         doc = self.doc(); doc['displays'][0]['scale'] = float('nan')
         with self.assertRaisesRegex(DisplayError, 'finite'): validate(doc, self.adapter.displays())
 
+    def test_mirror_readback_resolves_numeric_monitor_id(self):
+        monitors = [dict(name='DP-1', id=0, width=1920, height=1080, refreshRate=60, x=0, y=0, scale=1, mirrorOf='none'),
+                    dict(name='DP-2', id=1, width=1920, height=1080, refreshRate=60, x=0, y=0, scale=1, mirrorOf='0')]
+        actual = normalized(monitors)
+        self.assertEqual(actual[1]['mirror_of'], actual[0]['id'])
+        self.assertEqual(actual[1]['mirror_connector'], 'DP-1')
+        monitors[1]['mirrorOf'] = 'DP-1'
+        self.assertEqual(normalized(monitors), actual)
+
+    def test_mirror_transaction_and_clear(self):
+        doc = self.doc()
+        doc['displays'][1]['mirror_of'] = doc['displays'][0]['id']
+        doc['displays'][1]['x'] = 0
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertEqual(self.adapter.current[1]['mirror_connector'], 'DP-1')
+        self.service.keep(pending['token'])
+        catalog = self.service.catalog()
+        self.assertEqual(catalog['displays'][1]['extended_position'], dict(x=1920, y=0))
+        extended = dict(version=1, displays=catalog['displays'])
+        extended['displays'][1].update(mirror_of=None, x=1920)
+        pending = self.service.preview(extended, watchdog=False)
+        self.assertFalse(self.adapter.current[1].get('mirror_connector'))
+        self.service.revert(pending['token'])
+        self.assertEqual(self.adapter.current[1]['mirror_connector'], 'DP-1')
+
+    def test_mirror_validation(self):
+        for source in ('connector:DP-2', 'missing'):
+            doc = self.doc()
+            doc['displays'][1]['mirror_of'] = source
+            with self.assertRaisesRegex(DisplayError, 'independent'):
+                validate(doc, self.adapter.displays())
+        doc = self.doc()
+        doc['displays'][0]['mirror_of'] = doc['displays'][1]['id']
+        doc['displays'][1]['mirror_of'] = doc['displays'][0]['id']
+        with self.assertRaisesRegex(DisplayError, 'chains and cycles'):
+            validate(doc, self.adapter.displays())
+        doc['displays'][0].update(mirror_of=None, enabled=False)
+        with self.assertRaisesRegex(DisplayError, 'connected and enabled'):
+            validate(doc, self.adapter.displays())
+        doc['displays'][0]['enabled'] = True
+        with self.assertRaisesRegex(DisplayError, 'connected and enabled'):
+            validate(doc, self.adapter.displays()[1:])
+
+    def test_mirror_source_applied_first_and_source_unplug_rollback(self):
+        doc = self.doc()
+        doc['displays'][0]['mirror_of'] = doc['displays'][1]['id']
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertEqual(self.adapter.calls[0][1], 'DP-2')
+        self.adapter.current = self.adapter.current[:1]
+        result = self.service.revert(pending['token'])
+        self.assertFalse(result['errors'])
+        self.assertTrue(self.adapter.current[0]['enabled'])
+        self.assertFalse(self.adapter.current[0].get('mirror_of'))
+
+    def test_rollback_to_mirror_with_missing_source_promotes_remaining_output(self):
+        self.adapter.current[1].update(mirror_of=self.adapter.current[0]['id'], mirror_connector='DP-1')
+        doc = self.doc()
+        doc['displays'][1].update(mirror_of=None, x=1920)
+        pending = self.service.preview(doc, watchdog=False)
+        self.adapter.current = self.adapter.current[1:]
+        result = self.service.revert(pending['token'])
+        self.assertTrue(result['fallback'])
+        self.assertFalse(result['errors'])
+        self.assertFalse(self.adapter.current[0].get('mirror_of'))
+
+    def test_mirror_readback_ignores_position_but_requires_relationship(self):
+        from adapter import same
+        a = dict(display(), mirror_of='connector:DP-2', mirror_connector='DP-2')
+        self.assertTrue(same(a, dict(a, x=1920)))
+        self.assertFalse(same(a, dict(a, mirror_connector='DP-3')))
+        self.assertFalse(same(a, dict(a, mirror_of=None, mirror_connector=None)))
+
+    def test_runtime_mirrors_follow_external_changes_without_rewriting_preferences(self):
+        from adapter import runtime_mirrors
+        doc = self.doc()
+        doc['displays'][1]['mirror_of'] = doc['displays'][0]['id']
+        actual = runtime_mirrors(doc, self.adapter.displays())
+        self.assertIsNone(actual['displays'][1]['mirror_of'])
+        self.assertEqual(doc['displays'][1]['mirror_of'], doc['displays'][0]['id'])
+
 if __name__ == '__main__': unittest.main()

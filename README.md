@@ -197,7 +197,7 @@ default, and keeps the overlay open.
 
 ### Displays tab
 
-Choose **Displays** to arrange screens, change modes, scale and rotation, manage
+Choose **Displays** to arrange or mirror screens, change modes, scale and rotation, manage
 power, and assign workspaces and monitor layout defaults. Changes use a
 15-second Keep/Revert preview with an independent rollback watchdog. Existing
 monitor configuration is adopted automatically; Keep saves adjusted fields to

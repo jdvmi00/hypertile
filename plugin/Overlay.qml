@@ -346,7 +346,7 @@ Item {
     var desired = document || ((displaysPane.pending || displaysPane.busy) ? displaysPane.draft : null)
     function usable(screen) {
       if (!desired) return true
-      return desired.displays.some(function(d) { return d.connector === screen.name && d.enabled && d.connected !== false })
+      return desired.displays.some(function(d) { return d.connector === screen.name && d.enabled && !d.mirror_of && d.connected !== false })
     }
     if (window.screen && screens.indexOf(window.screen) !== -1 && usable(window.screen)) return
     for (var i = 0; i < screens.length; ++i) {
