@@ -20,7 +20,8 @@ console.log('Display diagram geometry, snapping, scaling, rotation and modes pas
 const qml = fs.readFileSync('plugin/DisplaysPane.qml', 'utf8')
 function helper(name) {
     const start = qml.indexOf('    function ' + name + '(')
-    const end = qml.indexOf('    function ', start + 5)
+    const ends = [qml.indexOf('    function ', start + 5), qml.indexOf('    Component.onCompleted', start + 5)].filter(i => i > start)
+    const end = ends.length ? Math.min(...ends) : -1
     assert(start >= 0 && end > start, 'helper must remain extractable: ' + name)
     return qml.slice(start, end)
 }
@@ -42,6 +43,55 @@ assert.strictEqual(pane.serviceError('{"error":"Last display cannot be disabled"
 assert.strictEqual(pane.serviceError('not json', ' adapter unavailable \n', 'fallback'), 'adapter unavailable')
 assert.strictEqual(pane.serviceError('', '', 'fallback'), 'fallback')
 console.log('Display workspace provenance and actionable service errors passed')
+// Power controls follow the compositor, not the unsaved draft.
+const power = {
+    catalog: {displays: [
+        {id:'a', connector:'HDMI-A-1', connected:true, enabled:true, awake:true},
+        {id:'b', connector:'DP-1', connected:true, enabled:true, awake:false},
+        {id:'c', connector:'DP-2', connected:true, enabled:false, awake:false},
+    ]},
+}
+vm.runInNewContext(helper('liveFor') + helper('isAsleep'), power)
+assert.strictEqual(power.liveFor({connector:'DP-1', connected:true}).id, 'b')
+assert.strictEqual(power.liveFor({connector:'DP-1', connected:false}), null, 'a saved, disconnected entry has no live power state')
+assert.strictEqual(power.liveFor({connector:'DP-9', connected:true}), null)
+assert.strictEqual(power.liveFor(null), null)
+assert.strictEqual(power.isAsleep({connector:'HDMI-A-1', connected:true}), false)
+assert.strictEqual(power.isAsleep({connector:'DP-1', connected:true, enabled:false}), true, 'draft edits never change the live power state')
+assert.strictEqual(power.isAsleep({connector:'DP-2', connected:true}), false, 'a disabled output is off, not asleep')
+power.catalog = null
+assert.strictEqual(power.isAsleep({connector:'DP-1', connected:true}), false)
+console.log('Display power state reads the compositor catalog passed')
+// Closing never drops unsaved edits silently; a pending preview reverts first.
+function closing(state) {
+    const ctx = Object.assign({closed: 0, reverted: 0, refreshed: 0, notice: '', closeAfterRevert: false, confirmingDiscard: false, pending: null, dirty: false}, state)
+    ctx.closeRequested = () => ctx.closed++
+    ctx.run = () => ctx.reverted++
+    ctx.refresh = () => ctx.refreshed++
+    ctx.Qt = {Key_Escape: 1, Key_Return: 2, Key_Enter: 3, Key_D: 4, ControlModifier: 8, AltModifier: 16, MetaModifier: 32}
+    vm.runInNewContext(['requestClose', 'discardAndClose', 'keepEditing', 'handleKey', 'revert'].map(helper).join(''), ctx)
+    return ctx
+}
+let close = closing({})
+close.requestClose()
+assert.deepStrictEqual([close.closed, close.confirmingDiscard], [1, false], 'a clean pane closes at once')
+close = closing({dirty: true})
+close.requestClose()
+assert.deepStrictEqual([close.closed, close.confirmingDiscard, close.dirty], [0, true, true], 'a dirty pane asks first')
+assert.strictEqual(close.handleKey({key: 1, modifiers: 0}), true)
+assert.deepStrictEqual([close.closed, close.confirmingDiscard, close.dirty], [0, false, true], 'Escape keeps editing')
+close.requestClose()
+assert.strictEqual(close.handleKey({key: 4, modifiers: 8}), true)
+assert.strictEqual(close.closed, 0, 'Ctrl+D is not a discard')
+assert.strictEqual(close.handleKey({key: 4, modifiers: 0}), true)
+assert.deepStrictEqual([close.closed, close.confirmingDiscard, close.dirty], [1, false, false], 'D discards and closes')
+close = closing({dirty: true, pending: {token: 't'}})
+close.requestClose()
+assert.deepStrictEqual([close.reverted, close.closeAfterRevert, close.confirmingDiscard], [1, true, false], 'a preview reverts instead of asking')
+close = closing({dirty: true, confirmingDiscard: true})
+close.revert()
+assert.deepStrictEqual([close.confirmingDiscard, close.dirty, close.refreshed], [false, false, 1], 'Reset clears the confirmation')
+console.log('Display close confirmation, keys and preview revert passed')
 
 const matching = {
     version:1,

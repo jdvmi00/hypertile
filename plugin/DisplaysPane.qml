@@ -31,10 +31,16 @@ Card {
     property bool workspacePreferencesExpanded: false
     property bool dirty: false
     property bool closeAfterRevert: false
+    property bool confirmingDiscard: false
+    property string identifyConnector: ""
     property string error: ""
     property string notice: ""
     property var pending: null
     property string focusedPreviewToken: ""
+    onConfirmingDiscardChanged: if (confirmingDiscard)
+        Qt.callLater(function () {
+            keepEditingAction.forceActiveFocus();
+        })
     onPendingChanged: {
         if (pending && pending.token !== focusedPreviewToken) {
             focusedPreviewToken = pending.token;
@@ -47,6 +53,22 @@ Card {
     property double clock: Date.now() / 1000
     readonly property bool busy: commandProcess.running
     readonly property var selectedDisplay: draft.displays[selectedIndex] || null
+    // Power state is read from the compositor, never from the unsaved draft.
+    readonly property var liveDisplay: liveFor(selectedDisplay)
+    readonly property bool selectedAsleep: isAsleep(selectedDisplay)
+    // A disabled display may keep a dormant mirror target; only an enabled one mirrors.
+    readonly property bool selectedMirrors: !!selectedDisplay && !!selectedDisplay.enabled && !!selectedDisplay.mirror_of
+    readonly property int asleepCount: catalog ? (catalog.displays || []).filter(function (d) {
+        return d.connected && d.enabled && d.awake === false;
+    }).length : 0
+    onVisibleChanged: {
+        if (visible)
+            Qt.callLater(function () {
+                pane.forceActiveFocus();
+            });
+        else
+            overlay.focusKeys();
+    }
     readonly property int remaining: pending ? Math.max(0, Math.ceil(Number(pending.deadline || pending.expires_at || 0) - clock)) : 0
     readonly property color fg: overlay.foreground
     readonly property color muted: overlay.mutedForeground
@@ -90,6 +112,17 @@ Card {
         } catch (e) {}
         return String(stderr || "").trim() || fallback;
     }
+    function liveFor(display) {
+        if (!display || !display.connected || !catalog)
+            return null;
+        return (catalog.displays || []).find(function (d) {
+            return d.connected && d.connector === display.connector;
+        }) || null;
+    }
+    function isAsleep(display) {
+        var live = liveFor(display);
+        return !!live && !!live.enabled && live.awake === false;
+    }
     function matchSelectedDisplay() {
         if (busy || pending || !selectedDisplay)
             return;
@@ -124,7 +157,8 @@ Card {
         else if (y + item.height > inspector.contentY + inspector.height - 36)
             inspector.contentY = Math.min(Math.max(0, inspector.contentHeight - inspector.height), y + item.height - inspector.height + 36);
     }
-    function identify() {
+    function identify(connector) {
+        identifyConnector = connector || "";
         identifyTimer.restart();
     }
     function refresh() {
@@ -134,6 +168,7 @@ Card {
     function setDisplay(key, value) {
         if (!selectedDisplay || pending || busy)
             return;
+        confirmingDiscard = false;
         var previous = selectedDisplay[key];
         if (previous === value || (value === null && previous === undefined))
             return;
@@ -165,6 +200,7 @@ Card {
         run(args);
     }
     function revert() {
+        confirmingDiscard = false;
         if (pending)
             run(["revert", pending.token]);
         else {
@@ -177,8 +213,18 @@ Card {
             closeAfterRevert = true;
             revert();
             notice = "Reverting display changes before closing.";
-        } else
+        } else if (dirty)
+            confirmingDiscard = true;
+        else
             closeRequested();
+    }
+    function discardAndClose() {
+        confirmingDiscard = false;
+        dirty = false;
+        closeRequested();
+    }
+    function keepEditing() {
+        confirmingDiscard = false;
     }
     function setAssignment(name, layout, preserveLayout) {
         name = name.trim();
@@ -205,6 +251,17 @@ Card {
         });
     }
     function handleKey(event) {
+        if (confirmingDiscard) {
+            if (event.key === Qt.Key_Escape || event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+                keepEditing();
+                return true;
+            }
+            if (event.key === Qt.Key_D && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
+                discardAndClose();
+                return true;
+            }
+            return true;
+        }
         if (event.key === Qt.Key_Escape) {
             requestClose();
             return true;
@@ -221,7 +278,7 @@ Card {
         PanelWindow {
             required property var modelData
             screen: modelData
-            visible: identifyTimer.running
+            visible: identifyTimer.running && (pane.identifyConnector === "" || pane.identifyConnector === modelData.name)
             anchors {
                 top: true
             }
@@ -344,6 +401,10 @@ Card {
                         pane.pending = result;
                     pane.notice = result.message || "";
                 } catch (e) {}
+                if (command[2] === "sleep")
+                    pane.notice = "Display asleep. Wake it from here, or press a key if no other display is awake.";
+                else if (command[2] === "wake")
+                    pane.notice = command.length > 3 ? "Display awake." : "All displays awake.";
                 if (command[2] === "keep" || command[2] === "revert") {
                     pane.pending = null;
                     pane.dirty = false;
@@ -367,9 +428,12 @@ Card {
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
     }
+    // primary marks the one call to action; selected marks the current tab or
+    // display. A disabled button drops both so it never reads as a live choice.
     component Action: Controls.Button {
         id: action
         property bool primary: false
+        property bool selected: false
         onActiveFocusChanged: if (activeFocus)
             pane.revealInspectorControl(this)
         font.family: pane.overlay.fontFamily
@@ -383,9 +447,9 @@ Card {
         }
         background: Rectangle {
             radius: pane.overlay.radiusControl
-            color: Util.alpha(pane.overlay.accent, action.primary ? .23 : action.hovered ? .13 : .05)
+            color: !action.enabled ? Util.alpha(pane.fg, .02) : Util.alpha(pane.overlay.accent, action.primary ? (action.hovered ? .3 : .23) : action.selected ? (action.hovered ? .19 : .14) : action.hovered ? .1 : .05)
             border.width: action.activeFocus ? 2 : 1
-            border.color: action.activeFocus || action.primary ? pane.overlay.accent : Util.alpha(pane.fg, .25)
+            border.color: !action.enabled ? Util.alpha(pane.fg, .12) : action.activeFocus || action.primary || action.selected ? pane.overlay.accent : Util.alpha(pane.fg, .25)
         }
     }
     component Entry: Controls.TextField {
@@ -491,7 +555,7 @@ Card {
                 }
                 Action {
                     text: "Displays"
-                    primary: true
+                    selected: true
                 }
             }
             Row {
@@ -500,7 +564,8 @@ Card {
                 spacing: 8
                 Action {
                     text: "Wake all"
-                    enabled: !pane.busy
+                    visible: pane.asleepCount > 0
+                    enabled: !pane.busy && !pane.pending
                     onClicked: pane.run(["wake"])
                 }
                 Action {
@@ -547,8 +612,10 @@ Card {
                             readonly property var modelData: pane.draft.displays[index]
                             required property int index
                             readonly property var logical: Displays.bounds(modelData)
-                            readonly property bool selectedGroup: index === pane.selectedIndex || (!!pane.selectedDisplay && pane.selectedDisplay.mirror_of === modelData.id)
+                            readonly property bool selectedGroup: index === pane.selectedIndex || (pane.selectedMirrors && pane.selectedDisplay.mirror_of === modelData.id)
+                            readonly property bool asleep: pane.isAsleep(modelData)
                             visible: modelData.connected && modelData.enabled && !modelData.mirror_of
+                            opacity: asleep ? .55 : 1
                             x: (logical.x - diagram.extent.x) * diagram.factor + (diagram.width - diagram.extent.w * diagram.factor) / 2
                             y: (logical.y - diagram.extent.y) * diagram.factor + (diagram.height - diagram.extent.h * diagram.factor) / 2
                             width: Math.max(16, logical.w * diagram.factor)
@@ -590,7 +657,7 @@ Card {
                                 }
                                 Label {
                                     width: parent.width
-                                    text: screen.modelData.connector
+                                    text: screen.modelData.connector + (screen.asleep ? " · asleep" : "")
                                     visible: screen.height > pane.overlay.uiFont * 3.8 && screen.width > pane.overlay.uiFont * 5
                                     font.pixelSize: pane.overlay.uiCaption
                                     horizontalAlignment: Text.AlignHCenter
@@ -639,8 +706,8 @@ Card {
                             required property int index
                             text: (index + 1) + " · " + modelData.connector + (!modelData.connected ? " · disconnected" : !modelData.enabled ? " · disabled" : modelData.mirror_of ? " · mirrors " + ((pane.draft.displays.findIndex(function (d) {
                                             return d.id === modelData.mirror_of;
-                                        })) + 1) : "")
-                            primary: index === pane.selectedIndex
+                                        })) + 1) : pane.isAsleep(modelData) ? " · asleep" : "")
+                            selected: index === pane.selectedIndex
                             onClicked: pane.selectedIndex = index
                         }
                     }
@@ -712,6 +779,12 @@ Card {
                         text: "Disconnected · saved settings and workspace assignments are retained."
                         color: pane.muted
                     }
+                    Label {
+                        width: parent.width
+                        visible: pane.selectedAsleep
+                        text: "Asleep · the display is off until you wake it."
+                        color: pane.overlay.accent
+                    }
                     Column {
                         width: parent.width
                         spacing: 8
@@ -768,7 +841,7 @@ Card {
                     }
                     Label {
                         width: parent.width
-                        visible: !!pane.selectedDisplay && !!pane.selectedDisplay.mirror_of
+                        visible: pane.selectedMirrors
                         text: "Workspaces and layout follow display " + (pane.selectedDisplay ? pane.draft.displays.findIndex(function (d) {
                                 return d.id === pane.selectedDisplay.mirror_of;
                             }) + 1 : "") + ". Independent preferences are retained for Extended display. Different aspect ratios may stretch the image."
@@ -777,27 +850,21 @@ Card {
                     Row {
                         spacing: 8
                         Action {
-                            text: "Identify"
-                            enabled: !!pane.selectedDisplay && pane.selectedDisplay.connected
-                            onClicked: identifyTimer.restart()
-                        }
-                    }
-                    Row {
-                        spacing: 8
-                        Action {
-                            text: "Sleep display"
-                            enabled: !!pane.selectedDisplay && pane.selectedDisplay.enabled
-                            onClicked: pane.run(["sleep", pane.selectedDisplay.connector])
+                            text: identifyTimer.running ? "Identifying…" : "Identify"
+                            enabled: !!pane.liveDisplay && !!pane.liveDisplay.enabled && !identifyTimer.running
+                            onClicked: pane.identify(pane.selectedDisplay.connector)
                         }
                         Action {
-                            text: "Wake"
-                            enabled: !!pane.selectedDisplay && pane.selectedDisplay.connected
-                            onClicked: pane.run(["wake", pane.selectedDisplay.connector])
+                            // One button follows the compositor's power state, so
+                            // it never offers to wake a display that is already on.
+                            text: pane.selectedAsleep ? "Wake display" : "Sleep display"
+                            enabled: !!pane.liveDisplay && !!pane.liveDisplay.enabled
+                            onClicked: pane.run([pane.selectedAsleep ? "wake" : "sleep", pane.selectedDisplay.connector])
                         }
                     }
                     Label {
                         width: parent.width
-                        text: "Sleep is temporary and keeps workspaces in place. Press a keyboard key to wake."
+                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep and Identify need a connected, enabled display."
                         color: pane.muted
                         font.pixelSize: pane.overlay.uiCaption
                     }
@@ -869,7 +936,7 @@ Card {
                     Row {
                         width: parent.width
                         spacing: 12
-                        enabled: !!pane.selectedDisplay && !pane.selectedDisplay.mirror_of
+                        enabled: !!pane.selectedDisplay && !pane.selectedMirrors
                         Repeater {
                             model: ["x", "y"]
                             Column {
@@ -910,7 +977,7 @@ Card {
                         width: parent.width
                         spacing: 8
                         visible: pane.workspacePreferencesExpanded
-                        enabled: !!pane.selectedDisplay && !pane.selectedDisplay.mirror_of
+                        enabled: !!pane.selectedDisplay && !pane.selectedMirrors
                         Label {
                             text: "Default layout for this monitor"
                             font.bold: true
@@ -1026,7 +1093,7 @@ Card {
             width: parent.width
             height: Math.max(64, footerText.implicitHeight + 24)
             radius: pane.overlay.radiusControl
-            color: Util.alpha(pane.pending ? pane.overlay.accent : pane.fg, .06)
+            color: pane.confirmingDiscard ? Util.alpha(Color.urgent, .1) : Util.alpha(pane.pending ? pane.overlay.accent : pane.fg, .06)
             Row {
                 id: footerActions
                 anchors.right: parent.right
@@ -1034,19 +1101,42 @@ Card {
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 8
                 Action {
+                    id: discardAction
+                    visible: pane.confirmingDiscard
+                    text: "Discard"
+                    Accessible.description: "Close and drop the unsaved display changes (D)"
+                    onClicked: pane.discardAndClose()
+                    contentItem: Label {
+                        text: discardAction.text
+                        color: Color.urgent
+                        horizontalAlignment: Text.AlignHCenter
+                        verticalAlignment: Text.AlignVCenter
+                    }
+                }
+                Action {
+                    id: keepEditingAction
+                    visible: pane.confirmingDiscard
+                    text: "Keep editing"
+                    primary: true
+                    Accessible.description: "Return to the unsaved changes (Esc)"
+                    onClicked: pane.keepEditing()
+                }
+                Action {
+                    visible: !pane.confirmingDiscard
                     text: pane.pending ? "Revert" : "Reset"
                     enabled: !pane.busy && (pane.dirty || !!pane.pending)
                     onClicked: pane.revert()
                 }
                 Action {
                     id: keepAction
+                    visible: !pane.confirmingDiscard
                     text: pane.pending ? "Keep changes" : "Preview changes"
                     primary: true
                     enabled: !pane.busy && (pane.dirty || !!pane.pending)
                     onClicked: pane.pending ? pane.run(["keep", pane.pending.token]) : pane.preview()
                 }
                 Action {
-                    visible: !pane.pending
+                    visible: !pane.pending && !pane.confirmingDiscard
                     text: "Refresh"
                     enabled: !pane.busy
                     onClicked: pane.refresh()
@@ -1060,7 +1150,7 @@ Card {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 color: pane.error !== "" ? Color.urgent : pane.fg
-                text: pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Changes are saved only after you choose Keep changes."))
+                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Changes are saved only after you choose Keep changes."))
             }
         }
     }

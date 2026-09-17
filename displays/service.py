@@ -473,11 +473,11 @@ def main():
             result = service.stop()
         elif args.command == 'identify':
             shell = os.environ.get('HYPERTILE_SHELL_BIN', 'omarchy-shell')
-            identified = subprocess.run([shell, 'hypertile', 'displayIdentify'],
+            identified = subprocess.run([shell, 'hypertile', 'displayIdentify', args.connector or ''],
                                         capture_output=True, text=True, timeout=5)
             if identified.returncode:
                 raise DisplayError('Open the Hypertile overlay, then run identify again to show matching labels on every screen.')
-            result = dict(identified=True)
+            result = dict(identified=True, connector=args.connector or None)
         else:
             daemon(service)
             return

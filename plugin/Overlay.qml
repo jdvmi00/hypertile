@@ -569,7 +569,7 @@ Item {
   }
 
   function dismiss() {
-    if (root.displaysMode && displaysPane.pending) { displaysPane.requestClose(); return }
+    if (root.displaysMode && (displaysPane.pending || displaysPane.dirty)) { displaysPane.requestClose(); return }
     root.dismissing = true
     root.pendingSwitch = null
     root.sceneFeedback = null
@@ -1882,7 +1882,7 @@ Item {
     function refresh(): void { root.refresh() }
     function content(on: bool): void { root.showContent(on) }
     function displays(): void { root.showDisplays() }
-    function displayState(): string { return JSON.stringify({draft: displaysPane.draft, pending: displaysPane.pending, dirty: displaysPane.dirty, error: displaysPane.error, selected: displaysPane.selectedIndex, screen: window.screen ? window.screen.name : null, panel: {x: displaysPane.x, y: displaysPane.y, width: displaysPane.width, height: displaysPane.height}, window: {width: window.width, height: window.height}}) }
+    function displayState(): string { return JSON.stringify({draft: displaysPane.draft, pending: displaysPane.pending, dirty: displaysPane.dirty, confirmingDiscard: displaysPane.confirmingDiscard, error: displaysPane.error, selected: displaysPane.selectedIndex, screen: window.screen ? window.screen.name : null, panel: {x: displaysPane.x, y: displaysPane.y, width: displaysPane.width, height: displaysPane.height}, window: {width: window.width, height: window.height}}) }
     function displaySet(index: int, key: string, value: string): void {
       displaysPane.selectedIndex = index
       var parsed
@@ -1893,7 +1893,8 @@ Item {
     function displayPreview(): void { displaysPane.preview() }
     function displayKeep(): void { if (displaysPane.pending) displaysPane.run(["keep", displaysPane.pending.token]) }
     function displayRevert(): void { displaysPane.revert() }
-    function displayIdentify(): void { displaysPane.identify() }
+    function displayIdentify(connector: string): void { displaysPane.identify(connector) }
+    function displayDiscard(): void { displaysPane.discardAndClose() }
     function assign(kind: string): void { root.assignContent(kind) }
     function assignApp(cls: string): void { root.assignContent("local", cls) }
     function scene(action: string, name: string): void { root.sceneAction(action, name) }

@@ -8,7 +8,10 @@ screen to align its edges, or enter its X and Y position.
 
 Tab to a diagram
 screen and use arrows to move one logical pixel, or Shift+arrows for ten.
-**Identify** temporarily labels the connected screens with the diagram numbers.
+**Identify** temporarily labels the selected screen with its diagram number;
+`hypertile-ctl display identify` labels every screen, or one when given a
+connector. Closing with unsaved changes asks before discarding them; nothing is
+applied until you preview.
 
 Select a screen to change resolution and refresh rate, scale, rotation, or its
 enabled state. The mode picker lists the modes reported by Hyprland. Saved
@@ -50,8 +53,12 @@ displays first and keeps a remaining output usable if a source disappears.
 ## Sleep and disable
 
 **Sleep display** turns off the output using DPMS without changing its workspace
-placement. **Wake**, **Wake all**, or `hypertile-ctl display wake` powers it back
-on. Sleeping the last awake output enables Hyprland's keyboard wake option, so
+placement. The same button reads **Wake display** while the output is asleep;
+it follows the compositor's power state, not unsaved edits, so it is only
+offered for a connected, enabled output. Sleeping displays are marked in the
+diagram and the display list, and **Wake all** appears in the header only while
+something is asleep. `hypertile-ctl display wake` also powers outputs back on.
+Sleeping the last awake output enables Hyprland's keyboard wake option, so
 a key press remains a way back. Sleep is temporary and is never saved as a
 disabled display.
 
