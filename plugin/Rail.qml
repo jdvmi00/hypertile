@@ -499,9 +499,10 @@ Card {
             visible: !overlay.editing && !overlay.naming && !overlay.renaming && !overlay.namingScene
             anchors.left: parent.left
             anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.spacing.xs
-            Action { text: "Layouts"; bordered: false; selected: !overlay.contentMode; tooltipText: "Browse and edit the layouts"; onClicked: overlay.showContent(false) }
-            Action { text: "Scenes"; bordered: false; selected: overlay.contentMode; tooltipText: "What each zone holds: local windows, a remote desktop, an app; saved as scenes"; onClicked: overlay.showContent(true) }
+            spacing: 0
+            Action { text: "Layouts"; horizontalPadding: 4; bordered: false; selected: !overlay.contentMode; tooltipText: "Browse and edit the layouts"; onClicked: overlay.showContent(false) }
+            Action { text: "Scenes"; horizontalPadding: 4; bordered: false; selected: overlay.contentMode; tooltipText: "What each zone holds: local windows, a remote desktop, an app; saved as scenes"; onClicked: overlay.showContent(true) }
+            Action { text: "Displays"; horizontalPadding: 4; bordered: false; tooltipText: "Arrange displays and workspace placement"; onClicked: overlay.showDisplays() }
           }
           Row {
             id: headerTools
@@ -893,7 +894,7 @@ Card {
                   textFormat: Text.PlainText
                   width: parent.width
                   id: wsMeta
-                  readonly property string compactText: String(wsRow.modelData.windows || 0) + " win  ·  " + String(wsRow.modelData.layout).replace(/^lua:/, "")
+                  readonly property string compactText: String(wsRow.modelData.windows || 0) + " win  ·  " + String(wsRow.modelData.effective_layout || wsRow.modelData.layout).replace(/^lua:/, "")
                   // Drop the monitor before sacrificing the window count.
                   text: wsMeasure.advanceWidth <= width ? wsMeasure.text : compactText
                   TextMetrics {
@@ -905,6 +906,15 @@ Card {
                   font.family: rail.family
                   font.pixelSize: overlay.uiCaption
                   elide: Text.ElideRight
+                }
+                Text {
+                  textFormat: Text.PlainText
+                  width: parent.width
+                  text: wsRow.modelData.layout_source === "monitor" ? "Monitor default"
+                    : wsRow.modelData.layout_source === "global" ? "Global fallback" : "Explicit layout"
+                  color: rail.overlay.mutedForeground
+                  font.family: rail.family
+                  font.pixelSize: overlay.uiCaption
                 }
               }
               Item {
@@ -967,6 +977,13 @@ Card {
             opacity: 1
             onClicked: overlay.setDefault()
           }
+        }
+        Action {
+          text: "Use Monitor default"
+          width: column.width
+          enabled: !overlay.busy && !overlay.contentWorkspace(overlay.workspaceId)
+          tooltipText: enabled ? "Clear this workspace's explicit layout and inherit its monitor default" : "This workspace's scene owns its layout; replace or restore the scene first"
+          onClicked: overlay.applyTo(overlay.workspaceId, "monitor-default")
         }
       }
 

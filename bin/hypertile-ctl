@@ -51,10 +51,11 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
   heal [--workspace N]       manual recovery for a window drawn smaller than its
                              tile: 1px shrink and back, so the compositor sends a
                              fresh configure; default: active workspace
-  apply <name|BUILTINS> [--workspace N] [--quiet] [--no-persist]
+  apply <name|monitor-default|BUILTINS> [--workspace N] [--quiet] [--no-persist]
                              point a workspace at a layout, persisted; the
                              shell flashes the name unless --quiet;
-                             --no-persist switches the compositor only
+                             --no-persist switches the compositor only;
+                             monitor-default clears the workspace override
   cycle [--reverse] [--workspace N] [--quiet] [--now]
                              apply the next layout: every saved layout in name
                              order (those with in_cycle = false skipped), then
@@ -67,6 +68,7 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
   workspaces [--json]        every workspace with its monitor and layout
   windows [--json]           open windows (class, title, workspace)
   tile-move <request-json>   move/swap the captured window to its selected tile
+  display <command> [...]   list, preview, keep, revert, sleep, wake, restore
   scene <command> [...]     list, save, apply, current, restore, retry, content;
                              see docs/SCENES.md
   session <command> [name]   status, enable, disable, save <name>, restore [name], freeze, resume,
@@ -303,7 +305,7 @@ end
 
 -- Run `argv` (this CLI's own arguments) detached, after `ms` milliseconds.
 local function run_later(ms, argv)
-  local words = { "setsid", "-f", "sh", "-c", 'sleep "$1"; shift; exec "$@"',
+  local words = { "env", "-u", "HYPERTILE_DISPLAY_LOCKED", "-u", "HYPERTILE_DISPLAY_APPLY", "setsid", "-f", "sh", "-c", 'sleep "$1"; shift; exec "$@"',
     "sh", string.format("%.3f", ms / 1000), "lua", arg[0] }
   for _, a in ipairs(argv) do
     words[#words + 1] = a
@@ -322,8 +324,8 @@ local function cycle_origin(flags)
       die(err)
     end
     for _, ws in ipairs(list) do
-      if tostring(ws.id) == tostring(flags.workspace) then
-        return tostring(ws.id), ws.layout or ""
+      if tostring(ws.id) == tostring(flags.workspace) or ws.selector == flags.workspace then
+        return ws.selector or tostring(ws.id), ws.layout or ""
       end
     end
     die("no workspace " .. tostring(flags.workspace))
@@ -332,13 +334,13 @@ local function cycle_origin(flags)
   if not active then
     die(err)
   end
-  return tostring(active.id), active.layout or ""
+  return active.id > 0 and tostring(active.id) or "name:" .. active.name, active.layout or ""
 end
 
 -- Presses within the debounce window collapse into one switch (see the
 -- bridge); --now switches at once.
 local function cycle_locked(id, argv)
-  if not tostring(id):match("^%d+$") then die("invalid workspace id " .. tostring(id)) end
+  if not (tostring(id):match("^[1-9]%d*$") or tostring(id):match("^name:[%w_%-%.:]+$")) then die("invalid workspace id " .. tostring(id)) end
   local function quote(value) return "'" .. tostring(value):gsub("'", "'\\''") .. "'" end
   local directory = bridge.paths.runtime .. "/hypertile"
   if not os.execute("mkdir -p " .. quote(directory)) then die("cannot create " .. directory) end
@@ -426,6 +428,12 @@ function commands.current(pos, flags)
     if not geo then
       die(gerr)
     end
+    local key = geo.workspace.id and geo.workspace.id > 0 and tostring(geo.workspace.id) or "name:" .. geo.workspace.name
+    local source = bridge.workspace_layout_source(key)
+    if source then
+      geo.workspace.effective_layout = source.effective_layout
+      geo.workspace.layout_source = source.layout_source
+    end
     print(json.encode(geo))
     return
   end
@@ -499,12 +507,24 @@ end
 
 local argv = { ... }
 local cmd = table.remove(argv, 1)
-if cmd == "scene" then
-  local entry = "hypertile-scenes"
+-- Display settings and layout reference rewrites share the service writer lock.
+local display_serialized = { rename = true, remove = true, apply = true, preview = true, cycle = true, ["cycle-commit"] = true }
+if display_serialized[cmd] and os.getenv("HYPERTILE_DISPLAY_LOCKED") ~= "1" and os.getenv("HYPERTILE_DISPLAY_APPLY") ~= "1" then
+  local directory = bridge.paths.displays_path:match("^(.*)/[^/]+$")
+  local function quote(value) return "'" .. tostring(value):gsub("'", "'\\''") .. "'" end
+  if not os.execute("mkdir -p " .. quote(directory)) then die("cannot create display state directory") end
+  local entry = src and src ~= "" and (src .. "/bin/hypertile-ctl") or ((os.getenv("HOME") or "") .. "/.local/bin/hypertile-ctl")
+  local words = { "env HYPERTILE_DISPLAY_LOCKED=1 flock --exclusive --close", quote(directory .. "/capture.lock"), quote(entry), quote(cmd) }
+  for _, value in ipairs(argv) do words[#words + 1] = quote(value) end
+  local ok, _, code = os.execute(table.concat(words, " "))
+  os.exit(ok and 0 or (code or 1))
+end
+if cmd == "scene" or cmd == "display" then
+  local entry = cmd == "display" and "hypertile-displays" or "hypertile-scenes"
   local command = src and src ~= "" and (src .. "/bin/" .. entry)
     or ((os.getenv("HOME") or "") .. "/.local/bin/" .. entry)
   local words = { command }
-  if #argv == 0 then argv[1] = "current" end
+  if #argv == 0 then argv[1] = cmd == "display" and "list" or "current" end
   for _, value in ipairs(argv) do words[#words + 1] = value end
   for i, value in ipairs(words) do words[i] = "'" .. value:gsub("'", "'\\''") .. "'" end
   local ok, _, code = os.execute(table.concat(words, " "))

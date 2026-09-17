@@ -62,9 +62,11 @@ changed behavior after the shell restarts.
 |---|---|
 | Root `hypertile*.lua` modules | Copies changed modules, reloads Hyprland, checks `configerrors`, restarts the session watcher |
 | `bin/hypertile-ctl` | Copies the CLI; no process restart |
-| `session/*.py`, `bin/hypertile-session` | Stops the old watcher, waits for its writer lock, copies changes, starts the new watcher |
+| `session/*.py`, `scenes/*.py`, `displays/*.py`, service entry points | Stops the old watcher, waits for its writer lock, copies changes, starts the new watcher |
 | `plugin/`, `manifest.json` | Restarts the Omarchy shell to discard cached QML |
 | Documentation and tests | No runtime changes |
+
+Display previews are reverted and the display writer is stopped and locked during runtime replacement. Confirmed display settings restore before the scene and session services restart.
 
 The watcher is paused during Lua updates too, so it cannot capture a partially
 updated adapter. The helper holds its writer lock until copying and reloading

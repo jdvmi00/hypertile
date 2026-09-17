@@ -23,6 +23,8 @@ bridge.paths.layouts_dir = tmp .. "/layouts"
 bridge.paths.rules_dir = tmp .. "/workspace-rules"
 bridge.paths.workspace_state_dir = tmp .. "/workspace-layouts"
 bridge.paths.runtime = tmp .. "/runtime"
+bridge.paths.displays_path = tmp .. "/confirmed.json"
+bridge.paths.scene_state_path = tmp .. "/scene-state.json"
 bridge.looknfeel_path = tmp .. "/looknfeel.lua"
 
 local failures, checks = 0, 0
@@ -522,6 +524,8 @@ do
   local pout = run("path demo")
   check(pout:find("layouts/demo.lua"), "cli path prints the file path")
   os.remove(tmp .. "/shell.log")
+  local nofile, nofilecode = run("remove missing --no-reload")
+  check(nofilecode ~= 0 and exists(state_home .. "/hypertile/displays/capture.lock"), "first layout mutation creates the shared display lock before any confirmed settings")
   local aout, acode = run("apply demo --workspace 3")
   check(acode == 0 and aout:find("workspace 3 -> lua:demo", 1, true), "cli apply reports the switch: " .. aout)
   local alog = slurp(tmp .. "/shell.log")
@@ -653,6 +657,43 @@ do
   check(dcode == 2, "cli relayout is gone")
   local _, ucode = run("bogus")
   check(ucode == 2, "cli unknown command exits 2")
+end
+
+-- Monitor defaults are references, while inherited cached rules are not
+-- explicit choices. Active scene ownership survives policy-driven movement.
+do
+  local function put(path, text) local f = assert(io.open(path, "w")); f:write(text); f:close() end
+  local previous_query = bridge.query
+  bridge.query = function() return "1\t1\tDP-1\tlua:columns\t0\ttrue" end
+  put(bridge.paths.displays_path, json.encode({ version = 1, displays = {
+    { id = "wide", connector = "DP-1", default_layout = "lua:columns" }
+  }, workspaces = {} }))
+  os.execute("mkdir -p '" .. bridge.paths.rules_dir .. "'")
+  put(bridge.paths.rules_dir .. "/1.lua", 'hl.workspace_rule({ workspace = "1", layout = "lua:quad" })')
+  local source = bridge.workspace_layout_source("1")
+  check(source.layout_source == "explicit" and source.effective_layout == "lua:quad", "legacy layout remains explicit")
+  put(bridge.paths.rules_dir .. "/1.lua", '-- hypertile: monitor-default\nhl.workspace_rule({ workspace = "1", layout = "lua:quad" })')
+  source = bridge.workspace_layout_source("1")
+  check(source.layout_source == "monitor" and source.effective_layout == "lua:columns", "inherited cache is not an override")
+  local refs = bridge.references("columns")
+  check(#refs.monitors == 1 and refs.monitors[1] == "DP-1", "monitor default participates in references")
+  put(bridge.paths.scene_state_path, json.encode({ scenes = { ["1"] = { phase = "ready", document = { layout = "quad" } } } }))
+  source = bridge.workspace_layout_source("1")
+  check(source.layout_source == "scene" and source.effective_layout == "lua:quad", "scene owns effective layout")
+  local ok, err = bridge.apply("monitor-default", "1")
+  check(not ok and err:find("active scene", 1, true), "inheritance cannot silently replace active scene")
+  os.remove(bridge.paths.scene_state_path)
+  local pending_path = bridge.paths.displays_path:gsub("confirmed%.json$", "pending.json")
+  put(pending_path, '{}')
+  local applied, aerr = bridge.apply("dwindle", "1")
+  check(not applied and aerr:find("display preview", 1, true), "pending display preview blocks layout apply")
+  local previewed, perr = bridge.preview("draft", {}, "1")
+  check(not previewed and perr:find("display preview", 1, true), "pending display preview blocks layout editor preview")
+  local cycled, cerr = bridge.cycle_request("1", "dwindle", false)
+  check(not cycled and cerr:find("display preview", 1, true), "pending display preview blocks cycle requests")
+  os.remove(pending_path)
+  os.remove(bridge.paths.displays_path)
+  bridge.query = previous_query
 end
 
 print(string.format("%d checks, %d failures", checks, failures))

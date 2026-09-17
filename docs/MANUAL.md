@@ -692,3 +692,9 @@ kept for the next install.
 | `Esc` | clear the search, then close |
 | with no zone selected: `↑` / `↓`, `Enter`, `Delete` | select, use, or delete a saved scene |
 | `?` | show the keys |
+
+## Displays and workspace placement
+
+The **Displays** view arranges monitors, controls power, and assigns workspaces
+and inherited layouts. See the [Displays guide](DISPLAYS.md) for the complete
+workflow, keyboard controls, recovery, and configuration ownership.

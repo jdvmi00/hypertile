@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — displays and workspace placement
+
+- Add a Displays view with a scaled arrangement diagram, edge snapping, exact
+  coordinates, mode/scale/rotation controls, identify labels, and keyboard access.
+- Separate temporary display sleep/wake from disabling an output; protect the
+  final usable output and confirm changes through a 15-second preview.
+- Add a dedicated display adapter, independent rollback watchdog, atomic
+  confirmed preferences, startup recovery, and shared display CLI.
+- Add saved workspace monitor preferences, startup workspace choices, monitor
+  layout defaults, explicit overrides, and reconnect/manual-move policy.
+- Coordinate display previews with session saving and scene layout ownership.
+  Preserve settings on ordinary upgrade and uninstall; remove them on purge.
+
 ## 1.3.0 (2026-09-15)
 
 - `SUPER+ALT+T` opens a numbered tile picker for moving the active window to an

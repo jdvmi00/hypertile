@@ -42,6 +42,8 @@ M.paths.layouts_dir = env_or("HYPERTILE_LAYOUTS_DIR", M.paths.config_home .. "/h
 -- Omarchy's per-workspace file is removed when hypertile takes a workspace
 -- over, because Omarchy's loader runs last.
 M.paths.rules_dir = env_or("HYPERTILE_RULES_DIR", M.paths.state_home .. "/hypertile/workspace-rules")
+M.paths.displays_path = env_or("HYPERTILE_DISPLAYS_PATH", M.paths.state_home .. "/hypertile/displays/confirmed.json")
+M.paths.scene_state_path = M.paths.state_home .. "/hypertile/scenes/state.json"
 M.paths.workspace_state_dir = M.paths.state_home .. "/omarchy/workspace-layouts"
 
 -- Overridable for tests.
@@ -126,7 +128,8 @@ local function invalid_name(name)
 end
 
 local function valid_workspace(id)
-  return tostring(id):match("^%d+$") ~= nil
+  local value = tostring(id)
+  return value:match("^[1-9]%d*$") ~= nil or (value:match("^name:[%w_%-%.:]+$") ~= nil and #value <= 133)
 end
 
 -- Hyprland's own tiled layouts; anything else names a hypertile layout.
@@ -448,11 +451,39 @@ function M.save(name, spec)
   return path
 end
 
+-- Display preferences are owned and atomically written by the display service.
+function M.display_preferences()
+  local text = read_file(M.paths.displays_path)
+  if not text then return { displays = {}, workspaces = {} } end
+  local ok, value = pcall(json.decode, text)
+  if not ok or type(value) ~= "table" or value.version ~= 1 then
+    return nil, "display preferences are unreadable; repair them before changing layouts"
+  end
+  return value
+end
+
+local function change_display_references(old, new)
+  if read_file(M.paths.displays_path:gsub("confirmed%.json$", "pending.json")) then
+    return nil, "keep or revert the display preview before renaming or deleting layouts"
+  end
+  local doc, err = M.display_preferences()
+  if not doc then return nil, err end
+  local changed = false
+  for _, display in ipairs(doc.displays or {}) do
+    if display.default_layout and qualify(display.default_layout) == old then display.default_layout = new; changed = true end
+  end
+  for _, preference in pairs(doc.workspaces or {}) do
+    if preference.layout and qualify(preference.layout) == old then preference.layout = new; changed = true end
+  end
+  if changed then return write_file_atomic(M.paths.displays_path, json.encode(doc)) end
+  return true
+end
+
 -- Where a layout is referenced beyond its own file: persisted workspace
 -- rules (workspace-layouts/<id>.lua) and general.layout in looknfeel.lua.
 -- Returns { workspaces = { "1", "4" }, default = bool }.
 function M.references(name)
-  local out = { workspaces = {}, default = false }
+  local out = { workspaces = {}, default = false, monitors = {}, display_workspaces = {} }
   local want = "lua:" .. name
   for _, id in ipairs(lua_files(M.paths.rules_dir, "-V")) do
     local text = read_file(M.paths.rules_dir .. "/" .. id .. ".lua") or ""
@@ -460,6 +491,14 @@ function M.references(name)
     if layout == want then
       out.workspaces[#out.workspaces + 1] = id
     end
+  end
+  local doc, err = M.display_preferences()
+  if not doc then out.error = err; return out end
+  for _, display in ipairs(doc.displays or {}) do
+    if display.default_layout and qualify(display.default_layout) == want then out.monitors[#out.monitors + 1] = display.connector or display.id end
+  end
+  for key, preference in pairs(doc.workspaces or {}) do
+    if preference.layout and qualify(preference.layout) == want then out.display_workspaces[#out.display_workspaces + 1] = key end
   end
   local default = M.default_layout()
   out.default = default == want
@@ -481,12 +520,21 @@ function M.remove(name, force)
   end
   f:close()
   local refs = M.references(name)
+  if refs.error then return nil, refs.error end
+  if #refs.monitors > 0 then
+    return nil, name .. " is the default for " .. table.concat(refs.monitors, ", ") .. "; choose another monitor default first"
+  end
+  if #refs.display_workspaces > 0 and not force then
+    return nil, name .. " is a saved workspace override (--force clears it)"
+  end
   if refs.default then
     return nil, name .. " is the default layout; make another layout the default first"
   end
   if #refs.workspaces > 0 and not force then
     return nil, name .. " is used by workspace " .. table.concat(refs.workspaces, ", ") .. " (--force drops those rules)"
   end
+  local updated, uerr = change_display_references("lua:" .. name, nil)
+  if not updated then return nil, uerr end
   for _, id in ipairs(refs.workspaces) do
     os.remove(M.paths.rules_dir .. "/" .. id .. ".lua")
   end
@@ -521,6 +569,9 @@ function M.rename(old, new)
     return nil, serr
   end
   local refs = M.references(old)
+  if refs.error then os.remove(path); return nil, refs.error end
+  local updated, uerr = change_display_references("lua:" .. old, "lua:" .. new)
+  if not updated then os.remove(path); return nil, uerr end
   local from = ('layout = "lua:' .. old .. '"'):gsub("%p", "%%%0")
   local to = ('layout = "lua:' .. new .. '"'):gsub("%%", "%%%%")
   for _, id in ipairs(refs.workspaces) do
@@ -714,7 +765,7 @@ local function resolve_workspace(workspace)
   if not active then
     return nil, err
   end
-  return active.id
+  return active.id and active.id > 0 and active.id or "name:" .. active.name
 end
 
 -- Manual recovery for a window drawn smaller than its tile: every box shrinks
@@ -758,7 +809,13 @@ end
 -- Register (or hot-swap) a layout in the running compositor without
 -- touching disk, and optionally point a workspace at it. A `hyprctl reload`
 -- discards it. Returns true or nil, err.
+local function display_preview_busy()
+  return os.getenv("HYPERTILE_DISPLAY_APPLY") ~= "1"
+    and read_file(M.paths.displays_path:gsub("confirmed%.json$", "pending.json")) ~= nil
+end
+
 function M.preview(name, spec, workspace)
+  if display_preview_busy() then return nil, "keep or revert the display preview before previewing a layout" end
   local valid, err = M.validate(name, spec)
   if not valid then
     return nil, err
@@ -777,14 +834,27 @@ function M.preview(name, spec, workspace)
   return true
 end
 
+function M.active_scene_layout(id)
+  local text = read_file(M.paths.scene_state_path)
+  if not text then return nil end
+  local ok, doc = pcall(json.decode, text)
+  if not ok or type(doc) ~= "table" then return nil end
+  local record = (doc.scenes or {})[tostring(id)]
+  if record and record.phase ~= "restored" and record.document and record.document.layout then
+    return qualify(record.document.layout)
+  end
+end
+
 -- Point a workspace at a layout, live and persisted. `layout` is a full
 -- layout name like "lua:quad" or "dwindle"; a bare hypertile name gets the
 -- "lua:" prefix. opts.persist = false switches the running compositor only:
 -- the rule file is left alone, so the next reload puts the workspace back.
 -- The overlay browses layouts that way. Returns layout, workspace id.
 function M.apply(layout, workspace, opts)
+  if display_preview_busy() then return nil, "keep or revert the display preview before changing layouts" end
   local persist = not (opts and opts.persist == false)
-  layout = qualify(layout)
+  local inherited = layout == "monitor-default"
+  if not inherited then layout = qualify(layout) end
   local ws, wserr = resolve_workspace(workspace)
   if not ws then
     return nil, wserr
@@ -793,6 +863,15 @@ function M.apply(layout, workspace, opts)
     return nil, "invalid workspace id " .. tostring(ws)
   end
   local id = tostring(ws)
+  if inherited then
+    local source, serr = M.workspace_layout_source(id, true)
+    if not source then return nil, serr end
+    layout = source.effective_layout
+  end
+  local scene_layout = M.active_scene_layout(id)
+  if scene_layout and (inherited or scene_layout ~= layout) then
+    return nil, "workspace " .. id .. " belongs to an active scene; use Layouts to confirm replacing its content first"
+  end
   -- A hypertile layout brings its gutters along; built-ins get the globals.
   local spec
   local hname = layout:match("^lua:(.+)$")
@@ -803,7 +882,7 @@ function M.apply(layout, workspace, opts)
       return nil, lerr
     end
   end
-  local src = rule_source(id, layout, spec)
+  local src = (inherited and "-- hypertile: monitor-default\n" or "") .. rule_source(id, layout, spec)
   local _, err = M.eval_file(src)
   if err then
     return nil, err
@@ -904,6 +983,7 @@ end
 -- under way. Returns the target and the request's sequence number.
 -- The CLI holds cycle-<id>.lock across each request/commit transaction.
 function M.cycle_request(id, current, reverse)
+  if display_preview_busy() then return nil, "keep or revert the display preview before cycling layouts" end
   if not valid_workspace(id) then return nil, "invalid workspace id " .. tostring(id) end
   local pending = M.cycle_pending(id)
   local target = M.cycle_target(pending and pending.target or current, M.cycle_names(), reverse)
@@ -963,8 +1043,57 @@ function M.windows()
   return out
 end
 
+-- Effective layout and its stored source are separate values.
+function M.workspace_layout_source(id, inherit, workspace)
+  local doc, err = M.display_preferences()
+  if not doc then return nil, err end
+  local ws = workspace
+  if not ws then
+    local list, lerr = M.workspaces(true)
+    if not list then return nil, lerr end
+    for _, entry in ipairs(list) do
+      if tostring(entry.id) == tostring(id) or "name:" .. entry.name == tostring(id) then ws = entry; break end
+    end
+  end
+  local rule = read_file(M.paths.rules_dir .. "/" .. tostring(id) .. ".lua")
+  local preference = (doc.workspaces or {})[tostring(id)] or {}
+  local scene = M.active_scene_layout(id)
+  if scene and not inherit then return { effective_layout = scene, layout_source = "scene" } end
+  local explicit
+  if rule then
+    if not rule:find("-- hypertile: monitor-default", 1, true) then explicit = rule:match('layout%s*=%s*"([^"]*)"') end
+  else explicit = preference.layout end
+  if explicit and not inherit then return { effective_layout = explicit, layout_source = "explicit" } end
+  local current_identity
+  local known_connector = false
+  for _, display in ipairs(doc.displays or {}) do
+    if ws and display.connector == ws.monitor then known_connector = true end
+  end
+  if ws and not known_connector and #(doc.displays or {}) > 0 then
+    -- Resolve a connector change through the same identity adapter as the UI.
+    local source = os.getenv("HYPERTILE_SRC")
+    local command = source and source ~= "" and (source .. "/bin/hypertile-displays") or (home .. "/.local/bin/hypertile-displays")
+    local handle = io.popen(shell_quote(command) .. " list 2>/dev/null")
+    if handle then
+      local text = handle:read("a"); handle:close()
+      local ok, catalog = pcall(json.decode, text)
+      if ok and type(catalog) == "table" then
+        for _, display in ipairs(catalog.displays or {}) do
+          if display.connector == ws.monitor then current_identity = display.id end
+        end
+      end
+    end
+  end
+  for _, display in ipairs(doc.displays or {}) do
+    if ((ws and (display.connector == ws.monitor or display.id == current_identity)) or (not ws and display.id == preference.monitor)) and display.default_layout then
+      return { effective_layout = qualify(display.default_layout), layout_source = "monitor" }
+    end
+  end
+  return { effective_layout = M.default_layout() or "dwindle", layout_source = "global" }
+end
+
 -- Workspaces: { { id, name, monitor, layout, windows, active }, ... } sorted by id.
-function M.workspaces()
+function M.workspaces(raw)
   local text, err = M.query([[
     local out = {}
     for _, ws in ipairs(hl.get_workspaces()) do
@@ -980,6 +1109,14 @@ function M.workspaces()
     local id, name, monitor, layout, windows, active = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.-)\t(.*)$")
     if id then
       out[#out + 1] = { id = tonumber(id), name = name, monitor = monitor, layout = layout, windows = tonumber(windows) or 0, active = active == "true" }
+    end
+  end
+  if not raw then
+    for _, ws in ipairs(out) do
+      local key = ws.id and ws.id > 0 and tostring(ws.id) or "name:" .. ws.name
+      local source = M.workspace_layout_source(key, false, ws)
+      if source then ws.effective_layout = source.effective_layout; ws.layout_source = source.layout_source end
+      ws.selector = key
     end
   end
   table.sort(out, function(a, b)

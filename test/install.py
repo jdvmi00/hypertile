@@ -50,7 +50,7 @@ if destination.parent == Path(os.environ["XDG_CONFIG_HOME"]) / "hypr":
     for source in (root / "bin").glob("hypertile-*"):
         target = Path(os.environ["HOME"]) / ".local/bin" / source.name
         assert target.read_bytes() == source.read_bytes(), str(target)
-    for service in ("session", "scenes"):
+    for service in ("session", "scenes", "displays"):
         for source in (root / service).glob("*.py"):
             target = Path(os.environ["XDG_DATA_HOME"]) / "hypertile" / service / source.name
             assert target.read_bytes() == source.read_bytes(), str(target)
@@ -354,7 +354,7 @@ o.bind("SUPER + U", "User", "keep-me")
 
     def test_upgrade_finishes_runtime_before_any_watched_lua_copy(self):
         self.run_script("install.sh")
-        for service in ("session", "scenes"):
+        for service in ("session", "scenes", "displays"):
             for source in (ROOT / service).glob("*.py"):
                 (self.data / "hypertile" / service / source.name).write_text("# stale runtime\n")
             executable = self.home / ".local/bin" / ("hypertile-" + service)

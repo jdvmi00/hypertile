@@ -195,6 +195,14 @@ fall back to the default. The rail's **Workspaces** section uses the viewed
 layout on any workspace, on every workspace of a monitor, or as the
 default, and keeps the overlay open.
 
+### Displays tab
+
+Choose **Displays** to arrange screens, change modes, scale and rotation, manage
+power, and assign workspaces and monitor layout defaults. Changes use a
+15-second Keep/Revert preview with an independent rollback watchdog. See
+[Displays and workspace placement](docs/DISPLAYS.md) for configuration ownership,
+reconnect behavior, and the shared UI/CLI workflow.
+
 ### Scenes tab
 
 Switch to **Scenes** to choose what each zone holds: **Local windows**, **Empty**,
@@ -424,6 +432,8 @@ scenes/*.py            scenes service: saved scenes, the app catalog, one-shot p
 layouts/*.lua          example layouts for reference and tests: ultrawide, quad
 bin/hypertile-ctl      CLI over the bridge
 bin/hypertile-session  session service entry point (also via hypertile-ctl session)
+bin/hypertile-displays display service entry point (also via hypertile-ctl display)
+displays/*.py          display adapter, recovery watchdog, workspace policy
 bin/hypertile-scenes   scenes service entry point (also via hypertile-ctl scene)
 dev                    link the checkout, check changes, and reload affected components
 install.sh             puts the engine, CLI, keybinds, and menu entry in place
@@ -474,6 +484,9 @@ Run the tests from the repository root:
 shellcheck install.sh uninstall.sh
 python3 test/dev.py && python3 test/upgrade.py   # deployment helper: preservation, restarts, failures
 python3 test/install.py                          # installer and uninstaller
+python3 test/displays.py && python3 test/display_policy.py && node test/displays.js
+                                                 # display transactions, failure recovery, assignment policy
+python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
 lua test/harness.lua && lua test/loader.lua      # engine: placement, rules, capacity, messages, hot swap
 lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
 lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl

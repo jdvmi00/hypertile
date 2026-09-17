@@ -61,6 +61,9 @@ rm -f "$state/installed-runtime.sha256"
 
 # Stop the writer before removing its code; retain recovery snapshots unless
 # --purge was requested. A missing/stopped service is harmless.
+if [[ -x "$bin/hypertile-displays" ]]; then
+  "$bin/hypertile-displays" stop >/dev/null
+fi
 if [[ -x "$bin/hypertile-session" ]]; then
   "$bin/hypertile-session" stop >/dev/null 2>&1 || true
 fi
@@ -71,6 +74,10 @@ fi
 if [[ -x "$bin/hypertile-scenes" ]]; then
   "$bin/hypertile-scenes" stop >/dev/null 2>&1 || true
 fi
+
+mkdir -p "$state/displays"
+exec 7>"$state/displays/daemon.lock"
+flock -xn 7 || { echo "uninstall.sh: display service is still running" >&2; exit 1; }
 
 # Keep pending host recovery tools intact and prevent legacy writer restarts.
 mkdir -p "$state/streams"
@@ -204,20 +211,23 @@ from upgrade import cleanup
 import sys
 cleanup(Path(sys.argv[1]), Path(sys.argv[2]))
 PY_CLEANUP
-rm -f "$bin/hypertile-session" "$bin/hypertile-scenes"
-for module in service scene_recovery upgrade; do
+rm -f "$bin/hypertile-session" "$bin/hypertile-scenes" "$bin/hypertile-displays"
+for module in service scene_recovery display_recovery upgrade; do
   rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session/$module.py"
 done
 for module in scene_service apps ipc scenes browse; do
   rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/scenes/$module.py"
+done
+for source in "$src"/displays/*.py; do
+  rm -f "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/displays/$(basename "$source")"
 done
 echo "removed the engine files and hypertile-ctl"
 
 if (( purge )); then
   rm -rf "$hypr/layouts" "$state"
   rm -rf "$config/hypertile/scenes"
-  rm -f "$config/hypertile/scenes.json"
-  for service in session scenes; do
+  rm -f "$config/hypertile/scenes.json" "$config/hypertile/displays.json"
+  for service in session scenes displays; do
     rm -rf "${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/$service/__pycache__"
   done
   echo "removed layouts, state, saved scenes, and Python caches"
