@@ -92,6 +92,37 @@ Hardware testing found and corrected two gaps: the obsolete text-dispatch syntax
 for workspace/DPMS operations, and cached `hyprctl workspaces` layout names.
 Policy verifies layout changes through the existing Lua workspace adapter.
 
+## Independent review and final visual pass
+
+Three subagents independently reviewed the interface, display transaction service,
+and workspace policy against the release requirements. Review fixes include:
+
+- Keyboard focus reveals inspector actions and ownership controls; untouched
+  fields do not dirty the draft or round exact fractional scales.
+- Long workspace names wrap, action widths follow their labels, and ownership
+  has a themed checkbox with an explicit keyboard-focus outline.
+- Rollback snapshots use live Lua layout names rather than cached IPC values.
+- Monitor defaults resolve stable identity even when a different display reuses
+  the same connector.
+- Keep journals only rules it actually changes, preserves unchanged explicit and
+  scene-owned rules, syncs writes before confirmation, and recovers partial writes
+  or crashes without promoting an incomplete configuration.
+
+Final focused suites passed: 35 display transaction tests, 14 policy tests,
+186 bridge checks, and the display UI helper tests. The isolated compositor suite
+passed after the transaction and layout-snapshot changes. Deployment validated
+Lua, Python and the plugin, then reloaded with no compositor config errors.
+
+The final screenshot/webcam review covered native resolution, 1920×1080 at 1.25
+scale, and confirmation moved to DisplayPort after disabling HDMI. Additional
+keyboard-driven screenshots covered long workspace names, lower inspector
+controls, and the ownership focus ring. Both the primary agent and UI reviewer
+inspected the images. All previews reverted successfully. Webcam perspective
+confirms physical presentation; screenshots provide the detailed text/layout
+review. Local evidence is retained in
+`~/.local/state/hypertile/validation/20260917-displays/` rather than publishing
+images of the surrounding desktop.
+
 ## Remaining acceptance with Jim
 
 Jim was unavailable and explicitly deferred hands-on checks until his return.

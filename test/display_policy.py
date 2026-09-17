@@ -1,6 +1,7 @@
 """Placement and layout intent contracts without a running compositor."""
 import copy
 import json
+import os
 from pathlib import Path
 import sys
 import tempfile
@@ -23,6 +24,19 @@ class PolicyTests(unittest.TestCase):
 
     def ws(self, monitor="DP-1", key="1", layout="lua:columns"):
         return {"selector": key, "monitor": monitor, "layout": layout}
+
+    def test_conflicts_include_supported_lua_workspace_rules(self):
+        from adapter import Adapter
+        with tempfile.TemporaryDirectory() as temporary:
+            config = Path(temporary) / "hypr"
+            config.mkdir()
+            (config / "monitors.lua").write_text('hl.monitor({output="DP-1"})\n'
+                                                  'hl.workspace_rule({workspace="1",monitor="DP-1"})\n'
+                                                  '-- hl.monitor({output="ignored"})\n'
+                                                  'hl.config({general={layout="dwindle"}})\n')
+            with patch.dict(os.environ, XDG_CONFIG_HOME=temporary):
+                conflicts = Adapter().conflicts()
+            self.assertEqual([r["line"] for r in conflicts], [1, 2])
 
     def test_precedence_and_explicit_choices_follow_moves(self):
         self.assertEqual(effective_layout("1", "portrait", self.document, {}, "dwindle"), ("lua:vertical", "monitor"))
@@ -140,6 +154,20 @@ class RuntimeTests(unittest.TestCase):
             self.policy.reconcile(self.doc, "preview")
         self.assertEqual(self.adapter.moves, [("1", "DP-1")])
         self.assertFalse(any(args[0] == "apply" for args in self.commands))
+
+    def test_rollback_snapshot_uses_live_layout_not_cached_json(self):
+        original = self.policy._ctl
+        def ctl(*args, **kwargs):
+            if args[0] == "workspaces":
+                return json.dumps({"workspaces": [{"id": 1, "name": "1", "layout": "dwindle"}]})
+            return original(*args, **kwargs)
+        self.policy._ctl = ctl
+        snapshot = self.policy.capture_workspaces()
+        self.assertEqual(snapshot[0]["layout"], "dwindle")
+        self.assertNotIn("tiledLayout", snapshot[0])
+        self.assertEqual(snapshot[0]["monitor"], "DP-2")
+        self.policy.restore_layouts(snapshot)
+        self.assertEqual(self.adapter.live[0]["tiledLayout"], "dwindle")
 
     def test_wrong_layout_readback_is_failure(self):
         self.policy._ctl = lambda *args: "scrolling" if args[0] == "default" else json.dumps({"workspaces": self.adapter.workspaces()}) if args[0] == "workspaces" else ""

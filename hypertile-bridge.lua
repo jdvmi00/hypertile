@@ -1043,6 +1043,29 @@ function M.windows()
   return out
 end
 
+-- Resolve identity through the same adapter as display application. A connector
+-- can host replacement hardware, so its spelling alone never selects a default.
+local display_catalog, display_catalog_at
+function M.current_display_id(connector)
+  if not display_catalog or display_catalog_at ~= os.time() then
+    local source = os.getenv("HYPERTILE_SRC")
+    local command = source and source ~= "" and (source .. "/bin/hypertile-displays") or (home .. "/.local/bin/hypertile-displays")
+    local handle = io.popen(shell_quote(command) .. " list 2>/dev/null")
+    if not handle then return nil, "cannot resolve current display identities" end
+    local text = handle:read("a")
+    local success = handle:close()
+    local ok, catalog = pcall(json.decode, text)
+    if not success or not ok or type(catalog) ~= "table" or type(catalog.displays) ~= "table" then
+      return nil, "cannot resolve current display identities"
+    end
+    display_catalog, display_catalog_at = catalog.displays, os.time()
+  end
+  for _, display in ipairs(display_catalog) do
+    if display.connected ~= false and display.connector == connector then return display.id end
+  end
+  return nil
+end
+
 -- Effective layout and its stored source are separate values.
 function M.workspace_layout_source(id, inherit, workspace)
   local doc, err = M.display_preferences()
@@ -1065,27 +1088,13 @@ function M.workspace_layout_source(id, inherit, workspace)
   else explicit = preference.layout end
   if explicit and not inherit then return { effective_layout = explicit, layout_source = "explicit" } end
   local current_identity
-  local known_connector = false
-  for _, display in ipairs(doc.displays or {}) do
-    if ws and display.connector == ws.monitor then known_connector = true end
-  end
-  if ws and not known_connector and #(doc.displays or {}) > 0 then
-    -- Resolve a connector change through the same identity adapter as the UI.
-    local source = os.getenv("HYPERTILE_SRC")
-    local command = source and source ~= "" and (source .. "/bin/hypertile-displays") or (home .. "/.local/bin/hypertile-displays")
-    local handle = io.popen(shell_quote(command) .. " list 2>/dev/null")
-    if handle then
-      local text = handle:read("a"); handle:close()
-      local ok, catalog = pcall(json.decode, text)
-      if ok and type(catalog) == "table" then
-        for _, display in ipairs(catalog.displays or {}) do
-          if display.connector == ws.monitor then current_identity = display.id end
-        end
-      end
-    end
+  if ws and #(doc.displays or {}) > 0 then
+    local identity_error
+    current_identity, identity_error = M.current_display_id(ws.monitor)
+    if identity_error then return nil, identity_error end
   end
   for _, display in ipairs(doc.displays or {}) do
-    if ((ws and (display.connector == ws.monitor or display.id == current_identity)) or (not ws and display.id == preference.monitor)) and display.default_layout then
+    if ((ws and display.id == current_identity) or (not ws and display.id == preference.monitor)) and display.default_layout then
       return { effective_layout = qualify(display.default_layout), layout_source = "monitor" }
     end
   end

@@ -220,6 +220,119 @@ class Tests(unittest.TestCase):
         self.service.stop(timeout=.01)
         self.assertFalse(self.service.pending_path.exists())
         self.assertEqual(self.adapter.current[1]['x'], 1920)
+    def transactional_policy(self, failure=None):
+        state = Path(self.temp.name)
+        rules = state / 'hypertile/workspace-rules'
+        omarchy = state / 'omarchy/workspace-layouts'
+        rules.mkdir(parents=True, exist_ok=True)
+        omarchy.mkdir(parents=True, exist_ok=True)
+        (rules / '1.lua').write_bytes(b'original rule\n')
+        (omarchy / '1.lua').write_bytes(b'omarchy rule\n')
+        class Policy:
+            state = {}
+            def validate_changes(self, document): pass
+            def reconcile(self, document, reason): pass
+            def _save_runtime(self): pass
+            def restore_layouts(self, snapshot): pass
+            def capture_workspaces(self): return []
+            def commit(self, document, preferences_path=None, before_rule=None):
+                assert read(preferences_path) == document
+                before_rule('1')
+                (rules / '1.lua').write_bytes(b'new rule\n')
+                before_rule('2')
+                (rules / '2.lua').write_bytes(b'new second rule\n')
+                (omarchy / '1.lua').unlink()
+                if failure:
+                    raise failure
+        self.service.policy = Policy()
+        doc = self.doc()
+        doc['displays'][1]['x'] = 2000
+        doc['workspaces'] = {'1': {'layout': 'dwindle'}, '2': {'layout': None}}
+        return doc, rules, omarchy
+    def assert_transaction_recovered(self, rules, omarchy):
+        self.assertEqual((rules / '1.lua').read_bytes(), b'original rule\n')
+        self.assertFalse((rules / '2.lua').exists())
+        self.assertEqual((omarchy / '1.lua').read_bytes(), b'omarchy rule\n')
+        self.assertEqual(self.adapter.current[1]['x'], 1920)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertFalse(self.service.confirmed_path.exists())
+    def test_midcommit_failure_restores_rules_geometry_and_confirmation(self):
+        doc, rules, omarchy = self.transactional_policy(PermissionError('injected rule write failure'))
+        pending = self.service.preview(doc, watchdog=False)
+        with self.assertRaisesRegex(PermissionError, 'injected'):
+            self.service.keep(pending['token'])
+        self.assert_transaction_recovered(rules, omarchy)
+    def test_crash_after_rule_writes_before_confirmation_recovers_on_startup(self):
+        doc, rules, omarchy = self.transactional_policy(SystemExit('injected process death'))
+        pending = self.service.preview(doc, watchdog=False)
+        with self.assertRaises(SystemExit):
+            self.service.keep(pending['token'])
+        self.assertEqual(read(self.service.pending_path)['phase'], 'committing')
+        self.assertFalse(self.service.confirmed_path.exists())
+        self.service.restore()
+        self.assert_transaction_recovered(rules, omarchy)
+    def test_confirmation_write_failure_restores_already_staged_rules(self):
+        doc, rules, omarchy = self.transactional_policy()
+        pending = self.service.preview(doc, watchdog=False)
+        def failing_atomic(path, value):
+            if path == self.service.confirmed_path:
+                raise PermissionError('injected confirmed write failure')
+            return atomic(path, value)
+        with patch('service.atomic', side_effect=failing_atomic):
+            with self.assertRaisesRegex(PermissionError, 'confirmed'):
+                self.service.keep(pending['token'])
+        self.assert_transaction_recovered(rules, omarchy)
+    def test_confirmation_marker_keeps_committed_rules_after_crash(self):
+        doc, rules, omarchy = self.transactional_policy()
+        pending = self.service.preview(doc, watchdog=False)
+        journal = read(self.service.pending_path)
+        journal['phase'] = 'committing'
+        self.service.keep(pending['token'])
+        atomic(self.service.pending_path, journal)  # crash before pending unlink
+        self.service.revert(pending['token'])
+        self.assertEqual((rules / '1.lua').read_bytes(), b'new rule\n')
+        self.assertTrue((rules / '2.lua').exists())
+        self.assertFalse((omarchy / '1.lua').exists())
+        self.assertEqual(self.adapter.current[1]['x'], 2000)
+        self.assertEqual(read(self.service.confirmed_path)['_transaction'], pending['token'])
+    def test_transaction_rollback_preserves_unrelated_rule_changes(self):
+        doc, rules, omarchy = self.transactional_policy(PermissionError('injected failure'))
+        (rules / '99.lua').write_bytes(b'unrelated initial\n')
+        pending = self.service.preview(doc, watchdog=False)
+        (rules / '99.lua').write_bytes(b'unrelated changed during preview\n')
+        (omarchy / '100.lua').write_bytes(b'unrelated new rule\n')
+        with self.assertRaises(PermissionError):
+            self.service.keep(pending['token'])
+        self.assert_transaction_recovered(rules, omarchy)
+        self.assertEqual((rules / '99.lua').read_bytes(), b'unrelated changed during preview\n')
+        self.assertEqual((omarchy / '100.lua').read_bytes(), b'unrelated new rule\n')
+    def test_rule_fsync_failure_prevents_confirmation(self):
+        doc, rules, omarchy = self.transactional_policy()
+        pending = self.service.preview(doc, watchdog=False)
+        with patch('service.sync_rules', side_effect=OSError('injected rule fsync failure')):
+            with self.assertRaisesRegex(OSError, 'fsync'):
+                self.service.keep(pending['token'])
+        self.assert_transaction_recovered(rules, omarchy)
+    def test_skipped_rule_is_not_restored_by_failed_commit(self):
+        doc, rules, omarchy = self.transactional_policy(PermissionError('injected failure'))
+        doc['workspaces']['3'] = {'layout': 'dwindle'}
+        (rules / '3.lua').write_bytes(b'initial third rule\n')
+        pending = self.service.preview(doc, watchdog=False)
+        # The commit skips this workspace (for example, it now belongs to a scene).
+        (rules / '3.lua').write_bytes(b'new scene-owned rule\n')
+        with self.assertRaises(PermissionError):
+            self.service.keep(pending['token'])
+        self.assert_transaction_recovered(rules, omarchy)
+        self.assertEqual((rules / '3.lua').read_bytes(), b'new scene-owned rule\n')
+    def test_rule_recovery_failure_retains_journal_for_retry(self):
+        doc, rules, omarchy = self.transactional_policy(PermissionError('injected failure'))
+        pending = self.service.preview(doc, watchdog=False)
+        with patch('service.restore_rules', return_value=['temporary rule permission failure']):
+            with self.assertRaises(PermissionError):
+                self.service.keep(pending['token'])
+        self.assertEqual(read(self.service.pending_path)['phase'], 'recovery-needed')
+        self.service.revert(pending['token'])
+        self.assert_transaction_recovered(rules, omarchy)
     def test_nan_rejected(self):
         doc = self.doc(); doc['displays'][0]['scale'] = float('nan')
         with self.assertRaisesRegex(DisplayError, 'finite'): validate(doc, self.adapter.displays())

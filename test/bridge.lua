@@ -664,6 +664,8 @@ end
 do
   local function put(path, text) local f = assert(io.open(path, "w")); f:write(text); f:close() end
   local previous_query = bridge.query
+  local previous_identity = bridge.current_display_id
+  bridge.current_display_id = function() return "wide" end
   bridge.query = function() return "1\t1\tDP-1\tlua:columns\t0\ttrue" end
   put(bridge.paths.displays_path, json.encode({ version = 1, displays = {
     { id = "wide", connector = "DP-1", default_layout = "lua:columns" }
@@ -675,6 +677,12 @@ do
   put(bridge.paths.rules_dir .. "/1.lua", '-- hypertile: monitor-default\nhl.workspace_rule({ workspace = "1", layout = "lua:quad" })')
   source = bridge.workspace_layout_source("1")
   check(source.layout_source == "monitor" and source.effective_layout == "lua:columns", "inherited cache is not an override")
+  bridge.current_display_id = function() return "replacement-display" end
+  source = bridge.workspace_layout_source("1")
+  check(source.layout_source == "global", "replacement hardware on the same connector does not inherit another display default")
+  bridge.current_display_id = function() return "wide" end
+  source = bridge.workspace_layout_source("1", false, { id = 1, name = "1", monitor = "HDMI-A-2" })
+  check(source.layout_source == "monitor" and source.effective_layout == "lua:columns", "stable identity follows a changed connector")
   local refs = bridge.references("columns")
   check(#refs.monitors == 1 and refs.monitors[1] == "DP-1", "monitor default participates in references")
   put(bridge.paths.scene_state_path, json.encode({ scenes = { ["1"] = { phase = "ready", document = { layout = "quad" } } } }))
@@ -694,6 +702,7 @@ do
   os.remove(pending_path)
   os.remove(bridge.paths.displays_path)
   bridge.query = previous_query
+  bridge.current_display_id = previous_identity
 end
 
 print(string.format("%d checks, %d failures", checks, failures))

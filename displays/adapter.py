@@ -180,7 +180,7 @@ class Adapter:
             try:
                 for number, line in enumerate(path.read_text().splitlines(), 1):
                     code = line.split('--', 1)[0]
-                    if re.search(r'hl\.(monitor|workspace)\s*\(', code):
+                    if re.search(r'hl\.(monitor|workspace|workspace_rule)\s*\(', code):
                         result.append(dict(path=str(path), line=number, text=code.strip()))
             except (OSError, UnicodeError):
                 continue

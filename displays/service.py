@@ -15,7 +15,7 @@ import time
 import uuid
 
 from adapter import Adapter, DisplayError, match, same, validate
-from policy import WorkspacePolicy
+from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules
 
 
 def atomic(path, value):
@@ -119,9 +119,10 @@ class Service:
                 raise DisplayError('Existing monitor/workspace rules need deliberate takeover. Review conflicts, then use --takeover.')
             document = dict(document, takeover=bool(takeover or read(self.confirmed_path, {}).get('takeover')))
             pending = dict(token=uuid.uuid4().hex, deadline=time.time() + 15, phase='applying',
-                           before=before, workspaces=self.adapter.workspaces(), document=document,
+                           before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
                            expected={d['connector']: d for d in before}, touched=[],
-                           policy_state=copy.deepcopy(self.policy.state) if self.policy else None)
+                           policy_state=copy.deepcopy(self.policy.state) if self.policy else None,
+                           rule_files=snapshot_rules(document) if self.policy else [], rule_touched=[])
             atomic(self.pending_path, pending)
             if watchdog:
                 try:
@@ -156,6 +157,10 @@ class Service:
         current = self.adapter.displays()
         by_connector = {d['connector']: d for d in current}
         report = dict(reason='reverted', fallback=False, external=[], errors=[])
+        rule_files = [saved for saved in pending.get('rule_files', [])
+                      if 'rule_touched' not in pending or saved.get('workspace') in pending['rule_touched']]
+        rule_errors = restore_rules(rule_files) if pending.get('phase') in ('committing', 'recovery-needed') else []
+        report['errors'].extend(rule_errors)
         restore = []
         for old in pending['before']:
             name = old['connector']
@@ -208,7 +213,12 @@ class Service:
             except Exception as error:
                 report['errors'].append(str(error))
         atomic(self.directory / 'recovery.json', report)
-        self.pending_path.unlink(missing_ok=True)
+        if rule_errors:
+            pending['phase'] = 'recovery-needed'
+            atomic(self.pending_path, pending)
+        else:
+            self.pending_path.unlink(missing_ok=True)
+            (self.directory / 'staged.json').unlink(missing_ok=True)
         return report
 
     def revert(self, token=None):
@@ -218,6 +228,7 @@ class Service:
                 return dict(reason='no-preview')
             if read(self.confirmed_path, {}).get('_transaction') == pending['token']:
                 self.pending_path.unlink(missing_ok=True)
+                (self.directory / 'staged.json').unlink(missing_ok=True)
                 return dict(reason='already-confirmed')
             if token and token != pending['token']:
                 raise DisplayError('Preview token no longer matches.')
@@ -238,10 +249,28 @@ class Service:
             except Exception:
                 self._rollback(pending)
                 raise
-            atomic(self.confirmed_path, dict(pending['document'], _transaction=token))
+            # Keep is a recoverable transaction: journal precedes all rule writes,
+            # and the confirmed token is the single durable commit point.
+            pending['phase'] = 'committing'
+            atomic(self.pending_path, pending)
+            staged_path = self.directory / 'staged.json'
+            def before_rule(key):
+                pending['rule_touched'].append(key)
+                atomic(self.pending_path, pending)
+            try:
+                atomic(staged_path, pending['document'])
+                if self.policy:
+                    self.policy.commit(pending['document'], preferences_path=staged_path, before_rule=before_rule)
+                sync_rules(pending.get('rule_files', []))
+                atomic(self.confirmed_path, dict(pending['document'], _transaction=token))
+            except Exception:
+                # An fsync failure may occur after replace; inspect the durable
+                # marker before deciding whether rollback is still permissible.
+                if read(self.confirmed_path, {}).get('_transaction') != token:
+                    self._rollback(pending)
+                raise
             self.pending_path.unlink(missing_ok=True)
-            if self.policy and hasattr(self.policy, 'commit'):
-                self.policy.commit(pending['document'])
+            staged_path.unlink(missing_ok=True)
             return dict(kept=True)
 
     def restore(self, reason='restore'):
@@ -252,6 +281,7 @@ class Service:
                     return dict(restored=False, preview_active=True)
                 if read(self.confirmed_path, {}).get('_transaction') == pending['token']:
                     self.pending_path.unlink(missing_ok=True)
+                    (self.directory / 'staged.json').unlink(missing_ok=True)
                 else:
                     return self._rollback(pending)
             document = read(self.confirmed_path)
@@ -266,7 +296,7 @@ class Service:
                 # confirmed intent and keep the compositor's currently usable desktop.
                 recovery.update(fallback=True, errors=[str(error)])
                 desired = []
-            before_workspaces = self.adapter.workspaces()
+            before_workspaces = self.policy.capture_workspaces() if self.policy else self.adapter.workspaces()
             applied = []
             try:
                 for d in sorted(desired, key=lambda d: not d['enabled']):

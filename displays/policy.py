@@ -7,6 +7,7 @@ override. Placement preferences are never inferred from compositor snapshots.
 from __future__ import annotations
 
 import copy
+import base64
 import json
 import subprocess
 import tempfile
@@ -89,6 +90,81 @@ def read_rules(directory=None):
     return result
 
 
+def snapshot_rules(document):
+    """Journal every file a kept policy can replace or remove."""
+    state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+    directories = (Path(os.environ.get("HYPERTILE_RULES_DIR") or state / "hypertile/workspace-rules"),
+                   state / "omarchy/workspace-layouts")
+    files = []
+    for key, preference in document.get("workspaces", {}).items():
+        if "layout" not in preference:
+            continue
+        if not valid_workspace(key):
+            raise ValueError("Invalid workspace rule selector")
+        for directory in directories:
+            path = directory / (key + ".lua")
+            if path.is_symlink():
+                raise ValueError("Cannot transactionally replace a symlinked workspace rule: " + str(path))
+            try:
+                content, mode = path.read_bytes(), path.stat().st_mode & 0o777
+            except FileNotFoundError:
+                content, mode = None, 0o600
+            files.append(dict(workspace=key, path=str(path), content=base64.b64encode(content).decode() if content is not None else None, mode=mode))
+    return files
+
+
+def sync_rules(files):
+    """Make staged replacements and deletions durable before the commit marker."""
+    directories = set()
+    for saved in files:
+        path = Path(saved["path"])
+        try:
+            with path.open("rb") as stream:
+                os.fsync(stream.fileno())
+        except FileNotFoundError:
+            pass
+        if path.parent.exists():
+            directories.add(path.parent)
+    for directory in directories:
+        fd = os.open(directory, os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+
+def restore_rules(files):
+    """Restore the journal after failed/interrupted Keep; report every failure."""
+    errors = []
+    for saved in files:
+        path = Path(saved["path"])
+        temporary = None
+        try:
+            if saved["content"] is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                fd, temporary = tempfile.mkstemp(prefix=".display-rollback-", dir=path.parent)
+                with os.fdopen(fd, "wb") as stream:
+                    os.fchmod(stream.fileno(), saved["mode"])
+                    stream.write(base64.b64decode(saved["content"]))
+                    stream.flush()
+                    os.fsync(stream.fileno())
+                os.replace(temporary, path)
+            if path.parent.exists():
+                fd = os.open(path.parent, os.O_DIRECTORY)
+                try:
+                    os.fsync(fd)
+                finally:
+                    os.close(fd)
+        except OSError as error:
+            errors.append(str(error))
+        finally:
+            if temporary:
+                Path(temporary).unlink(missing_ok=True)
+    return errors
+
+
 def effective_layout(key, monitor_id, document, rules, fallback, scenes=None):
     if scenes and key in scenes:
         return scenes[key], "scene"
@@ -160,11 +236,12 @@ class WorkspacePolicy:
                            "changed": layout != workspace.get("layout", workspace.get("tiledLayout", workspace.get("tiled_layout")))})
         return result
 
-    def _ctl(self, *args):
+    def _ctl(self, *args, preferences_path=None):
         source = os.environ.get("HYPERTILE_SRC")
         command = str(Path(source) / "bin/hypertile-ctl" if source else Path.home() / ".local/bin/hypertile-ctl")
         result = subprocess.run([command, *args], text=True, capture_output=True, timeout=10,
-                                env=dict(os.environ, HYPERTILE_DISPLAY_APPLY="1"))
+                                env=dict(os.environ, HYPERTILE_DISPLAY_APPLY="1",
+                                         **({"HYPERTILE_DISPLAYS_PATH": str(preferences_path)} if preferences_path else {})))
         if result.returncode:
             raise ValueError(result.stderr.strip() or "Workspace layout could not be applied")
         return result.stdout
@@ -291,15 +368,31 @@ class WorkspacePolicy:
             self.select_initial(document, available)
         return {"moves": moves, "layouts": layouts}
 
-    def commit(self, document):
-        """Persist layout intent only after the user keeps the display preview."""
+    def commit(self, document, preferences_path=None, before_rule=None):
+        """Stage rule writes; the service journal owns rollback until confirmation."""
         scenes = self._scenes()
+        rules = read_rules()
         for key, preference in document.get("workspaces", {}).items():
             if "layout" not in preference or key in scenes:
                 continue
-            self._ctl("apply", preference["layout"] or "monitor-default", "--workspace", key, "--quiet")
+            if preference["layout"] is not None and qualify(preference["layout"]) == rules.get(key):
+                continue  # An unchanged explicit choice must preserve its current live layout.
+            if before_rule:
+                before_rule(key)
+            self._ctl("apply", preference["layout"] or "monitor-default", "--workspace", key, "--quiet",
+                      preferences_path=preferences_path)
         self.plan(document, self.adapter.workspaces(), self._available(document), "apply")
         self._save_runtime()
+
+    def capture_workspaces(self):
+        """Keep placement metadata, but snapshot the authoritative live layout."""
+        workspaces = self.adapter.workspaces()
+        live = json.loads(self._ctl("workspaces", "--json"))["workspaces"]
+        layouts = {selector(workspace): workspace.get("layout") for workspace in live}
+        for workspace in workspaces:
+            workspace.pop("tiledLayout", None)
+            workspace["layout"] = layouts.get(selector(workspace))
+        return workspaces
 
     def restore_layouts(self, snapshot):
         scenes = self._scenes()

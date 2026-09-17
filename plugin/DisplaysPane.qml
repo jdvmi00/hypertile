@@ -107,6 +107,16 @@ Card {
             error = String(e.message || e);
         }
     }
+    function revealInspectorControl(item) {
+        var ancestor = item.parent;
+        while (ancestor) {
+            if (ancestor === settings) {
+                reveal(item);
+                return;
+            }
+            ancestor = ancestor.parent;
+        }
+    }
     function reveal(item) {
         var y = item.mapToItem(settings, 0, 0).y;
         if (y < inspector.contentY)
@@ -123,6 +133,9 @@ Card {
     }
     function setDisplay(key, value) {
         if (!selectedDisplay || pending || busy)
+            return;
+        var previous = selectedDisplay[key];
+        if (previous === value || (value === null && previous === undefined))
             return;
         var next = Displays.clone(draft);
         next.displays[selectedIndex][key] = value;
@@ -352,11 +365,13 @@ Card {
         font.family: pane.overlay.fontFamily
         font.pixelSize: pane.overlay.uiFontSmall
         textFormat: Text.PlainText
-        wrapMode: Text.WordWrap
+        wrapMode: Text.Wrap
     }
     component Action: Controls.Button {
         id: action
         property bool primary: false
+        onActiveFocusChanged: if (activeFocus)
+            pane.revealInspectorControl(this)
         font.family: pane.overlay.fontFamily
         font.pixelSize: pane.overlay.uiFontSmall
         padding: 10
@@ -544,6 +559,10 @@ Card {
                             activeFocusOnTab: true
                             Accessible.role: Accessible.Button
                             Accessible.name: "Display " + (index + 1) + ", " + modelData.connector
+                            Accessible.onPressAction: {
+                                pane.selectedIndex = index;
+                                screen.forceActiveFocus();
+                            }
                             Keys.onPressed: function (event) {
                                 var dx = event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0;
                                 var dy = event.key === Qt.Key_Up ? -1 : event.key === Qt.Key_Down ? 1 : 0;
@@ -904,13 +923,15 @@ Card {
                             width: settings.width
                             spacing: 6
                             Label {
+                                width: parent.width
                                 text: "Workspace " + modelData.replace(/^name:/, "")
                             }
                             Row {
                                 width: parent.width
                                 spacing: 8
                                 Choice {
-                                    width: parent.width - 82
+                                    width: parent.width - removeAssignment.width - parent.spacing
+                                    accessibleLabel: "Layout for workspace " + modelData.replace(/^name:/, "")
                                     model: [
                                         {
                                             label: "Monitor default",
@@ -926,7 +947,9 @@ Card {
                                     }
                                 }
                                 Action {
+                                    id: removeAssignment
                                     text: "Remove"
+                                    Accessible.name: "Remove monitor assignment for workspace " + modelData.replace(/^name:/, "")
                                     onClicked: {
                                         var next = Displays.clone(pane.draft);
                                         delete next.workspaces[modelData].monitor;
@@ -942,7 +965,7 @@ Card {
                         spacing: 8
                         Entry {
                             id: workspaceField
-                            width: parent.width - 70
+                            width: parent.width - addAssignment.width - parent.spacing
                             placeholderText: "Number or workspace name"
                             onAccepted: {
                                 pane.setAssignment(text, null, true);
@@ -950,7 +973,9 @@ Card {
                             }
                         }
                         Action {
+                            id: addAssignment
                             text: "Add"
+                            Accessible.name: "Assign workspace to this monitor"
                             enabled: workspaceField.text.trim() !== ""
                             onClicked: {
                                 pane.setAssignment(workspaceField.text, null, true);
@@ -973,14 +998,43 @@ Card {
                         color: pane.overlay.accent
                     }
                     Controls.CheckBox {
+                        id: ownershipControl
+                        width: parent.width
+                        padding: 8
+                        spacing: 10
+                        onActiveFocusChanged: if (activeFocus)
+                            pane.revealInspectorControl(this)
                         visible: !!pane.catalog && (pane.catalog.conflicts || []).length > 0
                         checked: pane.takeover
                         onToggled: pane.takeover = checked
                         text: "Let Hypertile manage these display settings"
                         contentItem: Label {
-                            text: parent.text
-                            leftPadding: parent.indicator.width + 8
+                            text: ownershipControl.text
+                            leftPadding: ownershipControl.indicator.width + ownershipControl.spacing
                             verticalAlignment: Text.AlignVCenter
+                        }
+                        indicator: Rectangle {
+                            implicitWidth: Math.max(20, pane.overlay.uiFontSmall * 1.2)
+                            implicitHeight: implicitWidth
+                            x: ownershipControl.leftPadding
+                            y: (ownershipControl.height - height) / 2
+                            radius: 4
+                            color: ownershipControl.checked ? Util.alpha(pane.overlay.accent, .25) : Util.alpha(pane.fg, .04)
+                            border.width: 2
+                            border.color: ownershipControl.checked || ownershipControl.activeFocus ? pane.overlay.accent : Util.alpha(pane.fg, .7)
+                            Label {
+                                anchors.centerIn: parent
+                                text: "✓"
+                                visible: ownershipControl.checked
+                                color: pane.fg
+                                font.bold: true
+                            }
+                        }
+                        background: Rectangle {
+                            radius: pane.overlay.radiusControl
+                            color: ownershipControl.hovered ? Util.alpha(pane.fg, .04) : "transparent"
+                            border.width: ownershipControl.activeFocus ? 2 : 0
+                            border.color: pane.overlay.accent
                         }
                     }
                 }

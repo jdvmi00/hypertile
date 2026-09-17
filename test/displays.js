@@ -98,3 +98,30 @@ assert.strictEqual(failedMatchPane.draft,matching)
 assert.strictEqual(failedMatchPane.dirty,false)
 assert(failedMatchPane.error.includes('Choose one connected display'))
 console.log('Reconnect pane selection and validation feedback passed')
+const untouchedDisplay = {id:'screen',x:0,y:0,scale:1.3333334}
+const untouchedPane = {Displays:D,selectedDisplay:untouchedDisplay,selectedIndex:0,draft:{displays:[untouchedDisplay]},dirty:false,pending:null,busy:false}
+vm.runInNewContext(helper('setDisplay'),untouchedPane)
+const untouchedDraft = untouchedPane.draft
+untouchedPane.setDisplay('initial_workspace',null)
+untouchedPane.setDisplay('x',0)
+untouchedPane.setDisplay('y',0)
+untouchedPane.setDisplay('scale',1.3333334)
+assert.strictEqual(untouchedPane.draft,untouchedDraft)
+assert.strictEqual(untouchedPane.dirty,false,'tabbing through unchanged fields must not stage settings')
+assert(!Object.hasOwn(untouchedPane.draft.displays[0],'initial_workspace'))
+untouchedPane.setDisplay('initial_workspace','name:writing')
+assert.strictEqual(untouchedPane.dirty,true)
+assert.strictEqual(untouchedPane.draft.displays[0].initial_workspace,'name:writing')
+assert.strictEqual(untouchedPane.draft.displays[0].scale,1.3333334)
+console.log('Untouched fields preserve clean draft and exact fractional scale')
+const inspectorSettings = {parent:{parent:null}}
+const focusReview = {settings:inspectorSettings,revealed:[]}
+// QML resolves reveal() through the enclosing component, rather than binding
+// JavaScript's receiver; use an explicit closure in this isolated test.
+focusReview.reveal = item => focusReview.revealed.push(item)
+vm.runInNewContext(helper('revealInspectorControl'),focusReview)
+const nestedButton = {parent:{parent:inspectorSettings}}
+focusReview.revealInspectorControl(nestedButton)
+focusReview.revealInspectorControl({parent:{parent:null}})
+assert.deepStrictEqual(focusReview.revealed,[nestedButton])
+console.log('Inspector keyboard actions scroll into view without moving toolbar focus')
