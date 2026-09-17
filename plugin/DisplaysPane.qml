@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Ui
 import "Displays.js" as Displays
 
 Card {
@@ -28,6 +29,13 @@ Card {
             value: display.connector
         };
     }))
+    readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
+    property int pendingTextSize: -1
+    readonly property real textSize: pendingTextSize >= 0 ? pendingTextSize : Style.font.baseSize
+    readonly property QtObject sliderPalette: QtObject {
+        readonly property color foreground: pane.fg
+        readonly property color background: pane.overlay.surfaceColor
+    }
     property bool workspacePreferencesExpanded: false
     property bool dirty: false
     property bool closeAfterRevert: false
@@ -73,6 +81,7 @@ Card {
     readonly property color fg: overlay.foreground
     readonly property color muted: overlay.mutedForeground
     readonly property real gap: overlay.uiPad
+    readonly property bool canArrange: Displays.canArrange(draft.displays)
     readonly property var arrangement: Displays.extent(draft.displays)
     readonly property var layoutOptions: [
         {
@@ -177,12 +186,24 @@ Card {
         draft = next;
         dirty = true;
     }
+    function setTextSize(index) {
+        if (textSizeProcess.running || index < 0 || index >= textSizeStops.length)
+            return;
+        pendingTextSize = textSizeStops[index];
+        textSizeProcess.command = ["omarchy", "display", "text", "size", String(pendingTextSize)];
+        textSizeProcess.running = true;
+    }
     function setPosition(index, x, y) {
-        if (draft.displays[index].mirror_of)
+        var display = draft.displays[index];
+        if (!Displays.canArrange(draft.displays) || !display || !display.connected || !display.enabled || display.mirror_of || busy || pending)
+            return;
+        x = Math.round(x);
+        y = Math.round(y);
+        if (display.x === x && display.y === y)
             return;
         var next = Displays.clone(draft);
-        next.displays[index].x = Math.round(x);
-        next.displays[index].y = Math.round(y);
+        next.displays[index].x = x;
+        next.displays[index].y = y;
         draft = next;
         dirty = true;
     }
@@ -377,6 +398,15 @@ Card {
             } catch (e) {
                 pane.error = "The display service returned an unreadable response.";
             }
+        }
+    }
+    Process {
+        id: textSizeProcess
+        stderr: StdioCollector { id: textSizeError; waitForEnd: true }
+        onExited: function(code) {
+            pane.pendingTextSize = -1;
+            if (code !== 0)
+                pane.error = textSizeError.text.trim() || "Could not change text size.";
         }
     }
     Process {
@@ -591,7 +621,7 @@ Card {
                 }
                 Label {
                     width: parent.width
-                    text: "Drag screens to align their edges. Select a screen to adjust its settings."
+                    text: pane.canArrange ? "Drag screens to align their edges. Select a screen to adjust its settings." : "Select a screen to adjust its settings."
                     color: pane.muted
                 }
                 Rectangle {
@@ -667,18 +697,20 @@ Card {
                             }
                             MouseArea {
                                 anchors.fill: parent
-                                cursorShape: pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor
+                                cursorShape: pane.canArrange && !pane.pending && !pane.busy ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
                                 property point origin
                                 property point startPosition
                                 onPressed: function (mouse) {
                                     screen.forceActiveFocus();
                                     pane.selectedIndex = screen.index;
+                                    if (!pane.canArrange || pane.pending || pane.busy)
+                                        return;
                                     diagram.frozenExtent = Displays.clone(pane.arrangement);
                                     origin = mapToItem(diagram, mouse.x, mouse.y);
                                     startPosition = Qt.point(screen.logical.x, screen.logical.y);
                                 }
                                 onPositionChanged: function (mouse) {
-                                    if (!pressed || pane.pending || pane.busy)
+                                    if (!pressed || !pane.canArrange || !diagram.frozenExtent || pane.pending || pane.busy)
                                         return;
                                     var p = mapToItem(diagram, mouse.x, mouse.y);
                                     var snapped = Displays.snap(pane.draft.displays, screen.index, startPosition.x + (p.x - origin.x) / diagram.factor, startPosition.y + (p.y - origin.y) / diagram.factor, 12 / diagram.factor);
@@ -715,7 +747,7 @@ Card {
                 Label {
                     width: parent.width
                     color: pane.muted
-                    text: "Keyboard: Tab to a display, arrows move 1 px, Shift + arrows move 10 px. Positions use logical pixels."
+                    text: pane.canArrange ? "Keyboard: Tab to a display, arrows move 1 px, Shift + arrows move 10 px. Positions use logical pixels." : "Keyboard: Tab to a display. Positions use logical pixels."
                     font.pixelSize: pane.overlay.uiCaption
                 }
             }
@@ -892,45 +924,90 @@ Card {
                         text: "Saved mode is unavailable. Choose a supported mode to enable this display."
                         color: pane.overlay.accent
                     }
-                    Row {
+                    Column {
                         width: parent.width
-                        spacing: 12
-                        Column {
-                            width: (parent.width - 12) / 2
-                            spacing: 6
+                        spacing: 6
+                        Row {
+                            width: parent.width
+                            Label { width: parent.width / 2; text: "Text size"; font.bold: true }
                             Label {
-                                text: "Scale"
-                                font.bold: true
-                            }
-                            Entry {
-                                width: parent.width
-                                accessibleLabel: "Display scale"
-                                text: pane.selectedDisplay ? String(Math.round(pane.selectedDisplay.scale * 10000) / 10000) : "1"
-                                validator: DoubleValidator {
-                                    bottom: 0.25
-                                    top: 8
-                                    decimals: 4
-                                }
-                                onEditingFinished: if (acceptableInput && Number(text) !== Math.round(pane.selectedDisplay.scale * 10000) / 10000)
-                                    pane.setDisplay("scale", Number(text))
+                                width: parent.width / 2
+                                horizontalAlignment: Text.AlignRight
+                                text: (textSizeSlider.dragging ? pane.textSizeStops[Math.round(textSizeSlider.liveValue)] : pane.textSize) + "px"
                             }
                         }
-                        Column {
-                            width: (parent.width - 12) / 2
-                            spacing: 6
-                            Label {
-                                text: "Rotation"
-                                font.bold: true
-                            }
-                            Choice {
-                                width: parent.width
-                                accessibleLabel: "Display rotation"
-                                model: ["Normal", "90°", "180°", "270°", "Flipped", "Flipped 90°", "Flipped 180°", "Flipped 270°"]
-                                currentIndex: pane.selectedDisplay ? pane.selectedDisplay.transform || 0 : 0
-                                onActivated: function (index) {
-                                    pane.setDisplay("transform", index);
+                        PanelSlider {
+                            id: textSizeSlider
+                            width: parent.width
+                            bar: pane.sliderPalette
+                            minimum: 0
+                            maximum: pane.textSizeStops.length - 1
+                            step: 1
+                            integer: true
+                            tickCount: pane.textSizeStops.length
+                            value: Displays.nearestStop(pane.textSizeStops, pane.textSize)
+                            enabled: !textSizeProcess.running
+                            activeFocusOnTab: true
+                            Accessible.role: Accessible.Slider
+                            Accessible.name: "Desktop text size"
+                            onActiveFocusChanged: if (activeFocus) pane.reveal(this)
+                            onReleased: function(v) { pane.setTextSize(Math.round(v)); }
+                            Keys.onPressed: function(event) {
+                                var delta = event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0;
+                                if (delta) {
+                                    pane.setTextSize(Math.max(0, Math.min(maximum, value + delta)));
+                                    event.accepted = true;
                                 }
                             }
+                            Rectangle {
+                                anchors.fill: parent
+                                anchors.margins: -2
+                                visible: textSizeSlider.activeFocus
+                                color: "transparent"
+                                border.color: pane.overlay.accent
+                                radius: pane.overlay.radiusControl
+                            }
+                        }
+                        Label {
+                            width: parent.width
+                            text: "Applies immediately to desktop and application text."
+                            color: pane.muted
+                            font.pixelSize: pane.overlay.uiCaption
+                        }
+                    }
+                    Column {
+                        width: parent.width
+                        spacing: 6
+                        Label { text: "Scale"; font.bold: true }
+                        Row {
+                            id: scaleButtons
+                            width: parent.width
+                            spacing: 4
+                            readonly property var options: Displays.scaleOptions(pane.selectedDisplay)
+                            Repeater {
+                                model: scaleButtons.options
+                                Action {
+                                    required property var modelData
+                                    width: (scaleButtons.width - scaleButtons.spacing * (scaleButtons.options.length - 1)) / scaleButtons.options.length
+                                    padding: 4
+                                    text: modelData.label
+                                    selected: !!pane.selectedDisplay && Math.abs(pane.selectedDisplay.scale - modelData.value) < 0.001
+                                    Accessible.name: "Display scale " + modelData.label
+                                    onClicked: pane.setDisplay("scale", modelData.value)
+                                }
+                            }
+                        }
+                    }
+                    Column {
+                        width: parent.width
+                        spacing: 6
+                        Label { text: "Rotation"; font.bold: true }
+                        Choice {
+                            width: parent.width
+                            accessibleLabel: "Display rotation"
+                            model: ["Normal", "90°", "180°", "270°", "Flipped", "Flipped 90°", "Flipped 180°", "Flipped 270°"]
+                            currentIndex: pane.selectedDisplay ? pane.selectedDisplay.transform || 0 : 0
+                            onActivated: function(index) { pane.setDisplay("transform", index); }
                         }
                     }
                     Row {

@@ -1,3 +1,11 @@
+// Moving the diagram only makes sense relative to another desktop rectangle.
+// Disabled, disconnected and mirrored outputs do not supply one.
+function canArrange(displays) {
+    return displays.filter(function(display) {
+        return display.connected && display.enabled && !display.mirror_of
+    }).length > 1
+}
+
 // The diagram uses compositor logical coordinates: rotate before scaling.
 function bounds(display) {
     var rotated = Number(display.transform || 0) % 2 === 1
@@ -167,4 +175,28 @@ function setUsage(document, index, value) {
         }
     }
     return next
+}
+
+// Match Omarchy's monitor menu presets and its 1/120 clean-scale calculation.
+// Keep the exact value for the compositor; round only the button label.
+function scaleOptions(display) {
+    if (!display || !(display.width > 0) || !(display.height > 0)) return []
+    var a = Math.round(display.width * 120), b = Math.round(display.height * 120)
+    while (b) { var remainder = a % b; a = b; b = remainder }
+    var values = []
+    ;[1, 1.25, 1.6, 2, 3, 4].forEach(function(preset) {
+        var units = Math.min(a, Math.round(preset * 120))
+        while (a % units !== 0) units++
+        var value = units / 120
+        if (value > 8 || values.some(function(option) { return option.value === value })) return
+        values.push({value: value, label: String(Math.round(value * 100) / 100) + "x"})
+    })
+    return values
+}
+
+function nearestStop(stops, value) {
+    var best = 0
+    for (var i = 1; i < stops.length; i++)
+        if (Math.abs(stops[i] - value) < Math.abs(stops[best] - value)) best = i
+    return best
 }

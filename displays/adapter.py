@@ -223,6 +223,18 @@ class Adapter:
             fields += ',monitor=' + lua_string(connector)
         self.dispatch('dpms', '{' + fields + '}')
 
+    # Hyprland keeps one global DPMS flag. Sleeping a single output clears it, after
+    # which these options wake every output on the next key press or mouse move.
+    WAKE_OPTIONS = ('key_press_enables_dpms', 'mouse_move_enables_dpms')
+
+    def wake_options(self):
+        return {name: bool(json.loads(self.run('-j', 'getoption', 'misc:' + name)).get('bool'))
+                for name in self.WAKE_OPTIONS}
+
+    def set_wake_options(self, options):
+        fields = ','.join(name + '=' + ('true' if options[name] else 'false') for name in self.WAKE_OPTIONS)
+        self.run('eval', 'hl.config({misc={' + fields + '}})')
+
     def reload(self):
         self.run('reload')
         errors = self.run('configerrors').strip()

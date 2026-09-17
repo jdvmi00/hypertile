@@ -41,6 +41,15 @@ class Fake:
             raise DisplayError('readback mismatch')
         return self.displays()
     def move(self, workspace, connector): self.calls.append(('move', workspace, connector))
+    WAKE_OPTIONS = ('key_press_enables_dpms', 'mouse_move_enables_dpms')
+    options = dict(key_press_enables_dpms=True, mouse_move_enables_dpms=True)
+    def wake_options(self): return dict(self.options)
+    def set_wake_options(self, options): self.options = dict(options)
+    def power(self, connector, awake):
+        self.calls.append(('power', connector, awake))
+        for m in self.current:
+            if m['enabled'] and (not connector or m['connector'] == connector):
+                m['awake'] = awake
 
 
 class Tests(unittest.TestCase):
@@ -54,6 +63,47 @@ class Tests(unittest.TestCase):
         self.service = Service(self.adapter, self.temp.name)
         self.service.policy = None
     def doc(self): return dict(version=1, displays=self.adapter.displays(), workspaces={})
+    def awake(self, connector):
+        return next(m for m in self.adapter.current if m['connector'] == connector)['awake']
+    def test_sleep_holds_input_wake_off_while_another_display_is_awake(self):
+        # Hyprland's global DPMS flag would otherwise let any key or mouse move undo the sleep.
+        self.adapter.options = dict(key_press_enables_dpms=True, mouse_move_enables_dpms=False)
+        self.assertEqual(self.service.power('DP-2', False), dict(awake=False, connector='DP-2'))
+        self.assertFalse(self.awake('DP-2'))
+        self.assertEqual(self.adapter.options, dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False))
+        self.assertEqual(read(self.service.power_path)['original'], dict(key_press_enables_dpms=True, mouse_move_enables_dpms=False))
+        self.service.power('DP-2', True)
+        self.assertTrue(self.awake('DP-2'))
+        self.assertEqual(self.adapter.options, dict(key_press_enables_dpms=True, mouse_move_enables_dpms=False))
+        self.assertFalse(self.service.power_path.exists())
+    def test_sleeping_the_last_awake_display_keeps_a_keyboard_way_back(self):
+        self.adapter.options = dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False)
+        self.service.power('DP-2', False)
+        self.service.power('DP-1', False)
+        self.assertEqual(self.adapter.options, dict(key_press_enables_dpms=True, mouse_move_enables_dpms=False))
+        self.assertEqual(read(self.service.power_path)['original'], dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False),
+                         'the values from before the first sleep survive a second sleep')
+        self.service.power('', True)
+        self.assertTrue(self.awake('DP-1') and self.awake('DP-2'))
+        self.assertEqual(self.adapter.options, dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False))
+        self.assertFalse(self.service.power_path.exists())
+    def test_wake_options_settle_after_external_wake_and_config_reload(self):
+        self.service.power('DP-2', False)
+        self.adapter.options = dict(key_press_enables_dpms=True, mouse_move_enables_dpms=True)  # hyprctl reload
+        self.assertTrue(self.service.settle_power())
+        self.assertEqual(self.adapter.options, dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False))
+        self.adapter.current[1]['awake'] = True  # hypridle or hyprctl woke it
+        self.assertEqual(self.service.catalog()['displays'][1]['awake'], True)
+        self.assertEqual(self.adapter.options, dict(key_press_enables_dpms=True, mouse_move_enables_dpms=True))
+        self.assertFalse(self.service.power_path.exists())
+        self.assertFalse(self.service.settle_power())
+    def test_sleep_refuses_disabled_or_unknown_displays_and_previews(self):
+        with self.assertRaisesRegex(DisplayError, 'connected, enabled'):
+            self.service.power('DP-9', False)
+        self.assertFalse(self.service.power_path.exists())
+        atomic(self.service.pending_path, dict(token='t', deadline=time.time() + 15))
+        with self.assertRaisesRegex(DisplayError, 'preview'):
+            self.service.power('DP-2', False)
     def test_scene_browse_lease_blocks_display_preview_before_writes(self):
         state = Path(self.temp.name) / 'hypertile/scenes/state.json'
         atomic(state, {'browse': {'active': {'1': {'token': 'owned'}}}})

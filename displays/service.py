@@ -54,6 +54,7 @@ class Service:
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.pending_path = self.directory / 'pending.json'
         self.confirmed_path = self.directory / 'confirmed.json'
+        self.power_path = self.directory / 'power.json'
         self.policy = WorkspacePolicy(self.adapter, self.directory)
 
     @contextlib.contextmanager
@@ -80,6 +81,7 @@ class Service:
             return True
 
     def catalog(self):
+        self.settle_power()
         current = self.adapter.displays()
         confirmed = read(self.confirmed_path, dict(version=1, displays=[], workspaces={}))
         if self.policy:
@@ -411,9 +413,8 @@ class Service:
             displays = self.adapter.displays()
             if connector and not any(d['connector'] == connector and d['enabled'] for d in displays):
                 raise DisplayError('Choose a connected, enabled display.')
-            if not awake and sum(bool(d['enabled'] and d.get('awake', True)) for d in displays) <= 1:
-                # Guarantee a keyboard path back when putting the sole usable screen to sleep.
-                self.adapter.run('eval', 'hl.config({misc={key_press_enables_dpms=true}})')
+            if not awake:
+                self._guard_wake(displays, connector)
             self.adapter.power(connector, awake)
             for _ in range(15):
                 targets = [d for d in self.adapter.displays() if d['enabled'] and (not connector or d['connector'] == connector)]
@@ -422,7 +423,41 @@ class Service:
                 time.sleep(.1)
             else:
                 raise DisplayError('Hyprland did not confirm the requested display power state.')
+            self._settle_power()
             return dict(awake=awake, connector=connector)
+
+    def _guard_wake(self, displays, connector):
+        # Hyprland tracks DPMS as one global state, so once any output sleeps a key
+        # press or mouse move with the wake options on turns every output back on.
+        # Hold the options off while another output stays awake; when the last
+        # awake output sleeps, guarantee a keyboard path back instead. The original
+        # values are remembered until every output is awake again.
+        guard = read(self.power_path) or dict(original=self.adapter.wake_options())
+        others_awake = any(d['enabled'] and d.get('awake', True) and d['connector'] != connector for d in displays)
+        guard['apply'] = {name: False for name in self.adapter.WAKE_OPTIONS} if others_awake \
+            else dict(guard['original'], key_press_enables_dpms=True)
+        atomic(self.power_path, guard)
+        self.adapter.set_wake_options(guard['apply'])
+
+    def settle_power(self):
+        if not self.power_path.exists():
+            return False
+        with self.lock():
+            return self._settle_power()
+
+    def _settle_power(self, displays=None):
+        """Restore the wake options once every output is awake, however it woke;
+        re-assert them while something sleeps, since a config reload resets them."""
+        guard = read(self.power_path)
+        if not guard:
+            return False
+        displays = self.adapter.displays() if displays is None else displays
+        if all(d.get('awake', True) for d in displays if d['enabled']):
+            self.adapter.set_wake_options(guard['original'])
+            self.power_path.unlink(missing_ok=True)
+        elif self.adapter.wake_options() != guard['apply']:
+            self.adapter.set_wake_options(guard['apply'])
+        return True
 
 
 def main():
@@ -534,6 +569,7 @@ def daemon(service):
                         service.restore('reconnect')
                     elif service.policy:
                         service.event()
+                service.settle_power()
                 previous = topology
             except Exception as error:
                 atomic(service.directory / 'daemon-error.json', dict(error=str(error), time=time.time()))

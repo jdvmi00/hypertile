@@ -189,3 +189,49 @@ assert.strictEqual(extendedDraft.displays[1].y, b.y)
 assert.strictEqual(D.usageOptions(mirrorDraft.displays, mirrorDraft.displays[0]).length, 2)
 assert.strictEqual(D.setUsage(mirrorDoc, 1, 'disabled').displays[1].enabled, false)
 console.log('Mirror groups, source selection, retained preferences and Extended restoration passed')
+
+// A lone desktop rectangle has no relative arrangement, including a mirror group.
+for (const others of [[], [{...b, enabled:false}], [{...b, connected:false}], [{...b, mirror_of:'a'}]]) {
+    const displays = [{...a, id:'a', x:177, y:374}, ...others]
+    assert.strictEqual(D.canArrange(displays), false)
+    const ctx = {Displays:D, draft:{displays}, dirty:false, busy:false, pending:null}
+    vm.runInNewContext(helper('setPosition'), ctx)
+    const original = ctx.draft
+    ctx.setPosition(0, 2077, 367)
+    assert.strictEqual(ctx.draft, original, 'single-display dragging must preserve coordinates and draft identity')
+    assert.strictEqual(ctx.dirty, false, 'single-display dragging must not prompt to discard changes')
+}
+assert.strictEqual(D.canArrange([a,b]), true)
+const movement = {Displays:D, draft:{displays:[{...a},{...b}]}, dirty:false, busy:false, pending:null}
+vm.runInNewContext(helper('setPosition'), movement)
+const originalMovement = movement.draft
+movement.setPosition(0, 0.1, 0.2)
+assert.strictEqual(movement.draft, originalMovement, 'unchanged rounded coordinates leave draft clean')
+assert.strictEqual(movement.dirty, false)
+movement.setPosition(1, -900.4, 40.2)
+assert.deepStrictEqual(plain(movement.draft.displays[1]), {...b,x:-900,y:40})
+assert.strictEqual(movement.dirty, true)
+console.log('Single-display arrangement is inert; multiple displays still move and unchanged positions stay clean')
+
+const ultrawideScales = plain(D.scaleOptions({width:6144,height:2560}))
+assert.deepStrictEqual(ultrawideScales.map(s=>s.label), ['1x','1.33x','1.6x','2x','3.2x','4x'])
+assert.strictEqual(ultrawideScales[1].value, 4/3, 'display labels must not round the scale sent to Hyprland')
+for (const [width,height] of [[6144,2560],[1920,1080],[3840,2160],[2560,1440],[1080,1920]]) {
+    const options = plain(D.scaleOptions({width,height}))
+    assert.strictEqual(new Set(options.map(s=>s.value)).size, options.length)
+    for (const {value} of options) {
+        assert(Math.abs(width / value - Math.round(width / value)) < 0.00001)
+        assert(Math.abs(height / value - Math.round(height / value)) < 0.00001)
+    }
+}
+assert.deepStrictEqual(plain(D.scaleOptions(null)), [])
+const textPane = {textSizeStops:[9,10,11,12,14,16,20], pendingTextSize:-1, textSizeProcess:{running:false}, draft:untouchedDraft, dirty:false}
+vm.runInNewContext(helper('setTextSize'), textPane)
+assert.strictEqual(D.nearestStop(textPane.textSizeStops,13),3)
+textPane.setTextSize(4)
+assert.deepStrictEqual(plain(textPane.textSizeProcess.command), ['omarchy','display','text','size','14'])
+assert.strictEqual(textPane.pendingTextSize,14)
+assert.strictEqual(textPane.dirty,false,'global text sizing must not stage a display preview')
+textPane.setTextSize(6)
+assert.strictEqual(textPane.pendingTextSize,14,'an in-flight text-size command must not be overwritten')
+console.log('Resolution-compatible scale presets and global text-size actions passed')

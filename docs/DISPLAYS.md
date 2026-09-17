@@ -58,9 +58,14 @@ it follows the compositor's power state, not unsaved edits, so it is only
 offered for a connected, enabled output. Sleeping displays are marked in the
 diagram and the display list, and **Wake all** appears in the header only while
 something is asleep. `hypertile-ctl display wake` also powers outputs back on.
-Sleeping the last awake output enables Hyprland's keyboard wake option, so
-a key press remains a way back. Sleep is temporary and is never saved as a
-disabled display.
+Hyprland treats DPMS as one global state, so after any output sleeps its
+`key_press_enables_dpms` and `mouse_move_enables_dpms` options (both on in
+Omarchy) would wake every output on the next key press or mouse move. While
+another output stays awake, the service holds both options off; sleeping the
+last awake output instead enables keyboard wake, so a key press remains a way
+back. The original values are restored once every output is awake, however it
+woke, and re-asserted after a config reload. Sleep is temporary and is never
+saved as a disabled display.
 
 **Disable display** removes an output from the desktop after other destinations
 are enabled. Its workspaces remain accessible on another output. Disabling the
