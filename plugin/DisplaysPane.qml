@@ -30,7 +30,6 @@ Card {
     }))
     property bool dirty: false
     property bool closeAfterRevert: false
-    property bool takeover: false
     property string error: ""
     property string notice: ""
     property var pending: null
@@ -160,8 +159,6 @@ Card {
     function preview() {
         overlay.placeDisplayConfirmation(draft);
         var args = ["preview", "--json", JSON.stringify(draft)];
-        if (takeover)
-            args.push("--takeover");
         run(args);
     }
     function revert() {
@@ -741,15 +738,10 @@ Card {
                     Label {
                         width: parent.width
                         visible: !!pane.selectedDisplay && pane.selectedDisplay.connected && !!pane.selectedDisplay.ambiguous
-                        text: pane.selectedDisplay && pane.selectedDisplay.explicit_match ? "This connector is explicitly matched for this configuration." : "These displays share an identity. Match this connector deliberately before applying."
-                        color: pane.overlay.accent
+                        text: "Settings are saved for this connection: " + (pane.selectedDisplay ? pane.selectedDisplay.connector : "")
+                        color: pane.muted
                     }
-                    Action {
-                        visible: !!pane.selectedDisplay && pane.selectedDisplay.connected && !!pane.selectedDisplay.ambiguous
-                        text: (pane.selectedDisplay && pane.selectedDisplay.explicit_match ? "Matched · " : "Match to ") + (pane.selectedDisplay ? pane.selectedDisplay.connector : "")
-                        primary: !!pane.selectedDisplay && !!pane.selectedDisplay.explicit_match
-                        onClicked: pane.setDisplay("explicit_match", true)
-                    }
+
                     Row {
                         spacing: 8
                         Action {
@@ -991,51 +983,9 @@ Card {
                     }
                     Label {
                         width: parent.width
-                        visible: !!pane.catalog && (pane.catalog.conflicts || []).length > 0
-                        text: "Existing configuration rules conflict:\n" + (pane.catalog ? (pane.catalog.conflicts || []).map(function (c) {
-                                return typeof c === 'string' ? c : c.message || (c.path ? c.path + ":" + c.line + " · " + c.text : JSON.stringify(c));
-                            }).join("\n") : "")
-                        color: pane.overlay.accent
-                    }
-                    Controls.CheckBox {
-                        id: ownershipControl
-                        width: parent.width
-                        padding: 8
-                        spacing: 10
-                        onActiveFocusChanged: if (activeFocus)
-                            pane.revealInspectorControl(this)
-                        visible: !!pane.catalog && (pane.catalog.conflicts || []).length > 0
-                        checked: pane.takeover
-                        onToggled: pane.takeover = checked
-                        text: "Let Hypertile manage these display settings"
-                        contentItem: Label {
-                            text: ownershipControl.text
-                            leftPadding: ownershipControl.indicator.width + ownershipControl.spacing
-                            verticalAlignment: Text.AlignVCenter
-                        }
-                        indicator: Rectangle {
-                            implicitWidth: Math.max(20, pane.overlay.uiFontSmall * 1.2)
-                            implicitHeight: implicitWidth
-                            x: ownershipControl.leftPadding
-                            y: (ownershipControl.height - height) / 2
-                            radius: 4
-                            color: ownershipControl.checked ? Util.alpha(pane.overlay.accent, .25) : Util.alpha(pane.fg, .04)
-                            border.width: 2
-                            border.color: ownershipControl.checked || ownershipControl.activeFocus ? pane.overlay.accent : Util.alpha(pane.fg, .7)
-                            Label {
-                                anchors.centerIn: parent
-                                text: "✓"
-                                visible: ownershipControl.checked
-                                color: pane.fg
-                                font.bold: true
-                            }
-                        }
-                        background: Rectangle {
-                            radius: pane.overlay.radiusControl
-                            color: ownershipControl.hovered ? Util.alpha(pane.fg, .04) : "transparent"
-                            border.width: ownershipControl.activeFocus ? 2 : 0
-                            border.color: pane.overlay.accent
-                        }
+                        text: "Keep changes saves your display configuration. Existing automatic settings are preserved unless you change them."
+                        color: pane.muted
+                        font.pixelSize: pane.overlay.uiCaption
                     }
                 }
             }

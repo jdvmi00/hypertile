@@ -199,7 +199,9 @@ default, and keeps the overlay open.
 
 Choose **Displays** to arrange screens, change modes, scale and rotation, manage
 power, and assign workspaces and monitor layout defaults. Changes use a
-15-second Keep/Revert preview with an independent rollback watchdog. See
+15-second Keep/Revert preview with an independent rollback watchdog. Existing
+monitor configuration is adopted automatically; Keep saves adjusted fields to
+`monitors.lua` while preserving unrelated and automatic settings. See
 [Displays and workspace placement](docs/DISPLAYS.md) for configuration ownership,
 reconnect behavior, and the shared UI/CLI workflow.
 
@@ -484,7 +486,7 @@ Run the tests from the repository root:
 shellcheck install.sh uninstall.sh
 python3 test/dev.py && python3 test/upgrade.py   # deployment helper: preservation, restarts, failures
 python3 test/install.py                          # installer and uninstaller
-python3 test/displays.py && python3 test/display_policy.py && node test/displays.js
+python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_policy.py && node test/displays.js
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
 lua test/harness.lua && lua test/loader.lua      # engine: placement, rules, capacity, messages, hot swap

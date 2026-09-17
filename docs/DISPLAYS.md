@@ -74,17 +74,41 @@ refused until another default is chosen.
 
 ## Configuration ownership and recovery
 
-Hypertile leaves existing Hyprland and Omarchy configuration files intact. The
-Displays view reports monitor/workspace rules found in the user's Lua config.
-Review these and deliberately accept takeover before the first preview.
-Confirmed runtime settings are reapplied after config reload. Unrelated monitor
-properties, keyboard bindings, colors, and desktop preferences remain outside
-Hypertile's display configuration.
+Hypertile automatically uses the existing `~/.config/hypr/monitors.lua` as the
+display configuration when installed or enabled. No takeover choice is needed,
+and initial setup does not change your display arrangement. The UI starts from
+the running settings. Preview changes are temporary; **Keep changes** saves the
+adjusted fields into the existing monitor declarations, reloads Hyprland, and
+verifies the result. A failed save or reload restores the previous file and
+runtime arrangement.
+
+Comments, unrelated fields, the general fallback rule, and unchanged expressions
+such as `preferred`, `auto`, and shared scale variables are preserved. A screen
+without a specific rule gets one when its settings change, inheriting fallback
+expressions. Changing one screen's scale never changes a shared scale variable.
+The first save keeps `monitors.lua.hypertile.bak`; each preview also journals the
+exact pre-save content for crash recovery. External edits during preview cause
+the save to stop and ask you to refresh, rather than overwrite them.
+
+Configuration reloads and reconnects use Hyprland's saved monitor rules directly;
+Hypertile no longer reapplies a competing geometry snapshot. Disabling or
+uninstalling Hypertile leaves the saved monitor configuration usable, including
+on purge. Existing saved preferences from the earlier display implementation
+are migrated once on upgrade before the old replay behavior is retired.
+
+Supported edits are literal `hl.monitor({ ... })` declarations in `monitors.lua`.
+Custom control flow, computed output selectors, duplicate declarations, or
+monitor rules in other loaded user modules receive a source-specific explanation
+before preview changes are applied. They are never rewritten speculatively.
+Workspace policy remains separate from monitor geometry. Known connected outputs
+are matched by connector automatically, including connections sharing an EDID;
+reassigning a disconnected saved display still uses the explicit matching UI.
 
 Display state lives in `$XDG_STATE_HOME/hypertile/displays/` (normally
 `~/.local/state/hypertile/displays/`):
 
-- `confirmed.json`: versioned display and workspace preferences.
+- `confirmed.json`: versioned workspace/display identity metadata and the
+  configuration migration marker; geometry is informational after migration.
 - `pending.json`: an unconfirmed transaction, original geometry and workspace
   placement, its token, deadline, and application progress.
 - `workspace-runtime.json`: current-session reconnect and manual-move tracking.
@@ -109,7 +133,7 @@ All display commands return JSON and use the same service as the UI:
 ```sh
 hypertile-ctl display list --json
 hypertile-ctl display status
-hypertile-ctl display preview --json - --takeover < settings.json
+hypertile-ctl display preview --json - < settings.json
 hypertile-ctl display keep TOKEN
 hypertile-ctl display revert TOKEN
 hypertile-ctl display sleep DP-1
@@ -119,10 +143,12 @@ hypertile-ctl display restore
 hypertile-ctl display recover
 ```
 
-`restore` reapplies confirmed preferences. `recover` rolls back an interrupted
-preview. `watch` is the long-running display watcher; `stop` stops it after
-recovery. `--takeover` is required when existing rules conflict and takeover has
-not already been confirmed. The UI also displays per-output identify labels.
+`restore` recovers interrupted work and reconciles workspace preferences;
+monitor geometry comes from the Lua configuration. `recover` rolls back an
+interrupted preview. `watch` is the long-running display watcher; `stop` stops it
+after recovery. The former `--takeover` flag remains accepted for script
+compatibility and is no longer necessary. The UI also displays per-output
+identify labels.
 
 A settings document has `version: 1`, a `displays` array, and a `workspaces`
 object. Start from `display list` rather than inventing display identities.

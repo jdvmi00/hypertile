@@ -1,4 +1,4 @@
-"""Hyprland 0.56 Lua display adapter. No user configuration files are rewritten."""
+"""Hyprland 0.56 Lua display adapter. Runtime preview and configuration reload operations."""
 import hashlib
 import json
 import math
@@ -154,7 +154,11 @@ class Adapter:
             if all(d['connector'] in current and same(d, current[d['connector']]) for d in desired):
                 return list(current.values())
             time.sleep(.1)
-        raise DisplayError('Hyprland did not apply the requested display settings. Reverting.')
+        fields = ('enabled', 'width', 'height', 'refresh', 'x', 'y', 'scale', 'transform')
+        detail = '; '.join(d['connector'] + ': requested ' + str({k: d[k] for k in fields}) +
+                           ', received ' + str({k: current.get(d['connector'], {}).get(k) for k in fields})
+                           for d in desired if d['connector'] not in current or not same(d, current[d['connector']]))
+        raise DisplayError('Hyprland did not apply the requested display settings. Reverting. ' + detail)
 
     def move(self, workspace, connector):
         name = str(workspace)
@@ -170,18 +174,8 @@ class Adapter:
             fields += ',monitor=' + lua_string(connector)
         self.dispatch('dpms', '{' + fields + '}')
 
-    def conflicts(self):
-        import os
-        root = Path(os.environ.get('XDG_CONFIG_HOME') or Path.home() / '.config') / 'hypr'
-        result = []
-        for path in root.rglob('*.lua'):
-            if path.name.startswith('hypertile'):
-                continue
-            try:
-                for number, line in enumerate(path.read_text().splitlines(), 1):
-                    code = line.split('--', 1)[0]
-                    if re.search(r'hl\.(monitor|workspace|workspace_rule)\s*\(', code):
-                        result.append(dict(path=str(path), line=number, text=code.strip()))
-            except (OSError, UnicodeError):
-                continue
-        return result
+    def reload(self):
+        self.run('reload')
+        errors = self.run('configerrors').strip()
+        if errors:
+            raise DisplayError('Hyprland configuration error: ' + errors)

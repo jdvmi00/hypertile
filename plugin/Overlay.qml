@@ -1882,7 +1882,7 @@ Item {
     function refresh(): void { root.refresh() }
     function content(on: bool): void { root.showContent(on) }
     function displays(): void { root.showDisplays() }
-    function displayState(): string { return JSON.stringify({draft: displaysPane.draft, pending: displaysPane.pending, dirty: displaysPane.dirty, error: displaysPane.error, selected: displaysPane.selectedIndex, takeover: displaysPane.takeover, screen: window.screen ? window.screen.name : null, panel: {x: displaysPane.x, y: displaysPane.y, width: displaysPane.width, height: displaysPane.height}, window: {width: window.width, height: window.height}}) }
+    function displayState(): string { return JSON.stringify({draft: displaysPane.draft, pending: displaysPane.pending, dirty: displaysPane.dirty, error: displaysPane.error, selected: displaysPane.selectedIndex, screen: window.screen ? window.screen.name : null, panel: {x: displaysPane.x, y: displaysPane.y, width: displaysPane.width, height: displaysPane.height}, window: {width: window.width, height: window.height}}) }
     function displaySet(index: int, key: string, value: string): void {
       displaysPane.selectedIndex = index
       var parsed
@@ -1890,7 +1890,6 @@ Item {
       displaysPane.setDisplay(key, parsed)
     }
     function displaySelect(index: int): void { displaysPane.selectedIndex = index }
-    function displayTakeover(on: bool): void { displaysPane.takeover = on }
     function displayPreview(): void { displaysPane.preview() }
     function displayKeep(): void { if (displaysPane.pending) displaysPane.run(["keep", displaysPane.pending.token]) }
     function displayRevert(): void { displaysPane.revert() }

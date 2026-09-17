@@ -2,6 +2,11 @@
 
 ## Unreleased — displays and workspace placement
 
+- Automatically adopt existing monitor configuration; remove the takeover step.
+  Keep writes changed fields to `monitors.lua`, preserves automatic settings and
+  comments, verifies a config reload, and recovers failed or interrupted saves.
+  Manual config edits are respected instead of overwritten by saved geometry.
+
 - Add a Displays view with a scaled arrangement diagram, edge snapping, exact
   coordinates, mode/scale/rotation controls, identify labels, and keyboard access.
 - Separate temporary display sleep/wake from disabling an output; protect the

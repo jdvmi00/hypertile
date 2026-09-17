@@ -16,6 +16,7 @@ import uuid
 
 from adapter import Adapter, DisplayError, match, same, validate
 from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules
+from configuration import Configuration
 
 
 def atomic(path, value):
@@ -48,6 +49,7 @@ def read(path, fallback=None):
 class Service:
     def __init__(self, adapter=None, directory=None):
         self.adapter = adapter or Adapter()
+        self.configuration = Configuration() if adapter is None else None
         self.directory = Path(directory) if directory else Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'hypertile/displays'
         self.directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.pending_path = self.directory / 'pending.json'
@@ -96,12 +98,15 @@ class Service:
                         actual[key] = saved[key]
             if not actual:
                 disconnected.append(dict(saved, connected=False, modes=[]))
+        if self.configuration:
+            for display in current:
+                display['explicit_match'] = True
         current.extend(disconnected)
         return dict(version=1, displays=current, confirmed=confirmed,
-                    pending=read(self.pending_path), conflicts=self.adapter.conflicts(),
+                    pending=read(self.pending_path), configuration=str(self.configuration.path) if self.configuration else None,
                     recovery=read(self.directory / 'recovery.json'), service_error=read(self.directory / 'daemon-error.json'))
 
-    def preview(self, document, takeover=False, watchdog=True):
+    def preview(self, document, takeover=False, watchdog=True, migrate=False):
         with self.lock():
             if self.pending_path.exists():
                 raise DisplayError('A display preview is already active. Keep or revert it first.')
@@ -115,10 +120,14 @@ class Service:
             desired = validate(document, before)
             if self.policy:
                 self.policy.validate_changes(document)
-            if self.adapter.conflicts() and not takeover and not read(self.confirmed_path, {}).get('takeover'):
-                raise DisplayError('Existing monitor/workspace rules need deliberate takeover. Review conflicts, then use --takeover.')
-            document = dict(document, takeover=bool(takeover or read(self.confirmed_path, {}).get('takeover')))
-            pending = dict(token=uuid.uuid4().hex, deadline=time.time() + 15, phase='applying',
+            document = dict(document)
+            document.pop('takeover', None)
+            baseline = before + [d for d in read(self.confirmed_path, {}).get('displays', [])
+                                 if not any(m['connector'] == d['connector'] for m in before)]
+            config_plan = self.configuration.plan([] if migrate else baseline, document) if self.configuration else None
+            if self.configuration:
+                document['configuration_backed'] = True
+            pending = dict(config_plan=config_plan, token=uuid.uuid4().hex, deadline=time.time() + 15, phase='applying',
                            before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
                            expected={d['connector']: d for d in before}, touched=[],
                            policy_state=copy.deepcopy(self.policy.state) if self.policy else None,
@@ -160,6 +169,13 @@ class Service:
         rule_files = [saved for saved in pending.get('rule_files', [])
                       if 'rule_touched' not in pending or saved.get('workspace') in pending['rule_touched']]
         rule_errors = restore_rules(rule_files) if pending.get('phase') in ('committing', 'recovery-needed') else []
+        if self.configuration and pending.get('config_touched'):
+            rule_errors.extend(self.configuration.rollback(pending.get('config_plan')))
+            if not rule_errors:
+                try:
+                    self.adapter.reload()
+                except Exception as error:
+                    rule_errors.append(str(error))
         report['errors'].extend(rule_errors)
         restore = []
         for old in pending['before']:
@@ -262,6 +278,14 @@ class Service:
                 if self.policy:
                     self.policy.commit(pending['document'], preferences_path=staged_path, before_rule=before_rule)
                 sync_rules(pending.get('rule_files', []))
+                if self.configuration and pending.get('config_plan'):
+                    def before_config():
+                        pending['config_touched'] = True
+                        atomic(self.pending_path, pending)
+                    self.configuration.commit(pending['config_plan'], before_write=before_config)
+                    self.adapter.reload()
+                    self.adapter.verify([d for d in pending['expected'].values() if d['connector'] in pending['touched']])
+                    self.reconcile(pending['document'], 'keep')
                 atomic(self.confirmed_path, dict(pending['document'], _transaction=token))
             except Exception:
                 # An fsync failure may occur after replace; inspect the durable
@@ -273,7 +297,31 @@ class Service:
             staged_path.unlink(missing_ok=True)
             return dict(kept=True)
 
+    def setup(self, offline=False):
+        """Adopt existing config without changing it; migrate legacy saved intent once."""
+        if not self.configuration:
+            return dict(configured=False)
+        with self.lock():
+            if self.pending_path.exists():
+                return dict(configured=False, preview_active=True)
+            document = read(self.confirmed_path, dict(version=1, displays=[], workspaces={}))
+            if document.get('configuration_backed'):
+                return dict(configured=True)
+            if not document['displays']:
+                document['configuration_backed'] = True
+                document.pop('takeover', None)
+                atomic(self.confirmed_path, document)
+                return dict(configured=True)
+        if offline:
+            return dict(configured=False, migration_pending=True)
+        # Legacy geometry must be persisted before retiring its replay path.
+        preview = self.preview(document, migrate=True)
+        self.keep(preview['token'])
+        return dict(configured=True, migrated=True)
+
     def restore(self, reason='restore'):
+        if self.configuration and not self.pending_path.exists():
+            self.setup()
         with self.lock():
             pending = read(self.pending_path)
             if pending:
@@ -290,7 +338,7 @@ class Service:
             current = self.adapter.displays()
             recovery = dict(reason=reason, fallback=False, errors=[])
             try:
-                desired = validate(document, current)
+                desired = [] if document.get('configuration_backed') else validate(document, current)
             except DisplayError as error:
                 # A cable/backend can expose different modes after reconnect. Preserve
                 # confirmed intent and keep the compositor's currently usable desktop.
@@ -366,14 +414,16 @@ class Service:
 def main():
     p = argparse.ArgumentParser(description='Arrange displays with a crash-safe 15-second preview. All results are JSON.')
     sub = p.add_subparsers(dest='command', required=True)
-    for name in ('list', 'status', 'restore', 'recover', 'watch', 'daemon', 'stop'):
+    for name in ('list', 'status', 'restore', 'recover', 'watch', 'daemon', 'stop', 'setup'):
         parser = sub.add_parser(name)
+        if name == 'setup':
+            parser.add_argument('--offline', action='store_true')
         if name in ('list', 'status'):
             parser.add_argument('--json', action='store_true')
     sub.add_parser('identify').add_argument('connector', nargs='?')
     preview = sub.add_parser('preview')
     preview.add_argument('--json', required=True, help='Version 1 display settings JSON; use - for stdin')
-    preview.add_argument('--takeover', action='store_true', help='Explicitly own configured display rules; source files are preserved')
+    preview.add_argument('--takeover', action='store_true', help=argparse.SUPPRESS)
     sub.add_parser('keep').add_argument('token')
     sub.add_parser('revert').add_argument('token', nargs='?')
     sub.add_parser('sleep').add_argument('connector')
@@ -390,6 +440,8 @@ def main():
             result = service.keep(args.token)
         elif args.command in ('revert', 'recover'):
             result = service.revert(getattr(args, 'token', None))
+        elif args.command == 'setup':
+            result = service.setup(offline=args.offline)
         elif args.command == 'restore':
             result = service.restore()
         elif args.command in ('sleep', 'wake'):

@@ -25,19 +25,6 @@ class PolicyTests(unittest.TestCase):
     def ws(self, monitor="DP-1", key="1", layout="lua:columns"):
         return {"selector": key, "monitor": monitor, "layout": layout}
 
-    def test_conflicts_include_supported_lua_workspace_rules(self):
-        from adapter import Adapter
-        with tempfile.TemporaryDirectory() as temporary:
-            config = Path(temporary) / "hypr"
-            config.mkdir()
-            (config / "monitors.lua").write_text('hl.monitor({output="DP-1"})\n'
-                                                  'hl.workspace_rule({workspace="1",monitor="DP-1"})\n'
-                                                  '-- hl.monitor({output="ignored"})\n'
-                                                  'hl.config({general={layout="dwindle"}})\n')
-            with patch.dict(os.environ, XDG_CONFIG_HOME=temporary):
-                conflicts = Adapter().conflicts()
-            self.assertEqual([r["line"] for r in conflicts], [1, 2])
-
     def test_precedence_and_explicit_choices_follow_moves(self):
         self.assertEqual(effective_layout("1", "portrait", self.document, {}, "dwindle"), ("lua:vertical", "monitor"))
         self.assertEqual(effective_layout("name:work", "wide", self.document, {}, "dwindle"), ("lua:quad", "explicit"))

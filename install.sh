@@ -408,7 +408,10 @@ fi
 flock -u 7
 exec 7>&-
 
+"$bin/hypertile-displays" setup --offline >/dev/null
+
 if command -v hyprctl >/dev/null 2>&1 && hyprctl version >/dev/null 2>&1; then
+  "$bin/hypertile-displays" setup >/dev/null
   hyprctl reload >/dev/null || { echo "hyprctl reload failed" >&2; exit 1; }
   errors="$(hyprctl configerrors | sed '/^\s*$/d' || true)"
   if [[ -n "$errors" ]]; then

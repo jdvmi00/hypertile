@@ -23,10 +23,12 @@ def main():
         runtime.mkdir(mode=0o700)
         (root / 'config/hypr').mkdir(parents=True)
         (root / 'config/hypr/looknfeel.lua').write_text('hl.config({general={layout="dwindle"}})\n')
-        config = root / "hyprland.lua"
-        config.write_text('hl.monitor({output="WAYLAND-1",mode="1280x720@60",position="0x0",scale=1,disabled=false})\n'
+        config = root / "config/hypr/hyprland.lua"
+        monitors = root / "config/hypr/monitors.lua"
+        monitors.write_text('hl.monitor({output="WAYLAND-1",mode="1280x720@60",position="0x0",scale=1,disabled=false})\n'
                           'hl.monitor({output="WAYLAND-2",mode="1280x720@60",position="1280x0",scale=1,disabled=false})\n'
                           'hl.config({animations={enabled=false},xwayland={enabled=false}})\n')
+        config.write_text('package.path = os.getenv("XDG_CONFIG_HOME") .. "/?.lua;" .. package.path\nrequire("hypr.monitors")\nhl.config({animations={enabled=false},xwayland={enabled=false}})\n')
         env = dict(os.environ, XDG_RUNTIME_DIR=str(runtime), XDG_STATE_HOME=str(root / "state"),
                    XDG_CONFIG_HOME=str(root / "config"), HYPERTILE_SRC=str(ROOT),
                    HYPRLAND_NO_SD_VARS="1", HYPRLAND_NO_SD_NOTIFY="1")
@@ -69,18 +71,26 @@ def main():
                 for name in ('WAYLAND-1', 'WAYLAND-2'):
                     if name not in names:
                         ctl('output', 'create', 'wayland', name)
+                # Parent tiling otherwise resizes nested output windows behind
+                # the test's back. Float only windows owned by this test process.
+                clients = json.loads(subprocess.check_output(['hyprctl', '-j', 'clients'], text=True))
+                for client in clients:
+                    if client.get('pid') == process.pid:
+                        selector = json.dumps('address:' + client['address'])
+                        subprocess.run(['hyprctl', 'eval', 'hl.dispatch(hl.dsp.window.float({window=' + selector + ',action="on"})); hl.dispatch(hl.dsp.window.resize({window=' + selector + ',x=1280,y=720}))'],
+                                       check=True, capture_output=True, timeout=5)
                 for index, name in enumerate(('WAYLAND-1', 'WAYLAND-2')):
                     ctl('eval', 'hl.monitor({output="' + name + '",mode="1280x720@60",position="' + str(index * 1280) + 'x0",scale=1,disabled=false})')
                 time.sleep(.5)
                 initial = display('list')
-                assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays']), initial
+                assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays'] if d['enabled']), initial
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
                 document = dict(version=1, displays=outputs)
                 # Retain current modes, test rotation, placement, readback and rollback.
                 second = next(d for d in document['displays'] if d['connector'] == 'WAYLAND-2')
                 second.update(x=1280, y=0, transform=1)
-                response = display('preview', '--json', json.dumps(document), '--takeover')
+                response = display('preview', '--json', json.dumps(document))
                 token = response.get('token', response.get('pending', {}).get('token'))
                 assert token, response
                 actual = json.loads(ctl('-j', 'monitors'))
@@ -95,7 +105,7 @@ def main():
                 original_workspaces = json.loads(ctl('-j', 'workspaces'))
                 workspace = next(w for w in original_workspaces if w['monitor'] == 'WAYLAND-1')
                 assignment['workspaces'] = {str(workspace['id']): {'monitor': 'connector:WAYLAND-2'}}
-                pending = display('preview', '--json', json.dumps(assignment), '--takeover')
+                pending = display('preview', '--json', json.dumps(assignment))
                 moved = next(w for w in json.loads(ctl('-j', 'workspaces')) if w['id'] == workspace['id'])
                 assert moved['monitor'] == 'WAYLAND-2', moved
                 display('revert', pending['token'])
@@ -119,7 +129,7 @@ def main():
                 inherited['displays'][0]['default_layout'] = 'dwindle'
                 inherited['displays'][1]['default_layout'] = 'master'
                 inherited['workspaces'] = {'97': {'monitor': 'connector:WAYLAND-2', 'layout': None}}
-                pending = display('preview', '--json', json.dumps(inherited), '--takeover')
+                pending = display('preview', '--json', json.dumps(inherited))
                 assert live_workspace('97')['layout'] == 'master', live_workspace('97')
                 display('keep', pending['token'])
                 assert live_workspace('97')['layout_source'] == 'monitor'
@@ -134,7 +144,7 @@ def main():
                 # Preference applies to a named workspace created after Keep.
                 future = copy.deepcopy(inherited)
                 future['workspaces']['name:future'] = {'monitor': 'connector:WAYLAND-2', 'layout': None}
-                pending = display('preview', '--json', json.dumps(future), '--takeover')
+                pending = display('preview', '--json', json.dumps(future))
                 display('keep', pending['token'])
                 policy_daemon = subprocess.Popen([str(ROOT / 'bin/hypertile-displays'), 'daemon'], env=env,
                                                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
@@ -165,9 +175,13 @@ def main():
                 assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['dpmsStatus']
                 assert [(w['id'], w['monitor']) for w in json.loads(ctl('-j', 'workspaces'))] == before_power
                 # Keep, reload, and restart share exactly the production CLI path.
-                response = display('preview', '--json', json.dumps(document), '--takeover')
+                document['displays'] = display('list')['displays']
+                document['displays'][1]['transform'] = 1
+                response = display('preview', '--json', json.dumps(document))
                 display('keep', response['token'])
                 assert display('status')['confirmed']['displays'][1]['transform'] == 1
+                assert 'transform' in monitors.read_text()
+                assert display('status')['confirmed']['configuration_backed']
                 ctl('reload')
                 display('restore')
                 assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
@@ -184,10 +198,19 @@ def main():
                         time.sleep(.1)
                     else:
                         raise AssertionError('Daemon did not restore confirmed rotation after reload')
+                    # A manual config edit wins even with the watcher running.
+                    saved_source = monitors.read_text()
+                    monitors.write_text(saved_source.replace('transform = 1', 'transform = 0'))
+                    ctl('reload')
+                    time.sleep(1)
+                    assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['transform'] == 0
+                    monitors.write_text(saved_source)
+                    ctl('reload')
+                    time.sleep(.5)
                     # A SIGKILL cannot strand a preview: the independent process owns timeout.
                     transient = copy.deepcopy(document)
                     transient['displays'][1]['transform'] = 0
-                    pending = display('preview', '--json', json.dumps(transient), '--takeover')
+                    pending = display('preview', '--json', json.dumps(transient))
                     daemon.kill()
                     daemon.wait(timeout=5)
                     assert display('status')['pending']['token'] == pending['token']
@@ -202,7 +225,7 @@ def main():
                         daemon.terminate()
                         daemon.wait(timeout=5)
                 # Recover a pending operation at startup before replaying saved intent.
-                pending = display('preview', '--json', json.dumps(transient), '--takeover')
+                pending = display('preview', '--json', json.dumps(transient))
                 display('restore')
                 assert not display('status')['pending']
                 assert next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')

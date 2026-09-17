@@ -203,6 +203,17 @@ ShellRoot {
         self.assertIn("SETUP_FAILED", load_service())
         self.assertIn("hyprland.lua not found", (self.state / "hypertile/install.log").read_text())
 
+    def test_install_adopts_display_config_without_changing_it(self):
+        monitors = self.hypr / "monitors.lua"
+        original = 'local scale = 1.25\nhl.monitor({output="", mode="preferred", position="auto", scale=scale})\n'
+        monitors.write_text(original)
+        self.run_script("install.sh")
+        saved = json.loads((self.state / "hypertile/displays/confirmed.json").read_text())
+        self.assertTrue(saved["configuration_backed"])
+        self.assertEqual(monitors.read_text(), original)
+        self.run_script("uninstall.sh", "--purge")
+        self.assertEqual(monitors.read_text(), original)
+
     def test_original_backups_survive_repeat_install_and_uninstall(self):
         originals = {path: path.read_bytes() for path in (self.main, self.bindings, self.menu)}
         self.run_script("install.sh")
