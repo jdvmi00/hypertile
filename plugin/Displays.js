@@ -133,18 +133,54 @@ function matchSavedDisplay(document, index, connector) {
     return next
 }
 
-// Each independent display owns one desktop rectangle, with its mirrors grouped.
-function groupLabel(displays, index) {
+// Diagram numbers follow position, left to right and then top to bottom,
+// so the number on a screen says where it stands rather than where the
+// compositor listed it. A mirror counts right after its source; displays
+// that are not on the desktop (disconnected, disabled, a mirror of an
+// absent source) come last in list order. Returns the number of each
+// display index.
+function numbering(displays) {
+    var keys = displays.map(function(d, i) {
+        var source = d.mirror_of ? displays.findIndex(function(o) { return o.id === d.mirror_of }) : -1
+        var anchor = source >= 0 ? displays[source] : d
+        var onDesktop = !!(d.connected && d.enabled && anchor.connected && anchor.enabled && !anchor.mirror_of)
+        var b = bounds(anchor)
+        return {index: i, shown: onDesktop, x: b.x, y: b.y, mirror: source >= 0 ? 1 : 0}
+    })
+    keys.sort(function(p, q) {
+        if (p.shown !== q.shown) return p.shown ? -1 : 1
+        if (!p.shown) return p.index - q.index
+        if (p.x !== q.x) return p.x - q.x
+        if (p.y !== q.y) return p.y - q.y
+        if (p.mirror !== q.mirror) return p.mirror - q.mirror
+        return p.index - q.index
+    })
+    var out = []
+    keys.forEach(function(k, n) { out[k.index] = n + 1 })
+    return out
+}
+
+// Display indices in number order, for lists that should read like the diagram.
+function order(numbers) {
+    return numbers.map(function(n, i) { return i }).sort(function(p, q) { return numbers[p] - numbers[q] })
+}
+
+// Each independent display owns one desktop rectangle, with its mirrors
+// grouped: "1 + 2". `numbers` may be handed in so a drag in progress keeps
+// the labels it started with.
+function groupLabel(displays, index, numbers) {
+    var n = numbers || numbering(displays)
     return displays.map(function(d, i) {
-        return i === index || (d.enabled && d.connected && d.mirror_of === displays[index].id) ? String(i + 1) : null
-    }).filter(function(x) { return x !== null }).join(" + ")
+        return i === index || (d.enabled && d.connected && d.mirror_of === displays[index].id) ? n[i] : null
+    }).filter(function(x) { return x !== null }).sort(function(p, q) { return p - q }).join(" + ")
 }
 
 function usageOptions(displays, selected) {
     var options = [{label: "Extended display", value: "extended"}, {label: "Disabled", value: "disabled"}]
+    var numbers = numbering(displays)
     displays.forEach(function(d, i) {
         if (d.id !== selected.id && d.connected && d.enabled && !d.mirror_of)
-            options.push({label: "Mirror display " + (i + 1) + " · " + d.connector, value: d.id})
+            options.push({label: "Mirror display " + numbers[i] + " · " + d.connector, value: d.id})
     })
     if (selected.mirror_of && !options.some(function(o) { return o.value === selected.mirror_of }))
         options.push({label: "Mirror source unavailable", value: selected.mirror_of})

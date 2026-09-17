@@ -6,11 +6,14 @@ screen to align its edges, or enter its X and Y position.
 
 ![Displays arrangement and settings](screenshots/displays.png)
 
-Tab to a diagram
-screen and use arrows to move one logical pixel, or Shift+arrows for ten.
-**Identify** temporarily labels the selected screen with its diagram number;
-`hypertile-ctl display identify` labels every screen, or one when given a
-connector. Closing with unsaved changes asks before discarding them; nothing is
+Screens are numbered by
+position, left to right and then top to bottom, so the number on a screen says
+where it stands; a mirror counts right after its source, and disconnected or
+disabled displays come last. Tab to a diagram screen and use arrows to move one
+logical pixel, or Shift+arrows for ten. **Identify displays** labels every
+screen with its number for a few seconds, with the selected screen highlighted;
+`hypertile-ctl display identify` does the same, or labels one screen when given
+a connector. Closing with unsaved changes asks before discarding them; nothing is
 applied until you preview.
 
 Select a screen to change resolution and refresh rate, scale, rotation, or its

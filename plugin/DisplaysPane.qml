@@ -83,6 +83,13 @@ Card {
     readonly property real gap: overlay.uiPad
     readonly property bool canArrange: Displays.canArrange(draft.displays)
     readonly property var arrangement: Displays.extent(draft.displays)
+    // Diagram numbers come from position. A drag keeps the numbers it
+    // started with so labels do not swap under the pointer mid-move.
+    readonly property var liveNumbering: Displays.numbering(draft.displays)
+    property var frozenNumbering: null
+    readonly property var numbering: frozenNumbering || liveNumbering
+    readonly property var displayOrder: Displays.order(numbering)
+    function numberOf(index) { return numbering[index] || index + 1 }
     readonly property var layoutOptions: [
         {
             label: "Global fallback",
@@ -166,6 +173,9 @@ Card {
         else if (y + item.height > inspector.contentY + inspector.height - 36)
             inspector.contentY = Math.min(Math.max(0, inspector.contentHeight - inspector.height), y + item.height - inspector.height + 36);
     }
+    // Labels every screen with its diagram number (the selected one stands
+    // out) so the numbers can be matched to the desk at a glance. A
+    // connector limits it to one screen, for the CLI.
     function identify(connector) {
         identifyConnector = connector || "";
         identifyTimer.restart();
@@ -311,25 +321,27 @@ Card {
             WlrLayershell.namespace: "hypertile-display-label"
             WlrLayershell.layer: WlrLayer.Overlay
             WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
+            readonly property int displayIndex: pane.draft.displays.findIndex(function (d) {
+                return d.connector === modelData.name;
+            })
+            readonly property bool selectedScreen: !!pane.selectedDisplay && pane.selectedDisplay.connector === modelData.name
             Rectangle {
                 anchors.fill: parent
                 radius: pane.overlay.radiusCard
-                color: pane.overlay.surfaceColor
+                color: selectedScreen ? Util.alpha(pane.overlay.accent, .35) : pane.overlay.surfaceColor
                 border.color: pane.overlay.accent
-                border.width: 2
+                border.width: selectedScreen ? 4 : 2
                 Column {
                     anchors.centerIn: parent
-                    spacing: 8
+                    spacing: 6
                     Label {
                         anchors.horizontalCenter: parent.horizontalCenter
-                        text: String(pane.draft.displays.findIndex(function (d) {
-                            return d.connector === modelData.name;
-                        }) + 1)
+                        text: displayIndex >= 0 ? String(pane.numberOf(displayIndex)) : "?"
                         font.pixelSize: 42
                         font.bold: true
                     }
                     Label {
-                        text: modelData.name
+                        text: modelData.name + (selectedScreen ? " · selected" : "")
                         anchors.horizontalCenter: parent.horizontalCenter
                     }
                 }
@@ -464,6 +476,7 @@ Card {
         id: action
         property bool primary: false
         property bool selected: false
+        property bool bordered: true
         onActiveFocusChanged: if (activeFocus)
             pane.revealInspectorControl(this)
         font.family: pane.overlay.fontFamily
@@ -477,8 +490,8 @@ Card {
         }
         background: Rectangle {
             radius: pane.overlay.radiusControl
-            color: !action.enabled ? Util.alpha(pane.fg, .02) : Util.alpha(pane.overlay.accent, action.primary ? (action.hovered ? .3 : .23) : action.selected ? (action.hovered ? .19 : .14) : action.hovered ? .1 : .05)
-            border.width: action.activeFocus ? 2 : 1
+            color: !action.enabled ? Util.alpha(pane.fg, action.bordered ? .02 : 0) : Util.alpha(pane.overlay.accent, action.primary ? (action.hovered ? .3 : .23) : action.selected ? (action.hovered ? .19 : .14) : action.hovered ? .1 : action.bordered ? .05 : 0)
+            border.width: action.activeFocus ? 2 : (action.bordered || action.selected ? 1 : 0)
             border.color: !action.enabled ? Util.alpha(pane.fg, .12) : action.activeFocus || action.primary || action.selected ? pane.overlay.accent : Util.alpha(pane.fg, .25)
         }
     }
@@ -572,19 +585,22 @@ Card {
             Row {
                 id: navigation
                 anchors.left: parent.left
-                spacing: 8
+                spacing: 2
                 Action {
                     text: "Layouts"
+                    bordered: false
                     enabled: !pane.pending && !pane.busy
                     onClicked: pane.leave(false)
                 }
                 Action {
                     text: "Scenes"
+                    bordered: false
                     enabled: !pane.pending && !pane.busy
                     onClicked: pane.leave(true)
                 }
                 Action {
                     text: "Displays"
+                    bordered: false
                     selected: true
                 }
             }
@@ -592,6 +608,12 @@ Card {
                 id: windowActions
                 anchors.right: parent.right
                 spacing: 8
+                Action {
+                    text: identifyTimer.running ? "Identifying…" : "Identify displays"
+                    Accessible.description: "Show each screen's diagram number on that screen for a few seconds"
+                    enabled: !!pane.catalog && !identifyTimer.running
+                    onClicked: pane.identify("")
+                }
                 Action {
                     text: "Wake all"
                     visible: pane.asleepCount > 0
@@ -627,7 +649,7 @@ Card {
                 Rectangle {
                     id: diagram
                     width: parent.width
-                    height: Math.max(190, parent.height - 190)
+                    height: Math.max(190, parent.height - 290)
                     color: Util.alpha(pane.fg, .025)
                     radius: pane.overlay.radiusControl
                     border.color: Util.alpha(pane.fg, .15)
@@ -656,7 +678,7 @@ Card {
                             border.width: activeFocus ? 3 : 2
                             activeFocusOnTab: true
                             Accessible.role: Accessible.Button
-                            Accessible.name: "Display " + (index + 1) + ", " + modelData.connector
+                            Accessible.name: "Display " + pane.numberOf(index) + ", " + modelData.connector
                             Accessible.onPressAction: {
                                 pane.selectedIndex = index;
                                 screen.forceActiveFocus();
@@ -680,7 +702,7 @@ Card {
                                 spacing: 4
                                 Label {
                                     width: parent.width
-                                    text: Displays.groupLabel(pane.draft.displays, screen.index)
+                                    text: Displays.groupLabel(pane.draft.displays, screen.index, pane.numbering)
                                     font.pixelSize: Math.min(pane.overlay.uiFont * 1.5, screen.height * .45)
                                     font.bold: true
                                     horizontalAlignment: Text.AlignHCenter
@@ -706,6 +728,7 @@ Card {
                                     if (!pane.canArrange || pane.pending || pane.busy)
                                         return;
                                     diagram.frozenExtent = Displays.clone(pane.arrangement);
+                                    pane.frozenNumbering = pane.liveNumbering.slice();
                                     origin = mapToItem(diagram, mouse.x, mouse.y);
                                     startPosition = Qt.point(screen.logical.x, screen.logical.y);
                                 }
@@ -716,8 +739,8 @@ Card {
                                     var snapped = Displays.snap(pane.draft.displays, screen.index, startPosition.x + (p.x - origin.x) / diagram.factor, startPosition.y + (p.y - origin.y) / diagram.factor, 12 / diagram.factor);
                                     pane.setPosition(screen.index, snapped.x, snapped.y);
                                 }
-                                onReleased: diagram.frozenExtent = null
-                                onCanceled: diagram.frozenExtent = null
+                                onReleased: { diagram.frozenExtent = null; pane.frozenNumbering = null }
+                                onCanceled: { diagram.frozenExtent = null; pane.frozenNumbering = null }
                             }
                         }
                     }
@@ -732,13 +755,14 @@ Card {
                     width: parent.width
                     spacing: 8
                     Repeater {
-                        model: pane.draft.displays.length
+                        model: pane.displayOrder
                         Action {
-                            readonly property var modelData: pane.draft.displays[index]
-                            required property int index
-                            text: (index + 1) + " · " + modelData.connector + (!modelData.connected ? " · disconnected" : !modelData.enabled ? " · disabled" : modelData.mirror_of ? " · mirrors " + ((pane.draft.displays.findIndex(function (d) {
-                                            return d.id === modelData.mirror_of;
-                                        })) + 1) : pane.isAsleep(modelData) ? " · asleep" : "")
+                            required property int modelData
+                            readonly property int index: modelData
+                            readonly property var entry: pane.draft.displays[index]
+                            text: pane.numberOf(index) + " · " + entry.connector + (!entry.connected ? " · disconnected" : !entry.enabled ? " · disabled" : entry.mirror_of ? " · mirrors " + pane.numberOf(pane.draft.displays.findIndex(function (d) {
+                                            return d.id === entry.mirror_of;
+                                        })) : pane.isAsleep(entry) ? " · asleep" : "")
                             selected: index === pane.selectedIndex
                             onClicked: pane.selectedIndex = index
                         }
@@ -747,8 +771,66 @@ Card {
                 Label {
                     width: parent.width
                     color: pane.muted
-                    text: pane.canArrange ? "Keyboard: Tab to a display, arrows move 1 px, Shift + arrows move 10 px. Positions use logical pixels." : "Keyboard: Tab to a display. Positions use logical pixels."
+                    text: (pane.canArrange ? "Numbered left to right, then top to bottom. Keyboard: Tab to a display, arrows move 1 px, Shift + arrows move 10 px." : "Keyboard: Tab to a display.") + " Positions use logical pixels."
                     font.pixelSize: pane.overlay.uiCaption
+                }
+                // Desktop text size is one setting for the whole desktop, not a
+                // property of the selected display, and it applies at once rather
+                // than through Preview and Keep; it lives apart from both.
+                Rectangle {
+                    width: parent.width
+                    height: 1
+                    color: Util.alpha(pane.fg, .2)
+                }
+                Column {
+                    width: parent.width
+                    spacing: 6
+                    Row {
+                        width: parent.width
+                        Label { width: parent.width / 2; text: "Desktop text size"; font.bold: true }
+                        Label {
+                            width: parent.width / 2
+                            horizontalAlignment: Text.AlignRight
+                            text: (textSizeSlider.dragging ? pane.textSizeStops[Math.round(textSizeSlider.liveValue)] : pane.textSize) + "px"
+                        }
+                    }
+                    PanelSlider {
+                        id: textSizeSlider
+                        width: parent.width
+                        bar: pane.sliderPalette
+                        minimum: 0
+                        maximum: pane.textSizeStops.length - 1
+                        step: 1
+                        integer: true
+                        tickCount: pane.textSizeStops.length
+                        value: Displays.nearestStop(pane.textSizeStops, pane.textSize)
+                        enabled: !textSizeProcess.running && !pane.busy
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Slider
+                        Accessible.name: "Desktop text size"
+                        onReleased: function(v) { pane.setTextSize(Math.round(v)); }
+                        Keys.onPressed: function(event) {
+                            var delta = event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0;
+                            if (delta) {
+                                pane.setTextSize(Math.max(0, Math.min(maximum, value + delta)));
+                                event.accepted = true;
+                            }
+                        }
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: -2
+                            visible: textSizeSlider.activeFocus
+                            color: "transparent"
+                            border.color: pane.overlay.accent
+                            radius: pane.overlay.radiusControl
+                        }
+                    }
+                    Label {
+                        width: parent.width
+                        text: "Text on every display, changed at once. It is not part of Preview and Keep."
+                        color: pane.muted
+                        font.pixelSize: pane.overlay.uiCaption
+                    }
                 }
             }
             Flickable {
@@ -874,18 +956,13 @@ Card {
                     Label {
                         width: parent.width
                         visible: pane.selectedMirrors
-                        text: "Workspaces and layout follow display " + (pane.selectedDisplay ? pane.draft.displays.findIndex(function (d) {
+                        text: "Workspaces and layout follow display " + (pane.selectedDisplay ? pane.numberOf(pane.draft.displays.findIndex(function (d) {
                                 return d.id === pane.selectedDisplay.mirror_of;
-                            }) + 1 : "") + ". Independent preferences are retained for Extended display. Different aspect ratios may stretch the image."
+                            })) : "") + ". Independent preferences are retained for Extended display. Different aspect ratios may stretch the image."
                         color: pane.muted
                     }
                     Row {
                         spacing: 8
-                        Action {
-                            text: identifyTimer.running ? "Identifying…" : "Identify"
-                            enabled: !!pane.liveDisplay && !!pane.liveDisplay.enabled && !identifyTimer.running
-                            onClicked: pane.identify(pane.selectedDisplay.connector)
-                        }
                         Action {
                             // One button follows the compositor's power state, so
                             // it never offers to wake a display that is already on.
@@ -896,7 +973,7 @@ Card {
                     }
                     Label {
                         width: parent.width
-                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep and Identify need a connected, enabled display."
+                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep needs a connected, enabled display."
                         color: pane.muted
                         font.pixelSize: pane.overlay.uiCaption
                     }
@@ -923,57 +1000,6 @@ Card {
                         visible: !!pane.selectedDisplay && pane.selectedDisplay.mode_available === false
                         text: "Saved mode is unavailable. Choose a supported mode to enable this display."
                         color: pane.overlay.accent
-                    }
-                    Column {
-                        width: parent.width
-                        spacing: 6
-                        Row {
-                            width: parent.width
-                            Label { width: parent.width / 2; text: "Text size"; font.bold: true }
-                            Label {
-                                width: parent.width / 2
-                                horizontalAlignment: Text.AlignRight
-                                text: (textSizeSlider.dragging ? pane.textSizeStops[Math.round(textSizeSlider.liveValue)] : pane.textSize) + "px"
-                            }
-                        }
-                        PanelSlider {
-                            id: textSizeSlider
-                            width: parent.width
-                            bar: pane.sliderPalette
-                            minimum: 0
-                            maximum: pane.textSizeStops.length - 1
-                            step: 1
-                            integer: true
-                            tickCount: pane.textSizeStops.length
-                            value: Displays.nearestStop(pane.textSizeStops, pane.textSize)
-                            enabled: !textSizeProcess.running
-                            activeFocusOnTab: true
-                            Accessible.role: Accessible.Slider
-                            Accessible.name: "Desktop text size"
-                            onActiveFocusChanged: if (activeFocus) pane.reveal(this)
-                            onReleased: function(v) { pane.setTextSize(Math.round(v)); }
-                            Keys.onPressed: function(event) {
-                                var delta = event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0;
-                                if (delta) {
-                                    pane.setTextSize(Math.max(0, Math.min(maximum, value + delta)));
-                                    event.accepted = true;
-                                }
-                            }
-                            Rectangle {
-                                anchors.fill: parent
-                                anchors.margins: -2
-                                visible: textSizeSlider.activeFocus
-                                color: "transparent"
-                                border.color: pane.overlay.accent
-                                radius: pane.overlay.radiusControl
-                            }
-                        }
-                        Label {
-                            width: parent.width
-                            text: "Applies immediately to desktop and application text."
-                            color: pane.muted
-                            font.pixelSize: pane.overlay.uiCaption
-                        }
                     }
                     Column {
                         width: parent.width
@@ -1199,6 +1225,13 @@ Card {
                     onClicked: pane.keepEditing()
                 }
                 Action {
+                    visible: !pane.pending && !pane.confirmingDiscard
+                    text: "Refresh"
+                    Accessible.description: "Re-read the connected displays"
+                    enabled: !pane.busy
+                    onClicked: pane.refresh()
+                }
+                Action {
                     visible: !pane.confirmingDiscard
                     text: pane.pending ? "Revert" : "Reset"
                     enabled: !pane.busy && (pane.dirty || !!pane.pending)
@@ -1211,12 +1244,6 @@ Card {
                     primary: true
                     enabled: !pane.busy && (pane.dirty || !!pane.pending)
                     onClicked: pane.pending ? pane.run(["keep", pane.pending.token]) : pane.preview()
-                }
-                Action {
-                    visible: !pane.pending && !pane.confirmingDiscard
-                    text: "Refresh"
-                    enabled: !pane.busy
-                    onClicked: pane.refresh()
                 }
             }
             Label {

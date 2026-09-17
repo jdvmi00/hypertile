@@ -408,7 +408,12 @@ From the overlay's **Workspaces** section, with the layout you want viewed:
 - **Use on all of <monitor>** applies it to every workspace currently on
   that monitor (Hyprland binds layouts to workspaces, not monitors);
 - the default control makes it the layout for every workspace that has no
-  rule of its own.
+  rule of its own;
+- **Follow monitor default** drops the layout chosen for the current
+  workspace so it inherits its monitor's default layout (set under
+  Displays → Workspace preferences). Each row says where its layout comes
+  from: chosen for the workspace, its monitor default, the default layout,
+  or a scene.
 
 The overlay stays open, so you can browse to another layout and assign it
 elsewhere. From a script, `hypertile-ctl apply <name> --workspace N` does the

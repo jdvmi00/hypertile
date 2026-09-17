@@ -681,17 +681,6 @@ Card {
         }
       }
 
-      Section {
-        title: "STARTUP"
-        Switch {
-          label: "Save windows for startup"
-          description: "Save open windows and restore them when you log in"
-          checked: overlay.sessionAvailable && overlay.sessionStatus && overlay.sessionStatus.mode !== "disabled"
-          enabled: overlay.sessionAvailable && !overlay.busy
-          onClicked: overlay.setSessionEnabled(overlay.sessionStatus.mode === "disabled")
-        }
-      }
-
       // ---- Session saving, when it needs attention: a notice with its actions.
       Prompt {
         id: sessionNotice
@@ -869,7 +858,7 @@ Card {
             Item {
               id: wsRow
               required property var modelData
-              readonly property bool uses: overlay.viewed !== null && modelData.layout === "lua:" + overlay.viewed.name
+              readonly property bool uses: overlay.viewed !== null && String(modelData.effective_layout || modelData.layout) === "lua:" + overlay.viewed.name
               width: column.width
               implicitHeight: Math.max(wsText.implicitHeight, wsControl.implicitHeight)
 
@@ -910,8 +899,9 @@ Card {
                 Text {
                   textFormat: Text.PlainText
                   width: parent.width
-                  text: wsRow.modelData.layout_source === "monitor" ? "Monitor default"
-                    : wsRow.modelData.layout_source === "global" ? "Global fallback" : "Explicit layout"
+                  text: wsRow.modelData.layout_source === "monitor" ? "Follows the monitor default"
+                    : wsRow.modelData.layout_source === "global" ? "Follows the default layout"
+                    : wsRow.modelData.layout_source === "scene" ? "Set by its scene" : "Chosen for this workspace"
                   color: rail.overlay.mutedForeground
                   font.family: rail.family
                   font.pixelSize: overlay.uiCaption
@@ -978,12 +968,31 @@ Card {
             onClicked: overlay.setDefault()
           }
         }
-        Action {
-          text: "Use Monitor default"
+        // The current workspace can drop its own layout choice and follow
+        // its monitor's default. Offered only while it has a choice to drop.
+        Column {
+          id: inherit
+          readonly property var here: {
+            for (var i = 0; i < overlay.workspaces.length; i++)
+              if (String(overlay.workspaces[i].id) === overlay.workspaceId) return overlay.workspaces[i]
+            return null
+          }
+          readonly property bool inherits: here !== null && ["monitor", "global"].indexOf(here.layout_source) !== -1
+          readonly property bool sceneOwned: overlay.contentWorkspace(overlay.workspaceId)
+          readonly property string why: sceneOwned ? "Workspace " + overlay.workspaceId + "'s scene owns its layout; replace or restore the scene first."
+            : inherits ? "Workspace " + overlay.workspaceId + " already follows its monitor default."
+            : "Drops the layout chosen for workspace " + overlay.workspaceId + "; it follows its monitor's default layout instead."
+          visible: overlay.workspaceId !== ""
           width: column.width
-          enabled: !overlay.busy && !overlay.contentWorkspace(overlay.workspaceId)
-          tooltipText: enabled ? "Clear this workspace's explicit layout and inherit its monitor default" : "This workspace's scene owns its layout; replace or restore the scene first"
-          onClicked: overlay.applyTo(overlay.workspaceId, "monitor-default")
+          spacing: Style.spacing.xs
+          Action {
+            text: "Follow monitor default"
+            width: column.width
+            enabled: !overlay.busy && !inherit.sceneOwned && !inherit.inherits
+            tooltipText: inherit.why
+            onClicked: overlay.applyTo(overlay.workspaceId, "monitor-default")
+          }
+          Muted { text: inherit.why }
         }
       }
 
@@ -997,6 +1006,19 @@ Card {
           checked: overlay.viewedInCycle
           enabled: !overlay.busy
           onClicked: overlay.setInCycle(!overlay.viewedInCycle)
+        }
+      }
+
+      // ---- View mode: session recovery, a global preference, after the per-layout sections.
+      Section {
+        visible: !overlay.editing && !overlay.contentMode
+        title: "STARTUP"
+        Switch {
+          label: "Save windows for startup"
+          description: "Save open windows and restore them when you log in"
+          checked: overlay.sessionAvailable && overlay.sessionStatus && overlay.sessionStatus.mode !== "disabled"
+          enabled: overlay.sessionAvailable && !overlay.busy
+          onClicked: overlay.setSessionEnabled(overlay.sessionStatus.mode === "disabled")
         }
       }
 

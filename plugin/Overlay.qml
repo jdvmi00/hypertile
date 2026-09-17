@@ -558,6 +558,7 @@ Item {
     root.pendingSwitch = null
     root.sceneFeedback = null
     revertBrowse()
+    revertEditDetached()
     root.opened = false
     root.editing = false
     root.numbering = false
@@ -570,6 +571,15 @@ Item {
 
   function dismiss() {
     if (root.displaysMode && (displaysPane.pending || displaysPane.dirty)) { displaysPane.requestClose(); return }
+    // Unsaved edits get the prompt Esc gives, so a click outside or a close
+    // request cannot leave the workspace on a preview nobody saved.
+    if (root.editing && root.dirty && !root.managedContent && !root.dismissing) {
+      root.numbering = false
+      root.naming = false
+      root.pickerOpen = false
+      root.confirmingDiscard = true
+      return
+    }
     root.dismissing = true
     root.pendingSwitch = null
     root.sceneFeedback = null
@@ -681,6 +691,22 @@ Item {
   // Runs while the overlay is being torn down (the shell unloads it on
   // hide), so the switch is detached rather than a child that would be
   // killed with the overlay.
+  // The shell hides and unloads this item without asking, so an unsaved
+  // edit preview is put back detached: a new draft by re-applying the
+  // committed layout, an edited one by previewing its saved file again. The
+  // short delay lets a preview still in flight land first.
+  function revertEditDetached() {
+    if (!root.editing || !root.dirty || root.managedContent || root.workspaceId === "") return
+    previewTimer.stop()
+    if (root.draftIsNew || !root.viewed || !root.viewed.spec) {
+      var back = root.committedLayout !== "" ? root.committedLayout : (root.viewed ? "lua:" + root.viewed.name : "")
+      if (back === "") return
+      Quickshell.execDetached(["sh", "-c", 'sleep 0.3; exec "$1" apply "$2" --workspace "$3" --no-persist --quiet', "sh", root.ctl, back, root.workspaceId])
+      return
+    }
+    Quickshell.execDetached(["sh", "-c", 'sleep 0.3; "$1" dump "$2" | "$1" preview - --workspace "$3"', "sh", root.ctl, root.viewed.name, root.workspaceId])
+  }
+
   function revertBrowse() {
     browseTimer.stop()
     // Cancel a selection still waiting for the catalog, even if no preview
