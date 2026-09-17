@@ -78,6 +78,7 @@ Item {
   property var workspaces: []      // hypertile-ctl workspaces --json .workspaces
   property var windows: []         // hypertile-ctl windows --json .windows
   property string defaultLayout: ""
+  property bool displaysMode: false
   property bool contentMode: false      // the rail's Scenes tab: zones are selected, not browsed
   property var contentCatalog: null     // hypertile-ctl scene catalog --json
   property bool catalogFailed: false    // last catalog attempt failed; browsing can proceed
@@ -312,6 +313,7 @@ Item {
 
   function showContent(on) {
     if (editing) return
+    displaysMode = false
     contentMode = on
     namingScene = false
     hoverMatch = null
@@ -324,6 +326,38 @@ Item {
     selectActive()
     selected = ""
     pollCatalog()
+  }
+
+  function showDisplays() {
+    if (editing) return
+    browseTimer.stop()
+    revertBrowse()
+    displaysMode = true
+    contentMode = false
+    peeking = false
+    displaysPane.refresh()
+  }
+
+  // Keep recovery controls on an output that will remain in the arrangement.
+  // Re-evaluate as Qt adds/removes screens during the compositor transaction.
+  function placeDisplayConfirmation(document) {
+    var screens = Quickshell.screens
+    if (!screens.length) return
+    var desired = document || ((displaysPane.pending || displaysPane.busy) ? displaysPane.draft : null)
+    function usable(screen) {
+      if (!desired) return true
+      return desired.displays.some(function(d) { return d.connector === screen.name && d.enabled && !d.mirror_of && d.connected !== false })
+    }
+    if (window.screen && screens.indexOf(window.screen) !== -1 && usable(window.screen)) return
+    for (var i = 0; i < screens.length; ++i) {
+      if (usable(screens[i])) { window.screen = screens[i]; return }
+    }
+    if (!window.screen || screens.indexOf(window.screen) === -1) window.screen = screens[0]
+  }
+
+  Connections {
+    target: Quickshell
+    function onScreensChanged() { Qt.callLater(function() { root.placeDisplayConfirmation() }) }
   }
 
   function pollCatalog() {
@@ -524,6 +558,7 @@ Item {
     root.pendingSwitch = null
     root.sceneFeedback = null
     revertBrowse()
+    revertEditDetached()
     root.opened = false
     root.editing = false
     root.numbering = false
@@ -535,6 +570,16 @@ Item {
   }
 
   function dismiss() {
+    if (root.displaysMode && (displaysPane.pending || displaysPane.dirty)) { displaysPane.requestClose(); return }
+    // Unsaved edits get the prompt Esc gives, so a click outside or a close
+    // request cannot leave the workspace on a preview nobody saved.
+    if (root.editing && root.dirty && !root.managedContent && !root.dismissing) {
+      root.numbering = false
+      root.naming = false
+      root.pickerOpen = false
+      root.confirmingDiscard = true
+      return
+    }
     root.dismissing = true
     root.pendingSwitch = null
     root.sceneFeedback = null
@@ -578,7 +623,7 @@ Item {
   }
 
   function cycleFromShortcut(workspace, delta) {
-    if (root.moveMode) return "handled"
+    if (root.moveMode || root.displaysMode) return "handled"
     if (!root.opened || root.dismissing || root.editing || root.contentMode
         || String(workspace) !== root.workspaceId) return "unhandled"
     // Consume the shortcut during dialogs or an action as well: falling
@@ -617,7 +662,7 @@ Item {
 
   function browseTo(layout) {
     if (layout === "" || root.workspaceId === "") return
-    if (root.contentMode) return
+    if (root.contentMode || root.displaysMode) return
     // The layout list may arrive before the scene catalog. Remember the
     // latest selection while waiting to learn whether it needs a lease.
     root.browseTarget = layout
@@ -634,7 +679,7 @@ Item {
   }
 
   function runBrowse() {
-    if (!root.opened || root.dismissing || root.editing || root.contentMode) return
+    if (!root.opened || root.dismissing || root.editing || root.contentMode || root.displaysMode) return
     if (root.contentCatalog === null && !root.catalogFailed) return
     if (browseProc.running || root.browseTarget === "" || root.browseTarget === root.browseLaunched) return
     root.browseLaunched = root.browseTarget
@@ -646,6 +691,22 @@ Item {
   // Runs while the overlay is being torn down (the shell unloads it on
   // hide), so the switch is detached rather than a child that would be
   // killed with the overlay.
+  // The shell hides and unloads this item without asking, so an unsaved
+  // edit preview is put back detached: a new draft by re-applying the
+  // committed layout, an edited one by previewing its saved file again. The
+  // short delay lets a preview still in flight land first.
+  function revertEditDetached() {
+    if (!root.editing || !root.dirty || root.managedContent || root.workspaceId === "") return
+    previewTimer.stop()
+    if (root.draftIsNew || !root.viewed || !root.viewed.spec) {
+      var back = root.committedLayout !== "" ? root.committedLayout : (root.viewed ? "lua:" + root.viewed.name : "")
+      if (back === "") return
+      Quickshell.execDetached(["sh", "-c", 'sleep 0.3; exec "$1" apply "$2" --workspace "$3" --no-persist --quiet', "sh", root.ctl, back, root.workspaceId])
+      return
+    }
+    Quickshell.execDetached(["sh", "-c", 'sleep 0.3; "$1" dump "$2" | "$1" preview - --workspace "$3"', "sh", root.ctl, root.viewed.name, root.workspaceId])
+  }
+
   function revertBrowse() {
     browseTimer.stop()
     // Cancel a selection still waiting for the catalog, even if no preview
@@ -1487,6 +1548,8 @@ Item {
     var shift = event.modifiers & Qt.ShiftModifier
     var k = event.key
 
+    if (root.displaysMode) return displaysPane.handleKey(event)
+
     if (root.naming || root.renaming || root.namingScene) {
       if (k === Qt.Key_Escape) { root.naming = false; root.renaming = false; root.namingScene = false; root.errorText = ""; keys.forceActiveFocus(); return true }
       return false
@@ -1657,6 +1720,7 @@ Item {
       // number, dividers drag, outside closes (view mode) or deselects.
       MouseArea {
         id: pointer
+        enabled: !root.displaysMode
         anchors.fill: parent
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
@@ -1717,7 +1781,7 @@ Item {
 
       // Layout area outline, so gaps and the bar read as "outside".
       Rectangle {
-        visible: root.area !== null
+        visible: !root.displaysMode && root.area !== null
         x: root.area ? root.area.x : 0
         y: root.area ? root.area.y : 0
         width: root.area ? root.area.w : 0
@@ -1728,12 +1792,12 @@ Item {
       }
 
       Repeater {
-        model: zoneModel
+        model: root.displaysMode ? null : zoneModel
         ZoneItem { overlay: root }
       }
 
       Repeater {
-        model: root.dividers
+        model: root.displaysMode ? [] : root.dividers
         Divider { overlay: root }
       }
 
@@ -1741,6 +1805,7 @@ Item {
       // Docks on either side; fades while peeking.
       Rail {
         id: rail
+        visible: !root.displaysMode
         overlay: root
         anchors.top: parent.top
         anchors.topMargin: window.edgeTop
@@ -1755,6 +1820,17 @@ Item {
           x: root.opened ? 0 : (root.dockLeft ? -Style.space(28) : Style.space(28))
           Behavior on x { NumberAnimation { duration: root.motionSlow; easing.type: Easing.OutCubic } }
         }
+      }
+
+      DisplaysPane {
+        id: displaysPane
+        overlay: root
+        visible: root.displaysMode
+        anchors.centerIn: parent
+        width: Math.min(root.uiFont * 78, parent.width - window.edgeLeft - window.edgeRight)
+        height: Math.min(root.uiFont * 53, parent.height - window.edgeTop - window.edgeBottom)
+        onLeave: function(scenes) { root.showContent(scenes) }
+        onCloseRequested: root.dismiss()
       }
 
       // Status and errors, only while there is something to say.
@@ -1831,6 +1907,20 @@ Item {
     function peek(on: bool): void { root.peeking = on }
     function refresh(): void { root.refresh() }
     function content(on: bool): void { root.showContent(on) }
+    function displays(): void { root.showDisplays() }
+    function displayState(): string { return JSON.stringify({draft: displaysPane.draft, pending: displaysPane.pending, dirty: displaysPane.dirty, confirmingDiscard: displaysPane.confirmingDiscard, error: displaysPane.error, selected: displaysPane.selectedIndex, screen: window.screen ? window.screen.name : null, panel: {x: displaysPane.x, y: displaysPane.y, width: displaysPane.width, height: displaysPane.height}, window: {width: window.width, height: window.height}}) }
+    function displaySet(index: int, key: string, value: string): void {
+      displaysPane.selectedIndex = index
+      var parsed
+      try { parsed = JSON.parse(value) } catch (e) { parsed = value }
+      displaysPane.setDisplay(key, parsed)
+    }
+    function displaySelect(index: int): void { displaysPane.selectedIndex = index }
+    function displayPreview(): void { displaysPane.preview() }
+    function displayKeep(): void { if (displaysPane.pending) displaysPane.run(["keep", displaysPane.pending.token]) }
+    function displayRevert(): void { displaysPane.revert() }
+    function displayIdentify(connector: string): void { displaysPane.identify(connector) }
+    function displayDiscard(): void { displaysPane.discardAndClose() }
     function assign(kind: string): void { root.assignContent(kind) }
     function assignApp(cls: string): void { root.assignContent("local", cls) }
     function scene(action: string, name: string): void { root.sceneAction(action, name) }

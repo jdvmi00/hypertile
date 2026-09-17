@@ -27,7 +27,8 @@ assert.strictEqual(C.sceneTitle({ phase: "none", document: null }, "1"), "Worksp
 assert.strictEqual(C.sceneTitle({ phase: "restored", document: { name: "work" } }, "2"), "Workspace 2")
 assert.strictEqual(C.sceneMeta({ phase: "ready" }, "quad", "1"), "quad  ·  workspace 1  ·  Ready")
 assert.strictEqual(C.sceneMeta({ phase: "none" }, "quad", "1"), "quad  ·  local windows in every zone")
-assert.strictEqual(C.sceneMeta({ phase: "restored" }, "quad", "1"), "quad  ·  Previous arrangement restored")
+// A restored workspace is plain local fill again; the header says what is, not what happened.
+assert.strictEqual(C.sceneMeta({ phase: "restored" }, "quad", "1"), "quad  ·  local windows in every zone")
 assert.strictEqual(C.sceneMeta(null, "", ""), "")
 assert.strictEqual(C.managed(null), false)
 assert.strictEqual(C.managed({phase: "none"}), false)

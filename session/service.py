@@ -6,6 +6,7 @@ No third-party Python dependencies.
 """
 import argparse
 import configparser
+from contextlib import contextmanager
 import fcntl
 import json
 import os
@@ -20,6 +21,7 @@ import sys
 import tempfile
 import time
 import scene_recovery
+import display_recovery
 
 
 def atomic_json(path, value):
@@ -562,6 +564,24 @@ class Service:
         self.capture_warning = None
         self.paused_since = None
 
+    @property
+    def display_state(self):
+        return Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state") / "hypertile/displays"
+
+    def display_preview(self):
+        return (self.display_state / "pending.json").exists()
+
+    @contextmanager
+    def capture_guard(self):
+        # Share the display service transaction lock from query to durable write.
+        # Pending intent is never promoted by autosave or an explicit snapshot.
+        self.display_state.mkdir(parents=True, exist_ok=True)
+        with (self.display_state / "capture.lock").open("a") as guard:
+            fcntl.flock(guard, fcntl.LOCK_SH)
+            if self.display_preview():
+                raise ValueError("Keep or revert display changes before saving or restoring a session")
+            yield
+
     def record(self):
         warnings = []
         desktop = scene_recovery.capture(self.compositor.snapshot(), self.compositor.instance, warnings=warnings)
@@ -572,7 +592,7 @@ class Service:
 
     def status(self):
         value = {"instance": self.compositor.instance, "mode": self.mode, "error": self.error}
-        paused = self.mode != "watching" or bool(self.error)
+        paused = self.mode != "watching" or bool(self.error) or self.display_preview()
         if paused and self.mode != "disabled":
             self.paused_since = self.paused_since or time.time()
         else:
@@ -589,13 +609,14 @@ class Service:
         return value
 
     def checkpoint(self):
-        if self.mode != "watching":
+        if self.mode != "watching" or self.display_preview():
             return
         try:
-            record = self.record()
-            if record["desktop"] != self.last:
-                self.store.checkpoint(record)
-                self.last = record["desktop"]
+            with self.capture_guard():
+                record = self.record()
+                if record["desktop"] != self.last:
+                    self.store.checkpoint(record)
+                    self.last = record["desktop"]
         except (OSError, ValueError, KeyError, TypeError, RuntimeError, subprocess.TimeoutExpired) as error:
             self.error = str(error)
             self.status()
@@ -605,15 +626,18 @@ class Service:
         self.status()
 
     def restore(self, record, progress=None):
-        if self.mode == "restoring":
-            raise ValueError("restoration is already in progress")
-        # Publish the protected source and the restoring marker before any
-        # compositor mutation. A crash/restart resumes from this source.
-        atomic_json(self.store.root / "recovery.json", record)
-        self.mode = "restoring"
-        self.error = None
-        self.progress = progress or {}
-        self.status()
+        # Publish the restoring marker while sharing the display transaction
+        # lock. A preview cannot slip between the pending check and this marker.
+        with self.capture_guard():
+            if self.mode == "restoring":
+                raise ValueError("restoration is already in progress")
+            record = display_recovery.project(record)
+            # A crash/restart resumes from this protected source.
+            atomic_json(self.store.root / "recovery.json", record)
+            self.mode = "restoring"
+            self.error = None
+            self.progress = progress or {}
+            self.status()
         def persist(value):
             self.progress = value
             self.status()
@@ -725,7 +749,8 @@ class Service:
         if command == "save":
             if not name:
                 raise ValueError("save requires a session name")
-            atomic_json(self.store.named(name), self.record())
+            with self.capture_guard():
+                atomic_json(self.store.named(name), self.record())
             return {"saved": name}
         if command == "restore":
             retry = not name and self.mode == "partial"
@@ -743,7 +768,7 @@ class Service:
             return self.restore(record, progress)
         if command == "freeze":
             # During partial restoration, preserve the original source.
-            saved = self.mode == "watching"
+            saved = self.mode == "watching" and not self.display_preview()
             self.checkpoint()
             self.scene_delivery.pause(True)
             if self.mode == "restoring":

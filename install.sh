@@ -94,7 +94,7 @@ fi
 runtime_hash="$(
   printf '%s\n' "$hypr" "$bin" "${XDG_DATA_HOME:-$HOME/.local/share}" "$want_keybinds" "$want_menu"
   sha256sum "$src/install.sh" "$src"/hypertile*.lua "$src"/bin/hypertile-* \
-    "$src"/session/*.py "$src"/scenes/*.py
+    "$src"/session/*.py "$src"/scenes/*.py "$src"/displays/*.py
 )"
 runtime_hash="$(printf '%s' "$runtime_hash" | sha256sum | cut -d' ' -f1)"
 runtime_receipt="$state/installed-runtime.sha256"
@@ -129,7 +129,7 @@ if legacy.exists():
         if any(r.get("desired") or r.get("journal") for r in json.loads(status.stdout).get("computers", [])):
             sys.exit("install.sh: disconnect/restore legacy Hypertile streams before installing this update")
         subprocess.run([str(legacy), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
-for name in ("hypertile-scenes", "hypertile-session"):
+for name in ("hypertile-displays", "hypertile-scenes", "hypertile-session"):
     entry = bin_dir / name
     if entry.exists():
         status = subprocess.run([str(entry), "status"], env=env, capture_output=True, timeout=5)
@@ -140,8 +140,13 @@ for name in ("hypertile-scenes", "hypertile-session"):
                 value = json.loads(status.stdout)
                 if value.get("mode") == "disabled" and not value.get("instance"):
                     continue
-            subprocess.run([str(entry), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=10)
+            subprocess.run([str(entry), "stop"], env=env, stdout=subprocess.DEVNULL, check=True, timeout=25)
 PY_SERVICES
+
+# Exclude a loader/watch restart while display runtime files are replaced.
+mkdir -p "$state/displays"
+exec 7>"$state/displays/daemon.lock"
+flock -xn 7 || { echo "install.sh: display service is still running" >&2; exit 1; }
 
 # Hold the migration lock through all runtime edits. Shared Remote Desktops
 # guards coexist; a legacy writer cannot start while its files are retired.
@@ -169,12 +174,17 @@ backup() {
 install -m 0755 "$src/bin/hypertile-ctl" "$bin/hypertile-ctl"
 install -m 0755 "$src/bin/hypertile-session" "$bin/hypertile-session"
 install -m 0755 "$src/bin/hypertile-scenes" "$bin/hypertile-scenes"
+install -m 0755 "$src/bin/hypertile-displays" "$bin/hypertile-displays"
 session_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/session"
 mkdir -p "$session_data"
 for f in "$src"/session/*.py; do install -m 0644 "$f" "$session_data/$(basename "$f")"; done
 scene_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/scenes"
 mkdir -p "$scene_data"
 for f in "$src"/scenes/*.py; do install -m 0644 "$f" "$scene_data/$(basename "$f")"; done
+
+display_data="${XDG_DATA_HOME:-$HOME/.local/share}/hypertile/displays"
+mkdir -p "$display_data"
+for f in "$src"/displays/*.py; do install -m 0644 "$f" "$display_data/$(basename "$f")"; done
 
 PYTHONPATH="$src/session" python3 - "$bin" "${XDG_DATA_HOME:-$HOME/.local/share}" <<'PY_CLEANUP'
 from pathlib import Path
@@ -248,7 +258,7 @@ if (( ! automatic )); then
   hash_file="$state/installed-plugin.sha256"
   if [[ ! -e "$hash_file" || "$(cat "$hash_file")" != "$plugin_hash" ]]; then
     if (( shell_up )); then
-      omarchy restart shell >/dev/null 2>&1 8>&- || true
+      omarchy restart shell >/dev/null 2>&1 7>&- 8>&- || true
       echo "restarted the shell to load the updated plugin"
     fi
     echo "$plugin_hash" >"$hash_file"
@@ -395,7 +405,13 @@ if ! grep -q 'require("hypr.hypertile-layouts")' "$main"; then
   echo "hyprland.lua now requires hypr.hypertile-layouts"
 fi
 
+flock -u 7
+exec 7>&-
+
+"$bin/hypertile-displays" setup --offline >/dev/null
+
 if command -v hyprctl >/dev/null 2>&1 && hyprctl version >/dev/null 2>&1; then
+  "$bin/hypertile-displays" setup >/dev/null
   hyprctl reload >/dev/null || { echo "hyprctl reload failed" >&2; exit 1; }
   errors="$(hyprctl configerrors | sed '/^\s*$/d' || true)"
   if [[ -n "$errors" ]]; then

@@ -76,7 +76,8 @@ result. Destinations stay on the starting workspace and monitor. Floating
 windows and other layouts keep their normal mouse behavior.
 
 Every config file it edits is first copied to `<file>.hypertile.bak` if that
-backup does not exist. Later installs and uninstalls preserve that first backup.
+backup does not exist. Later installs preserve that first backup; uninstall
+archives it by default before removing the live copy.
 The installer then reloads Hyprland and checks `hyprctl configerrors`. Update with:
 
 ```bash
@@ -97,17 +98,34 @@ continue to use `./install.sh` once and `./dev apply` after edits.
 Uninstall with:
 
 ```bash
-~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh   # --purge also drops your layouts and state
-omarchy plugin remove jmartin.hypertile
+~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh
+# Choose the archive location instead:
+# .../uninstall.sh --archive ~/Backups/my-hypertile-settings
+# Or permanently discard settings without an archive:
+# .../uninstall.sh --purge
 ```
 
-The uninstaller removes what the installer added, sets the default layout
-back to dwindle if it pointed at a hypertile layout, and keeps your layouts
-(`~/.config/hypr/layouts/`), state (`~/.local/state/hypertile/`), and saved scenes
-(`~/.config/hypertile/scenes/`) unless `--purge` is given. Purging also removes
-the services' Python caches; session settings are kept. If a
-custom binding still references `hypertile-navigation`, uninstall retains the
-runtime files and asks you to remove that reference before running it again.
+Uninstall first copies and verifies an archive in
+`~/Backups/hypertile-uninstall-<timestamp>/` (or the new directory supplied
+with `--archive`). It then removes layouts, all Hypertile settings, scenes,
+state, runtime files and caches, installer-created `.hypertile.bak` files,
+and the installed plugin checkout. Development symlinks are unlinked without
+removing their source checkout. The shell restarts to clear cached plugin UI,
+so reinstalling another version cannot show the old version's menus.
+
+The archive includes `layouts/`, `settings/`, `state/`, reference copies of
+desktop configuration, and the plugin checkout. Its `README.txt` explains
+restoration. To restore only layouts after testing a clean install, copy the
+contents of `layouts/` into `~/.config/hypr/layouts/` (or
+`$XDG_CONFIG_HOME/hypr/layouts/`) and run `hyprctl reload`. Existing archive
+paths are refused; if archiving fails, uninstall stops before removing files.
+`--purge` explicitly skips archiving; both modes leave a clean installation.
+
+The default layout returns to dwindle if it used Hypertile. Monitor settings
+and unrelated desktop customizations remain. If a custom binding still
+references `hypertile-navigation`, uninstall retains runtime files and asks
+you to remove that reference before running it again. Active legacy remote
+connections must also be restored before uninstalling.
 
 ## Using it
 
@@ -194,6 +212,16 @@ layout cannot be deleted; workspaces whose rule pointed at a deleted layout
 fall back to the default. The rail's **Workspaces** section uses the viewed
 layout on any workspace, on every workspace of a monitor, or as the
 default, and keeps the overlay open.
+
+### Displays tab
+
+Choose **Displays** to arrange or mirror screens, change modes, scale and rotation, manage
+power, and assign workspaces and monitor layout defaults. Changes use a
+15-second Keep/Revert preview with an independent rollback watchdog. Existing
+monitor configuration is adopted automatically; Keep saves adjusted fields to
+`monitors.lua` while preserving unrelated and automatic settings. See
+[Displays and workspace placement](docs/DISPLAYS.md) for configuration ownership,
+reconnect behavior, and the shared UI/CLI workflow.
 
 ### Scenes tab
 
@@ -424,6 +452,8 @@ scenes/*.py            scenes service: saved scenes, the app catalog, one-shot p
 layouts/*.lua          example layouts for reference and tests: ultrawide, quad
 bin/hypertile-ctl      CLI over the bridge
 bin/hypertile-session  session service entry point (also via hypertile-ctl session)
+bin/hypertile-displays display service entry point (also via hypertile-ctl display)
+displays/*.py          display adapter, recovery watchdog, workspace policy
 bin/hypertile-scenes   scenes service entry point (also via hypertile-ctl scene)
 dev                    link the checkout, check changes, and reload affected components
 install.sh             puts the engine, CLI, keybinds, and menu entry in place
@@ -474,6 +504,9 @@ Run the tests from the repository root:
 shellcheck install.sh uninstall.sh
 python3 test/dev.py && python3 test/upgrade.py   # deployment helper: preservation, restarts, failures
 python3 test/install.py                          # installer and uninstaller
+python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_policy.py && node test/displays.js
+                                                 # display transactions, failure recovery, assignment policy
+python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
 lua test/harness.lua && lua test/loader.lua      # engine: placement, rules, capacity, messages, hot swap
 lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
 lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl

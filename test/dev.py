@@ -81,6 +81,21 @@ class DevTests(unittest.TestCase):
         runner.start()
         self.addCleanup(runner.stop)
 
+    def test_display_writer_must_stop_before_runtime_replacement(self):
+        dev.BIN.mkdir(parents=True)
+        (dev.BIN / "hypertile-displays").write_text("placeholder")
+        directory = self.state / "displays"
+        directory.mkdir()
+        with (directory / "daemon.lock").open("a") as writer:
+            fcntl.flock(writer, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            with self.assertRaisesRegex(RuntimeError, "display service is still running"):
+                with dev.stopped_session():
+                    self.fail("must not enter deployment while display writer is active")
+        with dev.stopped_session():
+            with (directory / "daemon.lock").open("a") as contender:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
     def test_apply_guard_can_coexist_with_remote_desktops_shared_lock(self):
         dev.BIN.mkdir(parents=True)
         for name in ("hypertile-stream", "hypertile-scenes"):
