@@ -190,6 +190,28 @@ class Configuration:
             rules = declarations(source)
         except DisplayError as error:
             raise DisplayError(f'{self.path}: {error}') from error
+        # Preview uses explicit coordinates. A geometry/topology change can move
+        # another automatically placed output even when its draft did not move.
+        # Pin those dependencies, leaving explicit positions and the fallback
+        # rule (including preferred modes and shared expressions) untouched.
+        arrangement_changed = any(
+            any(key in fields for key in ('position', 'scale', 'transform', 'disabled', 'mirror'))
+            or any(d[n] != baseline.get(d['connector'], {}).get(n) for n in ('width', 'height'))
+            for d, fields in changes)
+        if arrangement_changed:
+            changed = {d['connector']: fields for d, fields in changes}
+            for d in document['displays']:
+                if not d['enabled'] or d.get('mirror_of') or not d.get('connected', True):
+                    continue
+                rule = rules.get(d['connector']) or rules.get('desc:' + d.get('description', '')) or rules.get('')
+                span = rule['fields'].get('position') if rule else None
+                position = source[span[0]:span[1]] if span else ''
+                if re.fullmatch(r"([\"'])-?\d+x-?\d+\1", position):
+                    continue
+                if d['connector'] not in changed:
+                    changed[d['connector']] = {}
+                    changes.append((d, changed[d['connector']]))
+                changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
         edits = []
         additions = []
         for d, fields in changes:

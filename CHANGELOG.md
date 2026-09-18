@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Resolve inherited default layouts when `looknfeel.lua` has no layout override,
+  and allow saving the first override without editing the file by hand (#31).
+- Preserve previewed display arrangements across Keep and reload by saving
+  explicit positions for dependent automatically positioned outputs (#32).
+
 ## 1.4.0 (2026-09-17)
 
 Hypertile 1.4.0 adds a Displays view for arranging monitors and choosing

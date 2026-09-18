@@ -1135,7 +1135,7 @@ function M.workspaces(raw)
 end
 
 -- The default layout for workspaces without a rule lives in looknfeel.lua
--- as general.layout. Read it, or replace it in place (the line must exist).
+-- as general.layout. Missing overrides inherit the compositor configuration.
 M.looknfeel_path = M.paths.config_home .. "/hypr/looknfeel.lua"
 
 -- Locate a literal general.layout without executing the user's config.
@@ -1150,7 +1150,7 @@ local function default_layout_token(text)
     local equals = text:sub(i):match("^%[(=*)%[")
     if equals then
       local _, finish = text:find("]" .. equals .. "]", i + #equals + 2, true)
-      if not finish then return nil end
+      if not finish then return nil, "unterminated Lua string/comment" end
       i = finish + 1
     elseif comment then
       i = text:find("\n", i, true) or (#text + 1)
@@ -1159,7 +1159,7 @@ local function default_layout_token(text)
       while i <= #text and text:sub(i, i) ~= c do
         i = i + (text:sub(i, i) == "\\" and 2 or 1)
       end
-      if i > #text then return nil end
+      if i > #text then return nil, "unterminated Lua string" end
       i = i + 1
     elseif c:match("[%a_]") then
       i = i + #text:sub(i):match("^[%w_]+")
@@ -1175,14 +1175,14 @@ local function default_layout_token(text)
   for index, token in ipairs(tokens) do
     local next_token, after = tokens[index + 1], tokens[index + 2]
     if depth then
-      if depth == 1 and token.value == "layout" and next_token and next_token.value == "="
-        and after and after.literal then
+      if depth == 1 and token.value == "layout" and next_token and next_token.value == "=" then
+        if not after or not after.literal then return nil, "computed general.layout; edit it by hand" end
         -- Only a standalone string literal; concatenations/expressions must
         -- be edited by hand rather than replacing one part of the expression.
         local following = tokens[index + 3]
-        if not following or not ({ [","] = true, [";"] = true, ["}"] = true })[following.value] then return nil end
+        if not following or not ({ [","] = true, [";"] = true, ["}"] = true })[following.value] then return nil, "computed general.layout; edit it by hand" end
         local chunk = load("return " .. after.value, "=general.layout", "t", {})
-        if not chunk then return nil end
+        if not chunk then return nil, "invalid general.layout literal" end
         after.layout = chunk()
         return after
       end
@@ -1203,11 +1203,14 @@ function M.default_layout()
   if not text then
     return nil, "cannot read " .. M.looknfeel_path
   end
-  local token = default_layout_token(text)
-  if not token then
-    return nil, "no general.layout in " .. M.looknfeel_path
+  local token, err = default_layout_token(text)
+  if err then return nil, err end
+  if token then return token.layout end
+  local layout, query_err = M.query('return hl.get_config("general.layout") or ""')
+  if not layout or layout == "" then
+    return nil, query_err or "cannot resolve inherited general.layout"
   end
-  return token.layout
+  return layout
 end
 
 function M.set_default_layout(layout)
@@ -1216,11 +1219,15 @@ function M.set_default_layout(layout)
   if not before then
     return nil, "cannot read " .. M.looknfeel_path
   end
-  local token = default_layout_token(before)
-  if not token then
-    return nil, "no general.layout in " .. M.looknfeel_path .. "; set it by hand once"
+  local token, err = default_layout_token(before)
+  if err then return nil, err end
+  local text
+  if token then
+    text = before:sub(1, token.first - 1) .. string.format("%q", layout) .. before:sub(token.last + 1)
+  else
+    text = before .. "\n-- Default layout saved by Hypertile.\n"
+      .. "hl.config({ general = { layout = " .. string.format("%q", layout) .. " } })\n"
   end
-  local text = before:sub(1, token.first - 1) .. string.format("%q", layout) .. before:sub(token.last + 1)
   write_file(M.looknfeel_path .. ".bak", before)
   local ok, err = write_file_atomic(M.looknfeel_path, text)
   if not ok then
