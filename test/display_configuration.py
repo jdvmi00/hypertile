@@ -1,5 +1,7 @@
 """Source-preserving display saves and configuration transaction recovery."""
 import copy
+import json
+import subprocess
 import os
 from pathlib import Path
 import sys
@@ -8,7 +10,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
 from configuration import Configuration, declarations
-from adapter import DisplayError
+from adapter import DisplayError, bounds
 from service import Service, atomic, read
 from displays import Fake
 
@@ -49,9 +51,9 @@ class ConfigurationTests(unittest.TestCase):
         return self.config.plan(self.before, self.doc)
 
     def test_only_adjusted_fields_are_replaced(self):
-        self.doc['displays'][0]['transform'] = 1
+        self.doc['displays'][0]['refresh'] = 75
         plan = self.plan()
-        self.assertEqual(plan['after'], SOURCE.replace('transform = 0', 'transform = 1'))
+        self.assertEqual(plan['after'], SOURCE.replace('1920x1080@60', '1920x1080@75.00000'))
         self.config.commit(plan)
         self.assertEqual(self.config.path.read_text(), plan['after'])
         self.assertEqual(self.config.path.with_name('monitors.lua.hypertile.bak').read_text(), SOURCE)
@@ -62,6 +64,62 @@ class ConfigurationTests(unittest.TestCase):
         self.assertTrue(plan['after'].startswith(SOURCE))
         self.assertIn('output = "DP-2", mode = "preferred", position = "2200x0", scale = monitor_scale', plan['after'])
         self.assertEqual(plan['after'].count('output = ""'), 1)
+
+    def test_keep_reloads_automatic_position_dependencies(self):
+        # Reload executes the saved declarations and recalculates auto positions;
+        # merely copying the preview request would hide issue #32.
+        self.adapter.current[0].update(width=2304, height=1536, refresh=120., scale=1.33333,
+                                       modes=['2304x1536@120.00Hz'])
+        self.adapter.current[1].update(width=6144, height=2560, scale=1.33333, x=1728,
+                                       modes=['6144x2560@60.00Hz'], description='External')
+        source = SOURCE.replace('local monitor_scale = 1', 'local monitor_scale = 1.33333')
+        source = source.replace('1920x1080@60', '2304x1536@120')
+
+        def reload():
+            script = """
+                local rules = {}
+                hl = {env = function() end, monitor = function(rule) rules[rule.output] = rule end}
+                dofile(arg[1])
+                print(require('hypertile-json').encode(rules))
+            """
+            runner = self.root / 'reload.lua'
+            runner.write_text(script)
+            rules = json.loads(subprocess.check_output(['lua', str(runner), str(self.config.path)],
+                                                      cwd=Path(__file__).resolve().parents[1], text=True))
+            automatic = []
+            right = 0
+            for d in self.adapter.current:
+                rule = rules.get(d['connector'], rules.get('desc:' + d.get('description', ''), rules['']))
+                position = rule.get('position', 'auto')
+                if position == 'auto':
+                    automatic.append(d)
+                else:
+                    d['x'], d['y'] = map(int, position.split('x'))
+                    right = max(right, d['x'] + round(bounds(d)[2]))
+            for d in automatic:
+                d['x'], d['y'] = right, 0
+                right += round(bounds(d)[2])
+
+        self.adapter.reload = reload
+        for extra in ('', '\nhl.monitor({output="DP-2", position="auto"})\n',
+                      '\nhl.monitor({output="desc:External", position="auto"})\n',
+                      '\nhl.monitor({output="DP-2"})\n',
+                      '\nlocal pos = "auto"\nhl.monitor({output="DP-2", position=pos})\n'):
+            with self.subTest(extra=extra):
+                self.config.path.write_text(source + extra)
+                reload()
+                self.assertEqual(self.adapter.current[1]['x'], 1728)
+                doc = dict(version=1, displays=self.adapter.displays(), workspaces={})
+                doc['displays'][0].update(x=6336, y=768)
+                pending = self.service.preview(doc, watchdog=False)
+                self.adapter.verify(doc['displays'])
+                self.assertTrue(self.service.keep(pending['token'])['kept'])
+                reload()
+                self.adapter.verify(doc['displays'])
+                self.assertEqual(self.adapter.current[1]['x'], 1728)
+                saved = self.config.path.read_text()
+                self.assertIn('position = "auto", scale = monitor_scale', saved)
+                self.assertIn('-- keep the mode comment', saved)
 
     def test_noop_does_not_freeze_automatic_settings(self):
         self.assertIsNone(self.plan())
