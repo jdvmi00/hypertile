@@ -50,7 +50,7 @@ if destination.parent == Path(os.environ["XDG_CONFIG_HOME"]) / "hypr":
     for source in (root / "bin").glob("hypertile-*"):
         target = Path(os.environ["HOME"]) / ".local/bin" / source.name
         assert target.read_bytes() == source.read_bytes(), str(target)
-    for service in ("session", "scenes"):
+    for service in ("session", "scenes", "displays"):
         for source in (root / service).glob("*.py"):
             target = Path(os.environ["XDG_DATA_HOME"]) / "hypertile" / service / source.name
             assert target.read_bytes() == source.read_bytes(), str(target)
@@ -65,8 +65,8 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         }
         (self.home / "run").mkdir()
 
-    def run_script(self, script, *args, success=True):
-        result = subprocess.run([str(ROOT / script), *args], env=self.env, cwd=ROOT,
+    def run_script(self, script, *args, success=True, cwd=ROOT):
+        result = subprocess.run([str(ROOT / script), *args], env=self.env, cwd=cwd,
                                 capture_output=True, text=True, timeout=30)
         if success:
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -96,7 +96,7 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
             command.chmod(0o755)
         original = shell.read_bytes()
         self.run_script(plugin / "install.sh", "--automatic")
-        self.assertEqual(list((self.hypr / "layouts").iterdir()), [])
+        self.assertEqual([p.name for p in (self.hypr / "layouts").iterdir()], ["welcome.lua"])
         runtime = self.hypr / "hypertile.lua"
         stamp = runtime.stat().st_mtime_ns
         # A no-op must not even query/stop the running services.
@@ -113,7 +113,7 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         plugin = self.plugin_checkout()
         originals = {p: p.read_bytes() for p in (self.bindings, self.menu)}
         self.run_script(plugin / "install.sh", "--no-menu", "--no-keybinds")
-        self.assertEqual(list((self.hypr / "layouts").iterdir()), [])
+        self.assertEqual([p.name for p in (self.hypr / "layouts").iterdir()], ["welcome.lua"])
         layout = self.hypr / "layouts/quad.lua"
         layout.write_text('-- my layout\n')
         source = plugin / "hypertile.lua"
@@ -123,6 +123,27 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         self.assertEqual(layout.read_text(), '-- my layout\n')
         for path, original in originals.items():
             self.assertEqual(path.read_bytes(), original)
+
+    def test_new_install_seeds_welcome_and_preserves_edits_and_deletion(self):
+        self.run_script("install.sh")
+        welcome = self.hypr / "layouts/welcome.lua"
+        self.assertEqual(welcome.read_bytes(), (ROOT / "layouts/welcome.lua").read_bytes())
+        welcome.write_text('-- my customized welcome\n')
+        self.run_script("install.sh")
+        self.assertEqual(welcome.read_text(), '-- my customized welcome\n')
+        welcome.unlink()
+        self.run_script("install.sh")
+        self.assertFalse(welcome.exists())
+
+    def test_existing_layout_directory_is_not_seeded(self):
+        layouts = self.hypr / "layouts"
+        layouts.mkdir()
+        self.run_script("install.sh")
+        self.assertEqual(list(layouts.iterdir()), [])
+        welcome = layouts / "welcome.lua"
+        welcome.write_text('-- existing welcome\n')
+        self.run_script("install.sh")
+        self.assertEqual(welcome.read_text(), '-- existing welcome\n')
 
     def test_automatic_failure_can_retry_and_uninstall_clears_receipt(self):
         receipt = self.state / "hypertile/installed-runtime.sha256"
@@ -203,16 +224,30 @@ ShellRoot {
         self.assertIn("SETUP_FAILED", load_service())
         self.assertIn("hyprland.lua not found", (self.state / "hypertile/install.log").read_text())
 
-    def test_original_backups_survive_repeat_install_and_uninstall(self):
+    def test_install_adopts_display_config_without_changing_it(self):
+        monitors = self.hypr / "monitors.lua"
+        original = 'local scale = 1.25\nhl.monitor({output="", mode="preferred", position="auto", scale=scale})\n'
+        monitors.write_text(original)
+        self.run_script("install.sh")
+        saved = json.loads((self.state / "hypertile/displays/confirmed.json").read_text())
+        self.assertTrue(saved["configuration_backed"])
+        self.assertEqual(monitors.read_text(), original)
+        self.run_script("uninstall.sh", "--purge")
+        self.assertEqual(monitors.read_text(), original)
+
+    def test_original_backups_are_archived_then_removed(self):
         originals = {path: path.read_bytes() for path in (self.main, self.bindings, self.menu)}
         self.run_script("install.sh")
         installed = {path: path.read_bytes() for path in originals}
         self.run_script("install.sh")
         self.assertEqual(installed, {path: path.read_bytes() for path in originals})
-        self.run_script("uninstall.sh")
-        self.run_script("uninstall.sh")
+        archive = self.home / "saved settings"
+        self.run_script("uninstall.sh", "--archive", str(archive))
+        self.run_script("uninstall.sh", "--purge")
         for path, original in originals.items():
-            self.assertEqual(self.backup(path).read_bytes(), original)
+            saved = archive / "installer-backups" / self.backup(path).relative_to(self.config)
+            self.assertEqual(saved.read_bytes(), original)
+            self.assertFalse(self.backup(path).exists())
         self.assertEqual(self.main.read_bytes(), originals[self.main])
         self.assertEqual(self.bindings.read_bytes().rstrip(), originals[self.bindings].rstrip())
         self.assertEqual(json.loads(self.menu.read_text()), json.loads(originals[self.menu]))
@@ -230,7 +265,7 @@ ShellRoot {
         self.run_script("uninstall.sh")
         remaining = [line for line in self.bindings.read_text().splitlines() if line]
         self.assertEqual(remaining, original.splitlines() + ['o.bind("SUPER + U", "User", "keep-me")'])
-        self.assertEqual(self.backup(self.bindings).read_text(), original)
+        self.assertFalse(self.backup(self.bindings).exists())
 
     def test_reinstall_with_session_recovery_disabled_and_no_daemon(self):
         self.run_script("install.sh")
@@ -354,30 +389,114 @@ o.bind("SUPER + U", "User", "keep-me")
 
     def test_upgrade_finishes_runtime_before_any_watched_lua_copy(self):
         self.run_script("install.sh")
-        for service in ("session", "scenes"):
+        for service in ("session", "scenes", "displays"):
             for source in (ROOT / service).glob("*.py"):
                 (self.data / "hypertile" / service / source.name).write_text("# stale runtime\n")
             executable = self.home / ".local/bin" / ("hypertile-" + service)
             executable.write_text('#!/usr/bin/env bash\necho \'{"instance":"test","mode":"watching"}\'\n')
         self.run_script("install.sh")
 
-    def test_purge_removes_scenes_and_caches_only_when_requested(self):
+    def test_default_uninstall_archives_and_wipes_all_owned_data(self):
         self.run_script("install.sh")
         saved = [self.config / "hypertile/scenes/work.json",
-                 self.config / "hypertile/scenes.json",
-                 self.state / "hypertile/sessions/current.json"]
-        caches = [self.data / "hypertile" / service / "__pycache__/old.pyc"
-                  for service in ("session", "scenes")]
-        unrelated = self.config / "hypertile/session.json"
-        for path in [*saved, *caches, unrelated]:
+                 self.config / "hypertile/computers.json",
+                 self.config / "hypertile/session.json",
+                 self.state / "hypertile/sessions/current.json",
+                 self.hypr / "layouts/my-layout.lua"]
+        for path in saved:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text('{}')
+        cache = self.data / "hypertile/stream/__pycache__/old.pyc"
+        cache.parent.mkdir(parents=True)
+        cache.write_text('stale')
+        runtime = self.home / "run/hypertile/edit.json"
+        runtime.parent.mkdir()
+        runtime.write_text('{}')
+        shell = self.config / "omarchy/shell.json"
+        shell.write_text(json.dumps({"plugins": ["jmartin.hypertile", "other"],
+            "bar": {"layout": {"left": [{"id": "jmartin.hypertile"}, {"id": "other"}]}}}))
         self.run_script("uninstall.sh")
-        self.assertTrue(all(path.exists() for path in [*saved, *caches]))
+        archive, = (self.home / "Backups").iterdir()
+        self.assertEqual((archive / "layouts/my-layout.lua").read_text(), '{}')
+        self.assertEqual((archive / "settings/session.json").read_text(), '{}')
+        self.assertEqual((archive / "state/sessions/current.json").read_text(), '{}')
+        self.assertEqual(archive.stat().st_mode & 0o777, 0o700)
+        self.assertTrue((archive / "checksums.json").is_file())
+        for path in [self.config / "hypertile", self.state / "hypertile", self.data / "hypertile",
+                     self.hypr / "layouts", runtime.parent,
+                     self.config / "omarchy/plugins/jmartin.hypertile"]:
+            self.assertFalse(path.exists(), str(path))
+        self.assertEqual(json.loads(shell.read_text()), {"plugins": ["other"],
+            "bar": {"layout": {"left": [{"id": "other"}]}}})
+        self.run_script("install.sh")
+        self.assertEqual([p.name for p in (self.hypr / "layouts").iterdir()], ["welcome.lua"])
+        self.assertFalse((self.config / "hypertile/session.json").exists())
+
+    def test_archive_failure_leaves_installation_intact(self):
+        self.run_script("install.sh")
+        for archive in (self.home, self.config / "hypertile/archive", self.hypr / "layouts/archive"):
+            with self.subTest(archive=archive):
+                original = self.main.read_bytes()
+                self.run_script("uninstall.sh", "--archive", str(archive), success=False)
+                self.assertEqual(self.main.read_bytes(), original)
+                self.assertTrue((self.hypr / "hypertile.lua").exists())
+                self.assertTrue((self.home / ".local/bin/hypertile-ctl").exists())
+
+    def test_uninstall_refuses_to_erase_live_writer_state(self):
+        import fcntl
+        self.run_script("install.sh")
+        state = self.state / "hypertile/sessions"
+        state.mkdir(parents=True, exist_ok=True)
+        with (state / "writer.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            result = self.run_script("uninstall.sh", "--purge", success=False)
+        self.assertIn("session service is still running", result.stderr)
+        self.assertTrue((self.hypr / "hypertile.lua").exists())
+        self.assertTrue((self.hypr / "layouts").exists())
+
+    def test_invalid_shell_configuration_stops_before_removal(self):
+        self.run_script("install.sh")
+        shell = self.config / "omarchy/shell.json"
+        shell.write_text('invalid json')
+        self.run_script("uninstall.sh", "--purge", success=False)
+        self.assertTrue((self.hypr / "hypertile.lua").exists())
+        self.assertTrue((self.hypr / "layouts").exists())
+
+    def test_purge_skips_archive_and_removes_legacy_navigation(self):
+        self.run_script("install.sh")
+        self.bindings.write_text("-- hypertile: swap across gaps, replacing Omarchy's directional swap bindings.\n"
+                                 'require("hypr.hypertile-navigation").bind()\n')
         self.run_script("uninstall.sh", "--purge")
-        self.assertTrue(all(not path.exists() for path in [*saved, *caches]))
-        self.assertFalse((self.hypr / "layouts").exists())
-        self.assertEqual(unrelated.read_text(), '{}')
+        self.assertFalse((self.home / "Backups").exists())
+        self.assertEqual(self.bindings.read_text(), '')
+        self.assertFalse((self.hypr / "hypertile.lua").exists())
+
+    def test_uninstall_from_plugin_checkout_restarts_shell_after_removal(self):
+        plugin = self.plugin_checkout()
+        self.run_script(plugin / "install.sh", "--automatic")
+        for name, body in {
+            "omarchy-shell": 'exit 0',
+            "omarchy-plugin-disable": 'echo disabled >>"$HOME/shell-calls"',
+            "omarchy": '''[[ "$*" == "restart shell" ]] || exit 1
+[[ ! -e "$XDG_CONFIG_HOME/omarchy/plugins/jmartin.hypertile" ]] || exit 2
+[[ ! -e "$XDG_STATE_HOME/hypertile" ]] || exit 3
+echo restarted >>"$HOME/shell-calls"''',
+        }.items():
+            command = self.tools / name
+            command.write_text('#!/usr/bin/env bash\n' + body + '\n')
+            command.chmod(0o755)
+        self.run_script(plugin / "uninstall.sh", "--purge", cwd=plugin)
+        self.assertFalse(plugin.exists())
+        self.assertEqual((self.home / "shell-calls").read_text(), 'disabled\nrestarted\n')
+
+    def test_uninstall_unlinks_development_plugin_without_removing_source(self):
+        self.run_script("install.sh")
+        plugin = self.config / "omarchy/plugins/jmartin.hypertile"
+        shutil.rmtree(plugin)
+        plugin.symlink_to(ROOT, target_is_directory=True)
+        self.run_script("uninstall.sh", "--purge")
+        self.assertFalse(plugin.is_symlink())
+        self.assertTrue((ROOT / "uninstall.sh").exists())
 
 
 if __name__ == "__main__":

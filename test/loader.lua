@@ -33,7 +33,7 @@ local loader = assert(loadfile("hypertile-layouts.lua", "t", env))
 assert(pcall(loader), "broken layouts must not abort the loader")
 assert(#registered == 1 and registered[1] == "good", "valid later layout still registers")
 assert(#notices == 3 and notices[1]:find("a-broken.lua", 1, true), "errors identify each bad file")
-assert(#timers == 3, "persisted rules and services still scheduled after bad files")
+assert(#timers == 2, "persisted rules and services still scheduled after bad files")
 bridge.paths.layouts_dir = temporary .. "/hypr/layouts"
 local entries = bridge.list()
 assert(#entries == 4 and entries[1].error and entries[2].error and entries[3].error and entries[4].spec,

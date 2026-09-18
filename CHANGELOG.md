@@ -1,5 +1,64 @@
 # Changelog
 
+## 1.4.0 (2026-09-17)
+
+Hypertile 1.4.0 adds a Displays view for arranging monitors and choosing
+which workspaces and layouts belong on each screen.
+
+- New **Displays** view alongside Layouts and Scenes: a scaled arrangement
+  diagram with edge snapping and exact coordinates, mode, scale, and rotation
+  controls, identify labels, and full keyboard access. Screens are numbered by
+  position (left to right, then top to bottom; mirrors after their source,
+  absent displays last) in the diagram, the display chips, mirror options, and
+  identify labels. **Identify displays** sits in the header and labels every
+  screen, highlighting the selected one.
+- Display changes are confirmed through a 15-second **Keep changes / Revert**
+  preview backed by an independent rollback watchdog, atomic confirmed
+  preferences, startup recovery, and a shared display CLI. Temporary display
+  sleep and wake are separate from disabling an output, and the final usable
+  output is protected.
+- Existing monitor configuration is adopted automatically; there is no
+  takeover step. Keep writes only the changed fields to `monitors.lua`,
+  preserves automatic settings and comments, verifies a config reload, and
+  recovers failed or interrupted saves. Manual config edits are respected
+  instead of being overwritten by saved geometry.
+- Per-display mirroring, with grouped arrangement labels, retained extended
+  positions and workspace preferences, source selection, source-preserving
+  Lua saves, and preview and recovery support.
+- Saved workspace monitor preferences, startup workspace choices, monitor
+  layout defaults, explicit overrides, and a reconnect and manual-move policy.
+  Optional workspace preferences are collapsed and the initial-workspace
+  control is gone from the UI; saved preferences are preserved. Display
+  previews coordinate with session saving and scene layout ownership.
+- The desktop text-size slider has its own group under the diagram, labelled
+  as immediate and not part of Preview and Keep; the footer's primary action
+  sits last and the tabs match the rail's tabs.
+- Workspace rows in the rail say where their layout comes from (chosen for
+  the workspace, monitor default, default layout, or a scene), mark **In use**
+  by the layout actually in effect, and the monitor-default button is
+  **Follow monitor default** with a line saying what it does to the current
+  workspace, disabled when there is nothing to drop.
+- Closing the overlay with unsaved edits (a click outside, the shell close
+  request) now asks to discard, save, or keep editing, like `Esc`; hiding it
+  with `SUPER+ALT+L` puts the saved layout back instead of leaving the unsaved
+  preview live on the workspace.
+- **Startup → Save windows for startup** moves below the per-layout sections
+  and is shown only in the Layouts view; session notices still appear on top.
+- The Scenes header no longer keeps saying "Previous arrangement restored";
+  the restore's own feedback says so, and the header describes the workspace.
+  An empty Scenes list explains how to save the first scene.
+- A fresh install seeds `~/.config/hypr/layouts/` with a **welcome** layout so
+  `SUPER+L` has something to cycle to; existing layouts directories are left
+  untouched on updates, including edits and deletions.
+- Uninstall now archives settings by default (`--archive DIR` chooses a
+  location; `--purge` skips archiving), wipes all Hypertile settings and
+  runtime data, removes the installed plugin, and restarts the shell so cached
+  development UI cannot survive a clean reinstall. It recognizes the older
+  swap-navigation binding. Display settings survive ordinary upgrades and
+  uninstalls and are removed on purge.
+- README showcase rewritten with a smaller demo GIF and a highlights video;
+  the manual covers the welcome layout.
+
 ## 1.3.0 (2026-09-15)
 
 - `SUPER+ALT+T` opens a numbered tile picker for moving the active window to an

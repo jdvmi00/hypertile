@@ -1,5 +1,6 @@
 """Regression checks for data loss and duplicate/incorrect restoration."""
 import copy
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -64,6 +65,40 @@ class SessionTests(unittest.TestCase):
         notification = patch("service.notify")
         notification.start()
         self.addCleanup(notification.stop)
+
+    def test_restore_publishes_its_marker_under_display_guard(self):
+        daemon = Service(self.store, FakeCompositor(record()["desktop"]), Launchers())
+        def project(saved):
+            with (daemon.display_state / "capture.lock").open("a") as guard:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return saved
+        with patch("service.display_recovery.project", side_effect=project):
+            daemon.restore(record())
+        self.assertEqual(json.loads((self.store.root / "status.json").read_text())["mode"], "restoring")
+        with (daemon.display_state / "capture.lock").open("a") as guard:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    def test_display_preview_never_enters_a_session_checkpoint(self):
+        comp = FakeCompositor(record(window("1"))["desktop"])
+        daemon = Service(self.store, comp, Launchers())
+        daemon.startup()
+        saved = self.store.load()
+        daemon.display_state.mkdir(parents=True, exist_ok=True)
+        pending = daemon.display_state / "pending.json"
+        pending.write_text('{"token":"preview"}')
+        comp.desktop["windows"][0]["workspace"] = "9"
+        daemon.checkpoint()
+        self.assertEqual(self.store.load(), saved)
+        self.assertTrue(daemon.status()["saving"]["paused"])
+        with self.assertRaisesRegex(ValueError, "Keep or revert"):
+            daemon.command({"command": "save", "name": "temporary"})
+        with self.assertRaisesRegex(ValueError, "Keep or revert"):
+            daemon.restore(saved)
+        self.assertFalse(daemon.command({"command": "freeze"})["saved"])
+        pending.unlink()
+        daemon.command({"command": "resume"})
+        self.assertEqual(self.store.load()["desktop"]["windows"][0]["workspace"], "9")
 
     def test_interrupted_publish_and_corrupt_latest_preserve_previous(self):
         first, second = record(window("1")), record(window("2"))

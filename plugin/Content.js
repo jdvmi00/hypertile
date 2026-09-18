@@ -132,8 +132,9 @@ function sceneMeta(scene, layout, workspace) {
   if (layout) bits.push(layout)
   var active = !!(scene && scene.phase && scene.phase !== "none" && scene.phase !== "restored")
   if (!active) {
-    if (scene && scene.phase === "restored") bits.push(status("restored"))
-    else if (layout) bits.push("local windows in every zone")
+    // A restored workspace is back to plain local fill; the restore's own
+    // feedback already said so, so the header describes the state, not the past.
+    if (layout) bits.push("local windows in every zone")
     return bits.join("  ·  ")
   }
   if (workspace) bits.push("workspace " + workspace)

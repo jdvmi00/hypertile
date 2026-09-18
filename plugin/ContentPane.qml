@@ -571,6 +571,13 @@ Column {
     }
   }
 
+  // Nothing saved yet: say what a scene is for and where the Save lives.
+  Section {
+    visible: pane.usable && pane.scenes.length === 0
+    title: "SCENES"
+    Muted { text: "No saved scenes yet. Choose what each zone opens below, then Save as scene… to keep it." }
+  }
+
   // ---------------------------------------------------- what is where
 
   Section {

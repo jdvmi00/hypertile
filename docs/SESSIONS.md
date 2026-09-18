@@ -231,3 +231,11 @@ changing saved scene defaults. Normal app recovery handles moved windows using
 their exact launcher identity. Old remote assignments generate a migration
 message and are never sent to a connection controller. Scene definitions do not
 include transient compositor window IDs.
+
+## Display previews and placement intent
+
+Session checkpoints pause while a display preview is pending. Explicit saves
+and restores ask you to Keep or Revert first. Confirmed monitor preferences are
+restored before windows, and session restoration resolves saved preferred
+monitors and layout inheritance without promoting preview geometry into intent.
+See [Displays](DISPLAYS.md).

@@ -70,23 +70,30 @@ else
   apply_persisted_rules()
 end
 
--- The service holds an exclusive writer lock, so reloads cannot create a
--- second watcher or trigger a second restore. Start after workspace rules.
+-- Restore confirmed display intent before either service recovers windows.
+-- The display controller serializes reloads and recovers interrupted previews;
+-- each long-lived service has its own single-writer guard.
 if hl.timer then
   hl.timer(function()
-    local command = (os.getenv("HOME") or "") .. "/.local/bin/hypertile-scenes"
-    local f = io.open(command, "r")
+    local bin = (os.getenv("HOME") or "") .. "/.local/bin/"
+    local commands = {}
+    local display = bin .. "hypertile-displays"
+    local f = io.open(display, "r")
     if f then
       f:close()
-      hl.exec_cmd("'" .. command:gsub("'", "'\\''") .. "' daemon")
+      commands[#commands + 1] = quote(display) .. " restore"
+      commands[#commands + 1] = "(" .. quote(display) .. " watch >/dev/null 2>&1 &)"
+    end
+    for _, name in ipairs({ "hypertile-scenes", "hypertile-session" }) do
+      local command = bin .. name
+      local service = io.open(command, "r")
+      if service then
+        service:close()
+        commands[#commands + 1] = "(" .. quote(command) .. " daemon >/dev/null 2>&1 &)"
+      end
+    end
+    if #commands > 0 then
+      hl.exec_cmd(table.concat(commands, " && "))
     end
   end, { timeout = 500, type = "oneshot" })
-  hl.timer(function()
-    local command = (os.getenv("HOME") or "") .. "/.local/bin/hypertile-session"
-    local f = io.open(command, "r")
-    if f then
-      f:close()
-      hl.exec_cmd("'" .. command:gsub("'", "'\\''") .. "' daemon")
-    end
-  end, { timeout = 1000, type = "oneshot" })
 end

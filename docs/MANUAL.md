@@ -86,15 +86,19 @@ leaves it alone and says so in the install log.
 
 ### Your first layout
 
-A fresh install starts with an **empty** layouts directory, so `SUPER+L` has
-nothing to cycle to yet. Two ways to fix that:
+A fresh install includes **welcome**, a four-zone layout with horizontal
+stacks in the top two zones and 20-pixel rounding. Press `SUPER+L` to switch
+to it, or open the overlay to preview and edit it. Existing layouts directories
+are left untouched on updates, including any edits or deletions.
+
+To add more layouts:
 
 **Copy the examples.** The plugin ships two reference layouts, `ultrawide`
 (20/60/20 columns) and `quad` (the centre split into four). Copy them and
 reload:
 
 ```bash
-cp ~/.config/omarchy/plugins/jmartin.hypertile/layouts/*.lua ~/.config/hypr/layouts/
+cp ~/.config/omarchy/plugins/jmartin.hypertile/layouts/{ultrawide,quad}.lua ~/.config/hypr/layouts/
 hyprctl reload
 ```
 
@@ -408,7 +412,12 @@ From the overlay's **Workspaces** section, with the layout you want viewed:
 - **Use on all of <monitor>** applies it to every workspace currently on
   that monitor (Hyprland binds layouts to workspaces, not monitors);
 - the default control makes it the layout for every workspace that has no
-  rule of its own.
+  rule of its own;
+- **Follow monitor default** drops the layout chosen for the current
+  workspace so it inherits its monitor's default layout (set under
+  Displays → Workspace preferences). Each row says where its layout comes
+  from: chosen for the workspace, its monitor default, the default layout,
+  or a scene.
 
 The overlay stays open, so you can browse to another layout and assign it
 elsewhere. From a script, `hypertile-ctl apply <name> --workspace N` does the
@@ -608,18 +617,26 @@ a scene waiting for recovery offers **Retry** or **Dismiss**;
 `hypertile-ctl session status` prints the same information.
 
 **Something else changed in my Hyprland config.** Every file setup edits has
-a `<file>.hypertile.bak` copy from before the first install, and it is never
-overwritten by later installs or uninstalls.
+a `<file>.hypertile.bak` copy from before the first install. Repeated installs
+preserve it; uninstall includes it in the archive and removes the live copy.
 
-**Starting over.** Run the uninstaller, then remove the plugin:
+**Starting over.** Run:
 
 ```bash
-~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh   # add --purge to drop layouts, state, and scenes
-omarchy plugin remove jmartin.hypertile
+~/.config/omarchy/plugins/jmartin.hypertile/uninstall.sh
 ```
 
-Without `--purge` your layouts, workspace rules, scenes, and snapshots are
-kept for the next install.
+Uninstall archives settings in `~/Backups/hypertile-uninstall-<timestamp>/`,
+then removes the plugin, layouts, preferences, scenes, state, runtime files,
+and installer backups. It restarts the shell to clear cached UI. Your next
+install starts fresh. Use `--archive DIR` to choose a new archive directory,
+or `--purge` to discard settings without archiving. No separate
+`omarchy plugin remove` command is needed.
+
+To recover your layouts later, copy the archive's `layouts/` contents into
+`~/.config/hypr/layouts/` (under `$XDG_CONFIG_HOME` if customized) and run
+`hyprctl reload`. The archive's `README.txt` describes the other saved data.
+Monitor settings and unrelated desktop customizations are retained.
 
 ## 12. Where everything lives
 
@@ -692,3 +709,9 @@ kept for the next install.
 | `Esc` | clear the search, then close |
 | with no zone selected: `↑` / `↓`, `Enter`, `Delete` | select, use, or delete a saved scene |
 | `?` | show the keys |
+
+## Displays and workspace placement
+
+The **Displays** view arranges monitors, controls power, and assigns workspaces
+and inherited layouts. See the [Displays guide](DISPLAYS.md) for the complete
+workflow, keyboard controls, recovery, and configuration ownership.

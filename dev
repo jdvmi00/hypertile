@@ -59,7 +59,9 @@ def groups():
         "lua": sorted(ROOT.glob("hypertile*.lua")),
         "cli": [ROOT / "bin/hypertile-ctl"],
         "session": [ROOT / "bin/hypertile-session", *sorted((ROOT / "bin").glob("hypertile-scenes")),
-                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "scenes").glob("*.py"))],
+                    *sorted((ROOT / "bin").glob("hypertile-displays")),
+                    *sorted((ROOT / "session").glob("*.py")), *sorted((ROOT / "scenes").glob("*.py")),
+                    *sorted((ROOT / "displays").glob("*.py"))],
         "shell": [ROOT / "manifest.json", *sorted(p for p in (ROOT / "plugin").rglob("*") if p.is_file())],
     }
 
@@ -74,7 +76,7 @@ def destination(path):
     relative = path.relative_to(ROOT)
     if relative.parts[0] == "bin":
         return BIN / path.name
-    if relative.parts[0] in ("session", "scenes"):
+    if relative.parts[0] in ("session", "scenes", "displays"):
         return DATA / "hypertile" / relative
     return CONFIG / "hypr" / path.name
 
@@ -167,6 +169,13 @@ def wait_for(probe, description, seconds=10):
 @contextmanager
 def stopped_session():
     with ExitStack() as stack:
+        if (BIN / "hypertile-displays").exists():
+            run(BIN / "hypertile-displays", "stop", timeout=25)
+            display_guard = stack.enter_context((STATE / "displays/daemon.lock").open("a"))
+            try:
+                fcntl.flock(display_guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                raise RuntimeError("display service is still running; no files were changed") from None
         scene_lock = None
         if (BIN / "hypertile-scenes").exists():
             path = STATE / "scenes/writer.lock"
@@ -242,6 +251,10 @@ def reload_lua():
 
 
 def start_session():
+    if (BIN / "hypertile-displays").exists():
+        run(BIN / "hypertile-displays", "restore", timeout=25)
+        command = shlex.join(["env", "-u", "HYPERTILE_SRC", str(BIN / "hypertile-displays"), "watch"])
+        run("hyprctl", "eval", f"hl.exec_cmd({lua_string(command)})")
     if (BIN / "hypertile-scenes").exists():
         command = shlex.join(["env", "-u", "HYPERTILE_SRC", str(BIN / "hypertile-scenes"), "daemon"])
         run("hyprctl", "eval", f"hl.exec_cmd({lua_string(command)})")
