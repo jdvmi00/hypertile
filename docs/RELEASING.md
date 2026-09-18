@@ -2,17 +2,20 @@
 
 ## Current release state
 
-- Prepared version: **1.4.0** (this manifest). After the authorized promotion
-  to `main`, record the merge SHA here, tag it `v1.4.0`, publish the GitHub
-  release, and request marketplace update verification through the verify
-  form. Until a maintainer approves that request, the listing keeps its current
-  snapshot and may read "Update unverified".
+- Published version: **1.4.0**, tag `v1.4.0`, at
+  `c423bc9ab23b1a0abcc0c48d8f5ce719bcd2dfff` (merge of PR #29 into `main` on
+  2026-09-17), with a GitHub release. Marketplace update verification was
+  requested the same day through
+  [#7463](https://github.com/omacom/omarchy-plugin-marketplace/issues/7463);
+  until a maintainer applies approved-and-verified, the listing keeps its
+  current snapshot and may read "Update unverified". Keep `main` frozen
+  until that request is published.
 - Previous published version: **1.3.0**, tag `v1.3.0`, at
   `20ee1c30823bdc967a7c04402699e58bc744f6eb` (merge of PR #23 into `main` on
   2026-09-15), with a GitHub release. Its marketplace update verification
   [#7073](https://github.com/omacom/omarchy-plugin-marketplace/issues/7073)
   was validated by the bots the same day and was still awaiting maintainer
-  approval when 1.4.0 was prepared, so **1.2.0** (tag `v1.2.0`, at
+  approval when 1.4.0 was released, so **1.2.0** (tag `v1.2.0`, at
   `2c02a8210780bf503e2d96fafe8e7df0ced753a1`, verified and published on
   2026-09-13 through
   [#6562](https://github.com/omacom/omarchy-plugin-marketplace/issues/6562)
