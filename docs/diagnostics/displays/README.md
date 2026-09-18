@@ -1,8 +1,7 @@
 # Display release validation — 2026-09-17
 
-Implementation is on `feature/displays-workspaces`. The release is **not yet
-published**. The manifest remains 1.3.0 until physical acceptance is finished;
-release notes are in the Unreleased section of the changelog.
+Implementation landed on `develop` through PR #26 and ships in Hypertile
+**1.4.0**; release notes are in the 1.4.0 section of the changelog.
 
 ## Environment
 
