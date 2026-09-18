@@ -30,6 +30,7 @@ function fixture() {
     browseProc: {running: false}, currentProc: {running: false}, listProc: {running: false},
     catalogProc: {running: false}, ctlProc: {running: false}, previewProc: {running: false},
     workspacesProc: {}, windowsProc: {}, defaultProc: {},
+    displaysPane: {wallpaperEditor: {dirty: false, busy: false}, requestClose() { calls.push(["wallpaper-close"]) }},
     browseTimer: timer(), previewTimer: timer(), catalogTimeout: timer(),
     keys: {forceActiveFocus() {}},
     saveFile: {setText(text) {calls.push(["save", JSON.parse(text)])}},
@@ -340,4 +341,13 @@ for (const target of ['home', 'work']) {
   root.pendingSwitch = {sceneName: 'home', workspace: '1'}
   root.pressContentCanvas('', 1); assert.deepEqual(calls, [['hide']])
   assert.equal(root.pendingSwitch, null, 'closing cancels a pending replacement')
+}
+
+{
+  const {root, context, calls} = fixture();
+  context.displaysPane.wallpaperEditor.dirty = true;
+  root.dismiss();
+  assert(root.displaysMode && context.displaysPane.wallpaperMode);
+  assert.deepEqual(calls, [["wallpaper-close"]]);
+  assert(!root.dismissing);
 }

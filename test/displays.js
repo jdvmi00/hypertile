@@ -65,6 +65,7 @@ console.log('Display power state reads the compositor catalog passed')
 // Closing never drops unsaved edits silently; a pending preview reverts first.
 function closing(state) {
     const ctx = Object.assign({closed: 0, reverted: 0, refreshed: 0, notice: '', closeAfterRevert: false, confirmingDiscard: false, pending: null, dirty: false}, state)
+    ctx.wallpaperEditor = {busy: false, dirty: false, discard() { this.dirty = false }}
     ctx.closeRequested = () => ctx.closed++
     ctx.run = () => ctx.reverted++
     ctx.refresh = () => ctx.refreshed++
@@ -245,3 +246,25 @@ assert.strictEqual(textPane.dirty,false,'global text sizing must not stage a dis
 textPane.setTextSize(6)
 assert.strictEqual(textPane.pendingTextSize,14,'an in-flight text-size command must not be overwritten')
 console.log('Resolution-compatible scale presets and global text-size actions passed')
+
+const choices = plain(D.workspaceOptions({workspaces: [
+    {id: 5, name: '5', monitor: 'HDMI-A-1'},
+    {id: -1337, name: 'research', monitor: 'DP-1'},
+    {id: -99, name: 'special:scratchpad', monitor: 'DP-1'}
+]}, {workspaces: {'20': {}}, displays: [{initial_workspace: '30'}]}));
+assert.strictEqual(choices.filter(o => o.value === '5').length, 1);
+assert.strictEqual(choices.find(o => o.value === '5').label, '5 · HDMI-A-1');
+assert.strictEqual(choices.find(o => o.value === 'name:research').label, 'research · DP-1');
+assert(choices.some(o => o.value === '20') && choices.some(o => o.value === '30'));
+assert(!choices.some(o => o.value.includes('special')));
+assert.strictEqual(choices.at(-1).value, '');
+for (const value of ['1', '2147483647', 'name:research']) assert(D.validWorkspace(value));
+for (const value of ['0', '2147483648', '-1', 'name:', 'special:scratchpad']) assert(!D.validWorkspace(value));
+console.log('Workspace picker includes live locations, saved and custom choices; rejects invalid selectors');
+
+close = closing({});
+close.wallpaperEditor.dirty = true;
+close.requestClose();
+assert(close.confirmingDiscard && !close.closed);
+close.discardAndClose();
+assert(!close.wallpaperEditor.dirty && close.closed);

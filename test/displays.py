@@ -9,7 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
 from adapter import DisplayError, bounds, match, normalized, validate
 from service import Service, atomic, read
@@ -65,6 +65,44 @@ class Tests(unittest.TestCase):
     def doc(self): return dict(version=1, displays=self.adapter.displays(), workspaces={})
     def awake(self, connector):
         return next(m for m in self.adapter.current if m['connector'] == connector)['awake']
+    def test_show_workspace_moves_existing_then_focuses_without_saving(self):
+        self.adapter.workspaces = lambda: [dict(id=5, name='5', monitor='DP-1')]
+        self.adapter.dispatch = Mock()
+        self.adapter.run = Mock(return_value=json.dumps(dict(id=5, name='5', monitor='DP-2')))
+        result = self.service.show_workspace('DP-2', '5')
+        self.assertEqual(result['workspace'], '5')
+        self.assertEqual(self.adapter.calls, [('move', '5', 'DP-2')])
+        self.assertEqual([c.args for c in self.adapter.dispatch.call_args_list],
+                         [('focus', '{monitor="DP-2"}'), ('focus', '{workspace="5"}')])
+        self.assertFalse(self.service.confirmed_path.exists())
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_show_new_named_workspace_and_verify_readback(self):
+        self.adapter.dispatch = Mock()
+        self.adapter.run = Mock(return_value=json.dumps(dict(id=-1337, name='research', monitor='DP-2')))
+        self.service.show_workspace('DP-2', 'name:research')
+        self.assertEqual(self.adapter.calls, [])
+        self.adapter.run.return_value = json.dumps(dict(id=1, name='1', monitor='DP-1'))
+        with self.assertRaisesRegex(DisplayError, 'did not show'):
+            self.service.show_workspace('DP-2', 'name:research')
+
+    def test_show_workspace_rejects_unavailable_outputs_invalid_ids_and_preview(self):
+        self.adapter.dispatch = Mock()
+        for workspace in ('0', '-1', '2147483648', 'special:scratchpad', 'name:x";error()'):
+            with self.assertRaises(DisplayError):
+                self.service.show_workspace('DP-2', workspace)
+        for changes in ({'awake': False}, {'enabled': False}, {'mirror_of': 'connector:DP-1'}):
+            self.adapter.current[1] = dict(display('DP-2', 1920), **changes)
+            with self.assertRaises(DisplayError):
+                self.service.show_workspace('DP-2', '1')
+        with self.assertRaises(DisplayError):
+            self.service.show_workspace('missing', '1')
+        atomic(self.service.pending_path, dict(token='test'))
+        with self.assertRaisesRegex(DisplayError, 'preview'):
+            self.service.show_workspace('DP-1', '1')
+        self.adapter.dispatch.assert_not_called()
+        self.assertEqual(self.adapter.calls, [])
+
     def test_sleep_holds_input_wake_off_while_another_display_is_awake(self):
         # Hyprland's global DPMS flag would otherwise let any key or mouse move undo the sleep.
         self.adapter.options = dict(key_press_enables_dpms=True, mouse_move_enables_dpms=False)

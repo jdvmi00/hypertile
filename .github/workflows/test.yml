@@ -48,6 +48,8 @@ jobs:
         run: lua test/bridge.lua
       - name: Display transactions and workspace policy
         run: python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_policy.py && node test/displays.js
+      - name: Wallpaper groups
+        run: python3 test/wallpaper.py && node test/wallpaper.js
       - name: Session recovery
         run: python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lua && node test/session.js
       - name: Scenes and content

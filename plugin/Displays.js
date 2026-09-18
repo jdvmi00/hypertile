@@ -236,3 +236,27 @@ function nearestStop(stops, value) {
         if (Math.abs(stops[i] - value) < Math.abs(stops[best] - value)) best = i
     return best
 }
+
+// Offer common workspace numbers, plus every live or saved workspace.
+function workspaceSelector(workspace) {
+    return Number(workspace.id) > 0 ? String(workspace.id) : "name:" + workspace.name;
+}
+function workspaceOptions(catalog, draft) {
+    var keys = [];
+    for (var i = 1; i <= 10; i++) keys.push(String(i));
+    var live = catalog ? catalog.workspaces || [] : [];
+    live.forEach(function (w) {
+        if (w.name && w.name.indexOf("special:") !== 0 && w.name !== "special") keys.push(workspaceSelector(w));
+    });
+    keys = keys.concat(Object.keys(draft.workspaces || {}));
+    (draft.displays || []).forEach(function (d) {
+        if (d.initial_workspace) keys.push(d.initial_workspace);
+    });
+    return keys.filter(function (key, index) { return keys.indexOf(key) === index; }).map(function (key) {
+        var current = live.find(function (w) { return workspaceSelector(w) === key; });
+        return {value: key, label: key.replace(/^name:/, "") + (current ? " · " + current.monitor : "")};
+    }).concat([{value: "", label: "Other workspace…"}]);
+}
+function validWorkspace(value) {
+    return (/^[1-9][0-9]*$/.test(value) && Number(value) <= 2147483647) || /^name:[A-Za-z0-9_.:-]{1,128}$/.test(value);
+}
