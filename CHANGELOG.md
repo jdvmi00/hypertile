@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.1 (2026-09-18)
 
 - Resolve inherited default layouts when `looknfeel.lua` has no layout override,
   and allow saving the first override without editing the file by hand (#31).
