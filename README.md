@@ -545,6 +545,7 @@ python3 test/install.py                          # installer and uninstaller
 python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_policy.py && node test/displays.js
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
+python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
 lua test/harness.lua && lua test/loader.lua      # engine: placement, rules, capacity, messages, hot swap
 lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
 lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl

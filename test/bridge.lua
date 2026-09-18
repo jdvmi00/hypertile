@@ -240,6 +240,7 @@ case "$1" in
           if k == "general.gaps_out" then return { top = 10, right = 10, bottom = 10, left = 10 } end
           if k == "general.gaps_in" then return { top = 5, right = 5, bottom = 5, left = 5 } end
           if k == "general.border_size" then return 2 end
+          if k == "general.layout" then return "scrolling" end
           if k == "decoration.rounding" then return 6 end
         end,
         get_windows = function() return { { class = "chromium", title = "Docs\ttab", workspace = { id = 1 }, address = "0x1", floating = false }, { class = "ghostty", title = "sh", workspace = { id = 3 }, address = "0x2", floating = true } } end,
@@ -424,6 +425,36 @@ hl.config({ general = { snap = { enabled = true, layout = "nested" },
     local prefix, suffix = text:match("^(.*\n  layout = ).-(, gaps_in.*)$")
     check(slurp(bridge.looknfeel_path) == prefix .. '"dwindle"' .. suffix,
       "updating default preserves nested fields, comments and strings exactly")
+  end
+  for _, inherited in ipairs({
+    '-- general = { layout = "dwindle" }\n',
+    'hl.config({ general = { gaps_in = 5 } })\n',
+    '',
+  }) do
+    local file = assert(io.open(bridge.looknfeel_path, "w")); file:write(inherited); file:close()
+    check(bridge.default_layout() == "scrolling", "missing override resolves effective inherited layout")
+    check(bridge.set_default_layout("quad") == "lua:quad", "can create the first layout override")
+    local saved = slurp(bridge.looknfeel_path)
+    check(saved:sub(1, #inherited) == inherited, "adding override preserves existing source")
+    check(slurp(bridge.looknfeel_path .. ".bak") == inherited, "first override backs up original source")
+    local effective = { gaps_in = 5 }
+    local config = assert(load(saved, "=looknfeel", "t", { hl = { config = function(settings)
+      for k, v in pairs(settings.general) do effective[k] = v end
+    end } }))
+    config()
+    check(effective.layout == "lua:quad" and effective.gaps_in == 5, "added override executes without losing other settings")
+    check(bridge.default_layout() == "lua:quad", "new override reads back")
+    bridge.set_default_layout("dwindle")
+    check(select(2, slurp(bridge.looknfeel_path):gsub("Default layout saved by Hypertile", "")) == 1,
+      "subsequent changes replace the added override")
+  end
+  do
+    local file = assert(io.open(bridge.looknfeel_path, "w")); file:write('-- inherited\n'); file:close()
+    local query = bridge.query
+    bridge.query = function() return nil, "compositor unavailable" end
+    local value, err = bridge.default_layout()
+    check(not value and err == "compositor unavailable", "inherited read reports compositor failure")
+    bridge.query = query
   end
   local file = assert(io.open(bridge.looknfeel_path, "w"))
   file:write('general = { snap = { layout = "nested" }, layout = "lua:" .. name }'); file:close()
