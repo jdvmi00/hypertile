@@ -96,7 +96,7 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
             command.chmod(0o755)
         original = shell.read_bytes()
         self.run_script(plugin / "install.sh", "--automatic")
-        self.assertEqual(list((self.hypr / "layouts").iterdir()), [])
+        self.assertEqual([p.name for p in (self.hypr / "layouts").iterdir()], ["welcome.lua"])
         runtime = self.hypr / "hypertile.lua"
         stamp = runtime.stat().st_mtime_ns
         # A no-op must not even query/stop the running services.
@@ -113,7 +113,7 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         plugin = self.plugin_checkout()
         originals = {p: p.read_bytes() for p in (self.bindings, self.menu)}
         self.run_script(plugin / "install.sh", "--no-menu", "--no-keybinds")
-        self.assertEqual(list((self.hypr / "layouts").iterdir()), [])
+        self.assertEqual([p.name for p in (self.hypr / "layouts").iterdir()], ["welcome.lua"])
         layout = self.hypr / "layouts/quad.lua"
         layout.write_text('-- my layout\n')
         source = plugin / "hypertile.lua"
@@ -123,6 +123,27 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         self.assertEqual(layout.read_text(), '-- my layout\n')
         for path, original in originals.items():
             self.assertEqual(path.read_bytes(), original)
+
+    def test_new_install_seeds_welcome_and_preserves_edits_and_deletion(self):
+        self.run_script("install.sh")
+        welcome = self.hypr / "layouts/welcome.lua"
+        self.assertEqual(welcome.read_bytes(), (ROOT / "layouts/welcome.lua").read_bytes())
+        welcome.write_text('-- my customized welcome\n')
+        self.run_script("install.sh")
+        self.assertEqual(welcome.read_text(), '-- my customized welcome\n')
+        welcome.unlink()
+        self.run_script("install.sh")
+        self.assertFalse(welcome.exists())
+
+    def test_existing_layout_directory_is_not_seeded(self):
+        layouts = self.hypr / "layouts"
+        layouts.mkdir()
+        self.run_script("install.sh")
+        self.assertEqual(list(layouts.iterdir()), [])
+        welcome = layouts / "welcome.lua"
+        welcome.write_text('-- existing welcome\n')
+        self.run_script("install.sh")
+        self.assertEqual(welcome.read_text(), '-- existing welcome\n')
 
     def test_automatic_failure_can_retry_and_uninstall_clears_receipt(self):
         receipt = self.state / "hypertile/installed-runtime.sha256"
@@ -408,7 +429,7 @@ o.bind("SUPER + U", "User", "keep-me")
         self.assertEqual(json.loads(shell.read_text()), {"plugins": ["other"],
             "bar": {"layout": {"left": [{"id": "other"}]}}})
         self.run_script("install.sh")
-        self.assertEqual(list((self.hypr / "layouts").iterdir()), [])
+        self.assertEqual([p.name for p in (self.hypr / "layouts").iterdir()], ["welcome.lua"])
         self.assertFalse((self.config / "hypertile/session.json").exists())
 
     def test_archive_failure_leaves_installation_intact(self):
