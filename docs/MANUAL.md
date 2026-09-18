@@ -86,15 +86,19 @@ leaves it alone and says so in the install log.
 
 ### Your first layout
 
-A fresh install starts with an **empty** layouts directory, so `SUPER+L` has
-nothing to cycle to yet. Two ways to fix that:
+A fresh install includes **welcome**, a four-zone layout with horizontal
+stacks in the top two zones and 20-pixel rounding. Press `SUPER+L` to switch
+to it, or open the overlay to preview and edit it. Existing layouts directories
+are left untouched on updates, including any edits or deletions.
+
+To add more layouts:
 
 **Copy the examples.** The plugin ships two reference layouts, `ultrawide`
 (20/60/20 columns) and `quad` (the centre split into four). Copy them and
 reload:
 
 ```bash
-cp ~/.config/omarchy/plugins/jmartin.hypertile/layouts/*.lua ~/.config/hypr/layouts/
+cp ~/.config/omarchy/plugins/jmartin.hypertile/layouts/{ultrawide,quad}.lua ~/.config/hypr/layouts/
 hyprctl reload
 ```
 

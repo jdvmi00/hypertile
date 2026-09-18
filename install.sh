@@ -9,7 +9,7 @@
 #   ~/.config/hypr/hypertile-json.lua      JSON module (bridge)
 #   ~/.config/hypr/hypertile-bridge.lua    bridge library
 #   ~/.config/hypr/hypertile-layouts.lua   loader for layouts/*.lua
-#   ~/.config/hypr/layouts/               directory for user-created layouts
+#   ~/.config/hypr/layouts/               user layouts, seeded with welcome on first install
 #   ~/.local/bin/hypertile-ctl             CLI
 #   ~/.config/omarchy/plugins/jmartin.hypertile/
 #                                          the shell plugin: a copy of manifest.json
@@ -94,7 +94,7 @@ fi
 runtime_hash="$(
   printf '%s\n' "$hypr" "$bin" "${XDG_DATA_HOME:-$HOME/.local/share}" "$want_keybinds" "$want_menu"
   sha256sum "$src/install.sh" "$src"/hypertile*.lua "$src"/bin/hypertile-* \
-    "$src"/session/*.py "$src"/scenes/*.py "$src"/displays/*.py
+    "$src"/session/*.py "$src"/scenes/*.py "$src"/displays/*.py "$src/layouts/welcome.lua"
 )"
 runtime_hash="$(printf '%s' "$runtime_hash" | sha256sum | cut -d' ' -f1)"
 runtime_receipt="$state/installed-runtime.sha256"
@@ -160,7 +160,7 @@ import sys
 check_legacy(Path(sys.argv[1]))
 PY_CHECK
 
-mkdir -p "$hypr/layouts" "$bin" "$state"
+mkdir -p "$bin" "$state"
 
 # Preserve the first backup across edits and repeated installs/uninstalls.
 backup() {
@@ -192,6 +192,13 @@ from upgrade import cleanup
 import sys
 cleanup(Path(sys.argv[1]), Path(sys.argv[2]))
 PY_CLEANUP
+
+# Seed only a new layouts directory. Updates must preserve edits and deletions.
+if [[ ! -e "$hypr/layouts" && ! -L "$hypr/layouts" ]]; then
+  mkdir -p "$hypr/layouts"
+  install -m 0644 "$src/layouts/welcome.lua" "$hypr/layouts/welcome.lua"
+fi
+mkdir -p "$hypr/layouts"
 
 for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
   install -m 0644 "$src/$f" "$hypr/$f"
