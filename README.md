@@ -116,9 +116,12 @@ Outlines follow each tile's fitted window area, including aspect ratio and
 scale, so unused space outside that area is not outlined.
 
 `SUPER` + left mouse drag also shows those destinations for a tiled window.
-Drop over a tile to move there (or swap if occupied); the hovered tile is
-highlighted. Dropping outside the outlined tiles keeps Hyprland's normal drag
-result. Destinations stay on the starting workspace and monitor. Floating
+The dragged window animates and follows the pointer while the other windows
+stay in place. A valid destination under the pointer gets a bright highlight
+and thicker outline. Release with the pointer inside another tile to move
+there (or swap if occupied). Releasing in the original tile or outside the
+outlined tiles leaves windows unchanged. Destinations stay on the starting
+workspace and monitor. Floating
 windows and other layouts keep their normal mouse behavior.
 
 ## Overlay

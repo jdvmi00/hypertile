@@ -42,6 +42,8 @@ function M.snapshot()
       if not existing[id] then
         live.orders[id] = nil
         if live.boxes then live.boxes[id] = nil end
+        if live.placements then live.placements[id] = nil end
+        if live.drags then live.drags[id] = nil end
         if live.state.navigation_keep then live.state.navigation_keep[id] = nil end
       end
     end
@@ -529,6 +531,46 @@ local function reorder(live, wanted, warnings, label)
       order[i], order[from] = address, occupant
       index[address], index[occupant] = i, from
     end
+  end
+end
+
+-- Reserve the original geometry while the compositor floats the dragged
+-- window. Keep only plain data; layout targets cannot outlive recalculation.
+function M.drag_hold(request)
+  local live = engine.live[request.layout:match("^lua:(.+)$")]
+  local ws = tostring(request.workspace)
+  assert(live and live.placements[ws] and live.orders[ws], "Waiting for layout geometry")
+  local held = { placements = live.placements[ws], order = {} }
+  for i, address in ipairs(live.orders[ws]) do held.order[i] = address end
+  live.drags[ws] = held
+  return function()
+    local refresh
+    local ok, err = pcall(function()
+      local windows, wanted = {}, {}
+      for _, w in ipairs(hl.get_windows()) do
+        if w.address == request.address and w.stable_id == request.stable_id and w.pid == request.pid
+          and w.workspace and w.workspace.id ~= request.workspace then
+          dispatch(hl.dsp.window.move, { window = "address:" .. w.address,
+            workspace = tostring(request.workspace), follow = false })
+        end
+        if w.workspace and w.workspace.id == request.workspace and not w.floating
+          and w.mapped ~= false and not w.hidden then windows[w.address] = true end
+      end
+      for _, address in ipairs(held.order) do
+        if windows[address] then wanted[#wanted + 1] = address end
+      end
+      if #wanted > 0 then
+        refresh = wanted[1]
+        local warnings = {}
+        reorder(live, wanted, warnings, ws)
+        assert(#warnings == 0, table.concat(warnings, "; "))
+      end
+    end)
+    live.drags[ws] = nil
+    if refresh then
+      dispatch(hl.dsp.window.resize, { window = "address:" .. refresh, x = 0, y = 0, relative = true })
+    end
+    if not ok then error(err) end
   end
 end
 

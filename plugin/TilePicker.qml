@@ -53,7 +53,7 @@ Item {
   function close() { root.opened = false }
 
   function choose(slot) {
-    if (!slot || root.busy || !root.opened) return
+    if (!slot || root.dragging || root.busy || !root.opened) return
     if (slot.zone === root.request.source) { root.finished(); return }
     var value = Object.assign({}, root.request, { zone: slot.zone })
     // Geometry is presentation-only and need not make the round trip.
@@ -139,12 +139,14 @@ Item {
         required property var modelData
         readonly property bool hovered: root.dragging ? root.dragZone === modelData.zone : mouse.containsMouse
         readonly property bool source: modelData.zone === root.request.source
+        readonly property bool dropTarget: root.dragging && hovered && !source
         x: modelData.x + 4
         y: modelData.y + 4
         width: Math.max(1, modelData.w - 8)
         height: Math.max(1, modelData.h - 8)
-        color: source || hovered ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.18) : "transparent"
-        border.width: source || hovered ? 3 : 1
+        color: dropTarget ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35) :
+          source || hovered ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.18) : "transparent"
+        border.width: dropTarget ? 5 : source || hovered ? 3 : 1
         border.color: source || hovered ? Color.accent : "#b3ffffff"
         radius: 10
         MouseArea {
