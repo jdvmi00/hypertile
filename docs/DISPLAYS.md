@@ -75,6 +75,22 @@ are enabled. Its workspaces remain accessible on another output. Disabling the
 last usable output is rejected. Re-enabling uses the saved settings, subject to
 hardware availability.
 
+## Apply a workspace
+
+Select an extended display, then choose **Workspace → Apply** below **Use as**.
+The picker lists workspaces 1–10 and existing or saved workspaces, with the current
+connector beside live workspaces. **Other workspace…** accepts a new number or a
+name such as `name:research`. Apply switches immediately, moving an existing
+workspace and its windows to this display if necessary. The previously visible
+workspace remains available. This does not change saved placement preferences.
+Apply is unavailable during a display preview or for sleeping, disabled,
+disconnected, or mirrored outputs.
+
+Check **Use this workspace at startup**, then **Preview changes → Keep changes**
+to save the startup preference. Uncheck it while that workspace is selected to
+clear it. Startup workspaces must be unique across displays and cannot conflict
+with a saved workspace assignment.
+
 ## Workspace preferences
 
 Expand **Workspace preferences** in the selected display’s settings to adjust
@@ -91,9 +107,8 @@ manual move while it is absent suppresses automatic return until the assignment
 is explicitly reapplied or a new compositor session begins. Reconnect does not
 select the returning workspace or relaunch scene applications.
 
-Previously saved initial workspace preferences still apply at startup and are
-coordinated with session restoration. This setting is no longer exposed in the
-Displays UI. Config reload and monitor reconnect preserve the user's focus.
+Initial workspace preferences apply at startup and are coordinated with session
+restoration. Set them using the Workspace control above. Config reload and monitor reconnect preserve the user's focus.
 
 ## Layout inheritance
 
@@ -177,6 +192,7 @@ hypertile-ctl display status
 hypertile-ctl display preview --json - < settings.json
 hypertile-ctl display keep TOKEN
 hypertile-ctl display revert TOKEN
+hypertile-ctl display show-workspace HDMI-A-1 1
 hypertile-ctl display sleep DP-1
 hypertile-ctl display wake DP-1
 hypertile-ctl display wake
@@ -205,3 +221,49 @@ use the `lua:` prefix. Display transforms use Hyprland's values 0–7.
 
 See [display validation](diagnostics/displays/README.md) for the tested software,
 hardware, and remaining physical verification limits.
+
+## Wallpaper groups
+
+Open **Displays → Wallpaper groups…** below the arrangement diagram. Select a
+screen, check **Span wallpaper across a group**, and check the other displays
+that should share that image. Group members are highlighted in the diagram.
+Select a third screen and leave spanning off for an independent wallpaper.
+Independent screens following the theme repeat the image on each screen.
+
+Each group can use **the current theme wallpaper** or **Choose image…** for a
+fixed image that does not change with the theme. Crop fills the screen/group;
+**Fit entire image** preserves the entire image with black borders as needed.
+**Apply wallpaper** saves all wallpaper edits immediately. This is separate
+from display geometry's Preview/Keep. Unsaved wallpaper edits are retained while
+selecting other monitors; closing asks before discarding them.
+
+A display belongs to one group. Adding it to another group removes it from its
+old group; a group left with one display becomes independent. Spans follow the
+logical desktop arrangement, including vertical offsets and mixed scales.
+Missing outputs are excluded from the visible span and rejoin on reconnect.
+Connectors identify group members, so using a different port requires updating
+the group. Mirrored outputs use their source's wallpaper. If a custom file is
+later removed or fails to load, the renderer falls back to the theme image.
+
+Settings live in `~/.config/omarchy/wallpaper.json` (or `$XDG_CONFIG_HOME`). The
+first Apply clones `omarchy.background` using Omarchy's supported clone command
+and adds group rendering to that user-owned clone. Packaged Omarchy files remain
+untouched. Theme transitions and background-selection shortcuts remain available.
+First-time setup and renderer updates briefly restart the shell to load the new
+renderer; ordinary wallpaper changes apply live. Finish any pending display
+changes before applying wallpaper.
+Hypertile refuses to overwrite an existing custom clone or locally edited
+renderer. Subsequent Apply operations update an unmodified managed clone when
+needed. The original renderer is retained as `Background.omarchy.qml.bak`.
+
+The clone and wallpaper preferences are independent user customizations and
+remain usable if Hypertile is disabled or uninstalled. To return to stock
+rendering, disable `<username>.background` through Omarchy's plugin controls;
+Omarchy restores its original background plugin. Preferences remain available
+for later use.
+
+CLI: `hypertile-ctl display wallpaper` reads preferences. To apply, pass
+`--json` with `{"previous": <last-read-settings>, "settings": <new-settings>}`.
+Settings have `version: 1` and `groups`, whose entries contain `outputs`
+(connector names), `mode` (`span` or `repeat`), `image` (absolute path or `null`
+for the theme), and `fit` (`crop` or `fit`). Concurrent edits are rejected.

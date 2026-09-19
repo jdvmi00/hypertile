@@ -236,8 +236,14 @@ their old runtime files; saved configuration and journals are preserved.
 ### Displays tab
 
 Choose **Displays** to arrange or mirror screens, change resolution, refresh
-rate, scale and rotation, or sleep and wake outputs. Expand **Workspace
+rate, scale and rotation, or sleep and wake outputs. Select a display and use
+**Workspace → Apply** to switch its workspace immediately; **Use this workspace at
+startup** saves a starting workspace through Preview/Keep. Expand **Workspace
 preferences** to assign workspaces and choose a default layout for a monitor.
+
+**Wallpaper groups…** spans an image across selected displays while keeping
+others independent. Each group can follow the theme or use a fixed custom image.
+Apply wallpaper saves immediately.
 
 Arrangement and workspace preference changes use a 15-second **Keep/Revert**
 preview with an independent rollback watchdog. **Keep changes** saves adjusted
@@ -554,6 +560,7 @@ python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lu
 python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && lua test/swap.lua
 node test/content.js && node test/content_keys.js  # scenes, app catalog, placement, the Scenes tab
 python3 test/browse.py && node test/browse.js    # managed layout browsing
+node test/wallpaper.js && python3 test/wallpaper.py # wallpaper groups and settings
 node test/geometry.js                            # overlay drawing math
 node test/editor.js && node test/overlay.js && node test/readability.js
                                                  # editor operations (validated by the engine), overlay, contrast

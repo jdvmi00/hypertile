@@ -39,7 +39,8 @@ def normalized(monitors):
                            connected=True, ambiguous=ambiguous, enabled=not m.get('disabled', False),
                            width=m['width'], height=m['height'], refresh=m['refreshRate'],
                            x=m['x'], y=m['y'], scale=m['scale'], transform=m.get('transform', 0),
-                           modes=m.get('availableModes', []), awake=m.get('dpmsStatus', True)))
+                           modes=m.get('availableModes', []), awake=m.get('dpmsStatus', True),
+                           active_workspace=m.get('activeWorkspace', {})))
     by_name = {d['connector']: d['id'] for d in result}
     by_number = {str(m['id']): m['name'] for m in monitors if 'id' in m}
     for d, m in zip(result, monitors):
