@@ -88,8 +88,8 @@ function M.pick()
   hl.exec_cmd("omarchy-shell shell toggle jmartin.hypertile " .. quote(payload))
 end
 
--- The compositor owns the actual drag. Capture before its mouse dispatcher
--- floats the window, and finish after it has reinserted the window on release.
+-- Native dragging supplies the animation and pointer-following window.
+-- Hold the remaining layout in place until the release commits the drop.
 -- A tiny runtime file also covers releases that beat the shell opening.
 local drag, drag_timer
 local drag_path = (os.getenv("XDG_RUNTIME_DIR") or "/tmp") .. "/hypertile-tile-drag.json"
@@ -120,6 +120,7 @@ function M.drag_update()
       and window.pid == drag.request.pid then exists = true end
   end
   if not exists then
+    pcall(drag.restore)
     publish_drag({ token = drag.token, active = false, zone = "" })
     drag = nil
     if drag_timer then drag_timer:set_enabled(false); drag_timer = nil end
@@ -137,7 +138,7 @@ function M.drag_update()
 end
 
 function M.drag_begin()
-  if drag then M.drag_end() end
+  if drag then return true end
   local active, cursor = hl.get_active_window(), hl.get_cursor_pos()
   if not cursor then return end
   local ws = hl.get_active_workspace()
@@ -164,26 +165,31 @@ function M.drag_begin()
   local ok, request = pcall(M.capture, target)
   if not ok then return end
   local token = tostring({}):gsub("[^%w]", "") .. tostring(os.time())
-  drag = { request = request, token = token }
-  if not publish_drag({ token = token, active = true, zone = "" }) then drag = nil; return end
+  local held, restore = pcall(require("hypr.hypertile-session").drag_hold, request)
+  if not held then return end
+  drag = { request = request, token = token, restore = restore }
+  if not publish_drag({ token = token, active = true, zone = "" }) then restore(); drag = nil; return end
   request.dragToken = token
   local payload = require("hypr.hypertile-json").encode({ mode = "move", request = request })
   hl.exec_cmd("omarchy-shell shell toggle jmartin.hypertile " .. quote(payload))
   drag_timer = hl.timer(M.drag_update, { timeout = 32, type = "repeat" })
   M.drag_update()
+  return true
 end
 
-function M.drag_end()
+function M.drag_end(sampled)
   if not drag then return end
-  M.drag_update()
+  if not sampled then M.drag_update() end
   if not drag then return end
   local finished = drag
   drag = nil
   if drag_timer then drag_timer:set_enabled(false); drag_timer = nil end
-  local ok, err = true, nil
-  if finished.zone then
+  local ok, err = pcall(finished.restore)
+  if ok and finished.zone and finished.zone ~= finished.request.source then
+    -- Native reinsertion can change compositor order. Restore it before
+    -- applying our one explicit move, including drops back into the source.
     finished.request.zone = finished.zone
-    ok, err = pcall(M.move, finished.request, true)
+    ok, err = pcall(M.move, finished.request)
   end
   publish_drag({ token = finished.token, active = false, zone = "" })
   if not ok then hl.exec_cmd("notify-send 'Hypertile drop' " .. quote(err)) end
@@ -296,8 +302,22 @@ function M.bind()
     end
   end
   hl.unbind("SUPER + mouse:272")
-  o.bind("SUPER + mouse:272", "Show tile destinations while dragging", M.drag_begin, { non_consuming = true })
-  o.bind("SUPER + mouse:272", "Move window", hl.dsp.window.drag(), { mouse = true })
+  local native_drag = hl.dsp.window.drag()
+  local native_active = false
+  o.bind("SUPER + mouse:272", "Move window or select destination tile", function()
+    -- Calling the native dispatcher marks this binding releasePending, so
+    -- Hyprland invokes this same callback on release even without SUPER.
+    if native_active then
+      native_active = false
+      M.drag_update()
+      local result = hl.dispatch(native_drag)
+      M.drag_end(true)
+      return result
+    end
+    M.drag_begin()
+    native_active = true
+    return hl.dispatch(native_drag)
+  end)
   -- Ignore modifiers on release: SUPER may have been released before LMB.
   -- Non-consuming leaves ordinary clicks alone when no Hypertile drag exists.
   o.bind("mouse:272", "Finish tile drop", M.drag_end, { release = true, ignore_mods = true, non_consuming = true })

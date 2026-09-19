@@ -719,6 +719,8 @@ function M.provider(name, spec)
   live.state = state
   live.orders = live.orders or {}
   live.boxes = {} -- Plain geometry only; never retain compositor targets.
+  live.placements = {}
+  live.drags = {}
   M.live[name] = live
   return {
     recalculate = function(ctx)
@@ -733,9 +735,25 @@ function M.provider(name, spec)
         end
       end
       if workspace then live.orders[workspace] = order end
+      local held = workspace and live.drags[workspace]
+      if held then
+        for _, target in ipairs(ctx.targets) do
+          local saved = held.placements[window_key(target.window)]
+          if saved then target:place(saved) end
+        end
+        return
+      end
       local ok, err = pcall(M.recalculate, live.compiled, ctx, live.state)
       if workspace then
         live.boxes[workspace] = ok and M.slot_boxes(live.compiled, ctx.area, live.state.sizes) or nil
+        local placements = {}
+        if ok then
+          for _, target in ipairs(ctx.targets) do
+            local box = target.box
+            placements[window_key(target.window)] = { x = box.x, y = box.y, w = box.w, h = box.h }
+          end
+        end
+        live.placements[workspace] = placements
       end
       if not ok then
         print("hypertile[" .. name .. "]: " .. tostring(err))

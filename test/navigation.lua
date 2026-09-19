@@ -72,7 +72,8 @@ local apps = {app}
 local function recalculate()
   local ctx = {area={x=10, y=30, w=1000, h=600}, targets={}}
   for _, w in ipairs(apps) do
-    ctx.targets[#ctx.targets+1] = {window=w, place=function(_, box)
+    ctx.targets[#ctx.targets+1] = {window=w, place=function(self, box)
+      self.box = box
       w.at = {x=box.x+2000, y=box.y-800} -- Offset monitor, not the origin.
       w.size = {x=box.w, y=box.h}
     end}
@@ -291,6 +292,38 @@ assert(math.abs(center.x - (app.at.x-2000)) <= .5 and math.abs(center.y - (app.a
   "center outline matches placed window within edge rounding")
 print("fitted tile outlines: all checks passed")
 
+-- Native dragging removes a target, then reinserts it at a new index.
+-- Remaining geometry must stay fixed, and restoration must undo that reorder.
+provider = engine.provider("drag-layout", {columns={{name="a"},{name="b"}}, empty="collapse", single="collapse"})
+ws.tiled_layout = "lua:drag-layout"
+apps = {app, other}
+recalculate()
+local original_x, original_w = other.at.x, other.size.x
+local restore = session.drag_hold(nav.capture(app))
+apps = {other}
+recalculate()
+assert(other.at.x == original_x and other.size.x == original_w,
+  "removing dragged tile must neither shift nor expand the remaining tile")
+apps = {other, app}
+recalculate()
+assert(other.at.x == original_x, "native reinsertion must not move the destination")
+hl.dispatch = function(args)
+  if args.target then
+    local first, second
+    for i, w in ipairs(apps) do
+      if "address:" .. w.address == args.window then first = i end
+      if "address:" .. w.address == args.target then second = i end
+    end
+    apps[first], apps[second] = apps[second], apps[first]
+  end
+  recalculate()
+end
+restore()
+assert(apps[1] == app and apps[2] == other, "drop restores original compositor order before swapping")
+assert(not engine.live["drag-layout"].drags[tostring(ws.id)], "release clears frozen geometry")
+assert(zone(app) == "a" and zone(other) == "b", "restored slots match original assignments")
+print("animated drag layout preservation: all checks passed")
+
 -- Drag hit testing uses logical coordinates relative to the original monitor.
 local monitor = {name="offset", position={x=-2000,y=400}}
 local drag_request = {monitor="offset", slots={{zone="a",x=10,y=20,w=100,h=80},
@@ -305,7 +338,7 @@ assert(not nav.drag_slot(drag_request, {x=-1990,y=420}, {name="other",position=m
 local capture, move, open_file, rename = nav.capture, nav.move, io.open, os.rename
 local cursor = {x=-1990,y=420}
 local writes, opened, moves, timers = {}, {}, {}, {}
-io.open = function() return {write=function(_, value) writes[#writes+1]=value end, close=function() end} end
+io.open = function() return {read=function() return "{}" end, write=function(_, value) writes[#writes+1]=value end, close=function() end} end
 os.rename = function() return true end
 hl.get_cursor_pos = function() return cursor end
 hl.get_monitor_at_cursor = function() return monitor end
@@ -323,21 +356,30 @@ hl.timer = function(callback, options)
 end
 nav.capture = function(target)
   assert(target == dragged, "capture window under pointer, even if unfocused")
-  return {address="dragged",stable_id=42,pid=100,monitor="offset",workspace=ws.id,slots=drag_request.slots}
+  return {address="dragged",stable_id=42,pid=100,monitor="offset",workspace=ws.id,source="a",slots=drag_request.slots}
 end
+package.loaded["hypr.hypertile-session"].drag_hold = function() return function() end end
 nav.move = function(request, after_drag) moves[#moves+1]={zone=request.zone,after_drag=after_drag} end
 nav.drag_begin()
 assert(#opened == 1 and #timers == 1 and timers[1].enabled)
-cursor = {x=-1850,y=450}
+assert(#moves == 0, "press never moves a tile")
 nav.drag_end()
-assert(#moves == 1 and moves[1].zone == "b" and moves[1].after_drag)
-assert(not timers[1].enabled and writes[#writes]:find('"active": false',1,true))
+assert(#moves == 0, "click and release in source does nothing")
+nav.drag_begin()
+cursor = {x=-1850,y=450}
+nav.drag_update()
+assert(#moves == 0, "hovering another tile does not move while held")
+nav.drag_begin()
+assert(#moves == 0, "duplicate begin cannot commit an unfinished drag")
+nav.drag_end()
+assert(#moves == 1 and moves[1].zone == "b" and not moves[1].after_drag)
+assert(not timers[2].enabled and writes[#writes]:find('"active": false',1,true))
 nav.drag_end()
 assert(#moves == 1, "duplicate/ordinary releases do not move anything")
 nav.drag_begin()
 cursor = {x=-2500,y=450}
 nav.drag_end()
-assert(#moves == 1, "release outside leaves the native drag alone")
+assert(#moves == 1, "release outside leaves tiles unchanged")
 cursor = {x=-1990,y=420}
 nav.drag_begin()
 hl.get_active_workspace = function() return {id=999} end
@@ -346,6 +388,43 @@ assert(#moves == 1, "workspace switch cancels tile placement")
 hl.get_active_workspace = function() return ws end
 nav.capture = function() error("not tiled") end
 nav.drag_begin()
-assert(#timers == 3, "unsupported windows do not start an overlay")
+assert(#timers == 4, "unsupported windows do not start an overlay")
+-- The actual binding starts animation on press and commits only after native release.
+local bindings, native_calls = {}, 0
+hl.unbind = function() end
+local native_dispatcher = {} -- Real dispatcher objects are not callable.
+hl.dsp.window.drag = function() return native_dispatcher end
+hl.dispatch = function(command)
+  assert(command == native_dispatcher, "native drag must use hl.dispatch")
+  native_calls = native_calls + 1
+end
+o = {bind=function(key, description, callback, options)
+  bindings[#bindings+1] = {key=key, callback=callback, options=options or {}}
+end}
+nav.bind()
+local press, release = bindings[1], bindings[2]
+assert(press.key == "SUPER + mouse:272" and not press.options.non_consuming)
+assert(release.options.release and release.options.ignore_mods)
+nav.capture = function()
+  return {address="dragged",stable_id=42,pid=100,monitor="offset",workspace=ws.id,
+    source="a",slots=drag_request.slots}
+end
+press.callback()
+assert(native_calls == 1 and #moves == 1, "managed press animates without swapping")
+cursor = {x=-1850,y=450}
+press.callback() -- Native release ends animation before committing.
+release.callback()
+assert(native_calls == 2 and #moves == 2, "only release commits managed drop")
+dragged.floating = true
+press.callback()
+assert(native_calls == 3, "floating windows retain native drag")
+press.callback() -- Hyprland re-enters the releasePending callback on release.
+release.callback()
+assert(native_calls == 4 and #moves == 2, "native release never starts tile selection")
+dragged.floating = false
+nav.capture = function() error("other layout") end
+press.callback()
+press.callback()
+assert(native_calls == 6, "other layouts retain native press and release")
 nav.capture, nav.move, io.open, os.rename = capture, move, open_file, rename
 print("tile drag: all checks passed")
