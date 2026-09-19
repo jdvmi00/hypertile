@@ -570,6 +570,12 @@ Item {
   }
 
   function dismiss() {
+    if (displaysPane.wallpaperEditor.dirty || displaysPane.wallpaperEditor.busy) {
+      root.displaysMode = true
+      displaysPane.wallpaperMode = true
+      displaysPane.requestClose()
+      return
+    }
     if (root.displaysMode && (displaysPane.pending || displaysPane.dirty)) { displaysPane.requestClose(); return }
     // Unsaved edits get the prompt Esc gives, so a click outside or a close
     // request cannot leave the workspace on a preview nobody saved.
@@ -1908,6 +1914,13 @@ Item {
     function refresh(): void { root.refresh() }
     function content(on: bool): void { root.showContent(on) }
     function displays(): void { root.showDisplays() }
+    function wallpapers(): void { root.showDisplays(); displaysPane.wallpaperMode = true }
+    function wallpaperState(): string { return JSON.stringify({draft: displaysPane.wallpaperEditor.draft, saved: displaysPane.wallpaperEditor.saved, dirty: displaysPane.wallpaperEditor.dirty, error: displaysPane.wallpaperEditor.error}) }
+    function wallpaperSet(key: string, value: string): void { if (["mode", "image", "fit"].indexOf(key) >= 0) displaysPane.wallpaperEditor.edit(key, value === "theme" && key === "image" ? null : value) }
+    function wallpaperMember(output: string, selected: bool): void { displaysPane.wallpaperEditor.member(output, selected) }
+    function wallpaperApply(): void { displaysPane.wallpaperEditor.apply() }
+    function wallpaperReset(): void { displaysPane.wallpaperEditor.discard() }
+
     function displayState(): string { return JSON.stringify({draft: displaysPane.draft, pending: displaysPane.pending, dirty: displaysPane.dirty, confirmingDiscard: displaysPane.confirmingDiscard, error: displaysPane.error, selected: displaysPane.selectedIndex, screen: window.screen ? window.screen.name : null, panel: {x: displaysPane.x, y: displaysPane.y, width: displaysPane.width, height: displaysPane.height}, window: {width: window.width, height: window.height}}) }
     function displaySet(index: int, key: string, value: string): void {
       displaysPane.selectedIndex = index

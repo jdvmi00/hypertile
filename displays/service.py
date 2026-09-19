@@ -14,8 +14,8 @@ import sys
 import time
 import uuid
 
-from adapter import Adapter, DisplayError, match, same, validate, independent, apply_order
-from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules
+from adapter import Adapter, DisplayError, match, same, validate, independent, apply_order, lua_string
+from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules, valid_workspace, selector
 from configuration import Configuration
 
 
@@ -108,7 +108,7 @@ class Service:
             if d.get('mirror_connector'):
                 d['mirror_of'] = ids.get(d['mirror_connector'], d.get('mirror_of'))
         current.extend(disconnected)
-        return dict(version=1, displays=current, confirmed=confirmed,
+        return dict(version=1, displays=current, workspaces=self.adapter.workspaces(), confirmed=confirmed,
                     pending=read(self.pending_path), configuration=str(self.configuration.path) if self.configuration else None,
                     recovery=read(self.directory / 'recovery.json'), service_error=read(self.directory / 'daemon-error.json'))
 
@@ -406,6 +406,49 @@ class Service:
             # The daemon is gone; finish any independently journalled preview.
             return self.revert()
 
+    def wallpaper(self, request=None):
+        import wallpaper
+        if request is None:
+            return dict(settings=wallpaper.load())
+        document = wallpaper.validate(request.get('settings'))
+        with self.lock():
+            if self.pending_path.exists():
+                raise DisplayError('Keep or revert the display preview before changing wallpaper.')
+            current = wallpaper.load()
+            if request.get('previous') != current:
+                raise DisplayError('Wallpaper settings changed elsewhere. Refresh before applying.')
+            known = {d['connector'] for d in self.adapter.displays()}
+            known.update(d['connector'] for d in read(self.confirmed_path, {'displays': []})['displays'])
+            known.update(o for g in current['groups'] for o in g['outputs'])
+            if any(o not in known for g in document['groups'] for o in g['outputs']):
+                raise DisplayError('A selected display is no longer available. Refresh before applying.')
+            # Validate/install the renderer before committing preference changes.
+            renderer, reload = wallpaper.install_renderer()
+            atomic(wallpaper.config_path(), document)
+            if reload:
+                wallpaper.reload_shell_later()
+            return dict(settings=document, renderer=renderer, message='Wallpaper groups applied and saved.')
+
+    def show_workspace(self, connector, workspace):
+        if not valid_workspace(workspace) or (workspace.isdigit() and int(workspace) > 2147483647):
+            raise DisplayError('Workspace must be a positive number or name:<name>.')
+        with self.lock():
+            if self.pending_path.exists():
+                raise DisplayError('Keep or revert the display preview before showing a workspace.')
+            target = next((d for d in self.adapter.displays() if d['connector'] == connector), None)
+            if not target or not independent(target) or not target.get('awake', True):
+                raise DisplayError('Choose a connected, enabled, awake extended display.')
+            existing = next((w for w in self.adapter.workspaces() if selector(w) == workspace), None)
+            if existing and existing.get('monitor') != connector:
+                self.adapter.move(workspace, connector)
+            self.adapter.dispatch('focus', '{monitor=' + lua_string(connector) + '}')
+            self.adapter.dispatch('focus', '{workspace=' + lua_string(workspace) + '}')
+            actual = json.loads(self.adapter.run('-j', 'activeworkspace'))
+            if selector(actual) != workspace or actual.get('monitor') != connector:
+                raise DisplayError('Hyprland did not show the requested workspace on this display.')
+            return dict(message='Showing workspace ' + workspace.removeprefix('name:') + ' on ' + connector + '.',
+                        workspace=workspace, connector=connector)
+
     def power(self, connector, awake):
         with self.lock():
             if self.pending_path.exists():
@@ -469,12 +512,18 @@ def main():
             parser.add_argument('--offline', action='store_true')
         if name in ('list', 'status'):
             parser.add_argument('--json', action='store_true')
+    wallpaper = sub.add_parser('wallpaper')
+    wallpaper.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    wallpaper.add_argument('--json', help='Apply settings and previous settings as JSON; - reads stdin')
     sub.add_parser('identify').add_argument('connector', nargs='?')
     preview = sub.add_parser('preview')
     preview.add_argument('--json', required=True, help='Version 1 display settings JSON; use - for stdin')
     preview.add_argument('--takeover', action='store_true', help=argparse.SUPPRESS)
     sub.add_parser('keep').add_argument('token')
     sub.add_parser('revert').add_argument('token', nargs='?')
+    show = sub.add_parser('show-workspace')
+    show.add_argument('connector')
+    show.add_argument('workspace')
     sub.add_parser('sleep').add_argument('connector')
     sub.add_parser('wake').add_argument('connector', nargs='?', default='')
     sub.add_parser('_watchdog').add_argument('token')
@@ -493,6 +542,12 @@ def main():
             result = service.setup(offline=args.offline)
         elif args.command == 'restore':
             result = service.restore()
+        elif args.command == 'wallpaper':
+            import wallpaper
+            request = json.loads(sys.stdin.read() if args.json == '-' else args.json) if args.json else None
+            result = wallpaper.apply_detached(request) if request is not None and not args.worker else service.wallpaper(request)
+        elif args.command == 'show-workspace':
+            result = service.show_workspace(args.connector, args.workspace)
         elif args.command in ('sleep', 'wake'):
             result = service.power(args.connector, args.command == 'wake')
         elif args.command == '_watchdog':
