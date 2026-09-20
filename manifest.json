@@ -4,7 +4,7 @@
   "name": "Hypertile",
   "version": "1.4.1",
   "author": "Jim Martin",
-  "description": "Zone-based tiling layouts for Hyprland's Lua layout API: browse and edit layouts at true scale in a fullscreen overlay, with a bar widget showing the current layout.",
+  "description": "Design zone layouts on your screen and let your windows follow. Split and resize zones over your live desktop, cycle layouts with SUPER+L, and send windows to numbered slots by keyboard or drag. Save app arrangements as scenes, arrange your monitors, and restore your desktop after login, all from one overlay, with a bar widget showing the current layout.",
   "kinds": [
     "overlay",
     "bar-widget",

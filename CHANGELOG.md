@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- New marketplace preview image and a benefit-led manifest description; the
+  GitHub social preview matches.
+
 ## 1.4.1 (2026-09-18)
 
 - Resolve inherited default layouts when `looknfeel.lua` has no layout override,
