@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Keep dwindle available in the Layouts picker and its Super+L browsing cycle,
+  including preview/cancel, defaults, and switching from scene assignments.
+
 - New marketplace preview image and a benefit-led manifest description; the
   GitHub social preview matches.
 
