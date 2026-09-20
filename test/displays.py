@@ -505,4 +505,39 @@ class Tests(unittest.TestCase):
         self.assertIsNone(actual['displays'][1]['mirror_of'])
         self.assertEqual(doc['displays'][1]['mirror_of'], doc['displays'][0]['id'])
 
+    def test_countdown_starts_after_application_settles(self):
+        original = self.adapter.apply
+        def slow(d):
+            time.sleep(.3)
+            original(d)
+        self.adapter.apply = slow
+        doc = self.doc(); doc['displays'][1]['x'] = 2000
+        start = time.time()
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertGreaterEqual(pending['deadline'], start + Service.PREVIEW_SECONDS + .25)
+        self.assertEqual(read(self.service.pending_path)['deadline'], pending['deadline'])
+        self.assertGreater(pending['seconds'], Service.PREVIEW_SECONDS - 1)
+
+    def test_watcher_idles_until_events_or_safety_poll(self):
+        from service import Watcher
+        consulted = []
+        original = self.adapter.displays
+        self.adapter.displays = lambda: consulted.append(1) or original()
+        watcher = Watcher(self.service)
+        self.assertTrue(watcher.tick([], 0.0))
+        for now in (.5, 1.0, 4.9):
+            self.assertFalse(watcher.tick([], now), 'a quiet desktop is not polled')
+        self.assertFalse(watcher.tick(['workspace>>2', 'activewindow>>foot,shell'], 2.0), 'focus events are not placement events')
+        self.assertTrue(watcher.tick(['moveworkspacev2>>1,1,DP-2'], 2.5))
+        self.assertFalse(watcher.tick([], 7.0))
+        self.assertTrue(watcher.tick([], 7.6), 'the safety poll still runs')
+        self.assertTrue(watcher.tick(['monitorremoved>>DP-2'], 7.7))
+        self.assertEqual(len(consulted), 4)
+        atomic(self.service.power_path, dict(original={}, apply={}))
+        self.assertTrue(watcher.tick([], 7.8), 'wake options settle while an output sleeps')
+        self.service.power_path.unlink(missing_ok=True)
+        polling = Watcher(self.service, polling=True)
+        self.assertTrue(polling.tick([], 0.0))
+        self.assertTrue(polling.tick([], .5), 'without the event socket the old cadence remains')
+
 if __name__ == '__main__': unittest.main()

@@ -262,5 +262,23 @@ class ConfigurationTests(unittest.TestCase):
         plan = self.plan()
         self.assertIn('mirror=""', plan['after'])
 
+    def test_description_prefix_rules_are_edited_like_hyprland(self):
+        # Hyprland matches desc: by prefix, so a partial description rule owns
+        # the output; appending a connector rule would silently shadow its vrr.
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "desc:Dell U27", position = "1920x0", vrr = 1 })\n')
+        self.before[1]['description'] = self.doc['displays'][1]['description'] = 'Dell U2723QE ABC123'
+        self.doc['displays'][1]['x'] = 2200
+        plan = self.plan()
+        self.assertIn('output = "desc:Dell U27", position = "2200x0", vrr = 1', plan['after'])
+        self.assertNotIn('output = "DP-2"', plan['after'])
+
+    def test_last_matching_rule_wins_like_hyprland(self):
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "desc:Native", position = "0x0" })\n')
+        self.before[0]['description'] = self.doc['displays'][0]['description'] = 'Native panel'
+        self.doc['displays'][0]['x'] = 100
+        plan = self.plan()
+        self.assertIn('output = "desc:Native", position = "100x0"', plan['after'])
+        self.assertIn('position = "0x0", scale = monitor_scale', plan['after'], 'the shadowed connector rule is left alone')
+
 if __name__ == '__main__':
     unittest.main()

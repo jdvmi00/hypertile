@@ -82,13 +82,17 @@ PANEL = '''
 '''
 
 
-def render(source):
-    """Fail before activation if an Omarchy upgrade changes the integration points."""
-    if source.count('  property string currentBackground:') != 1 or source.count('      screen: modelData') != 1:
+def replace_once(source, old, new):
+    if source.count(old) != 1:
         raise DisplayError('This Omarchy background renderer needs an updated Hypertile adapter.')
+    return source.replace(old, new)
+
+
+def render(source):
+    """Fail before activation if an Omarchy upgrade changes any integration point."""
     source = 'import "Wallpaper.js" as Wallpaper\n' + source
-    source = source.replace('  property string currentBackground:', INJECTION + '\n  property string currentBackground:', 1)
-    source = source.replace('      screen: modelData', PANEL + '\n      screen: modelData', 1)
+    source = replace_once(source, '  property string currentBackground:', INJECTION + '\n  property string currentBackground:')
+    source = replace_once(source, '      screen: modelData', PANEL + '\n      screen: modelData')
     for name, image in [('base', 'displayedBackground'), ('oldFrame', 'oldBackground'), ('incomingFrame', 'incomingBackground')]:
         import re
         pattern = r'(id: ' + name + r'\s+)anchors.fill: parent\s+source: root.imageUrl\(root.' + image + r'\)\s+fillMode: Image.PreserveAspectCrop'
@@ -100,10 +104,10 @@ def render(source):
         if count != 1:
             raise DisplayError('This Omarchy background renderer needs an updated Hypertile image adapter.')
     # A deleted/broken custom image falls back to the theme instead of a blank screen.
-    source = source.replace('if (status === Image.Ready && root.finishingTransition)',
+    source = replace_once(source, 'if (status === Image.Ready && root.finishingTransition)',
         'if (status === Image.Error && panel.wallpaperGroup.image) panel.customImageFailed = true\n          if (status === Image.Ready && root.finishingTransition)')
-    source = source.replace('      color: "transparent"', '      color: "black"')
-    source = source.replace('    target: "background"', '\n'.join([
+    source = replace_once(source, '      color: "transparent"', '      color: "black"')
+    source = replace_once(source, '    target: "background"', '\n'.join([
         '    target: "background"',
         '    function wallpaperState(): string {',
         '      return JSON.stringify({settings: root.wallpaperConfig, screens: Quickshell.screens.map(s => ({name: s.name, group: Wallpaper.groupFor(root.wallpaperConfig, s.name), frame: Wallpaper.frame(root.wallpaperConfig, s.name, Quickshell.screens.map(m => ({name: m.name, x: m.x, y: m.y, width: m.width, height: m.height})))}))})',

@@ -257,6 +257,30 @@ function workspaceOptions(catalog, draft) {
         return {value: key, label: key.replace(/^name:/, "") + (current ? " · " + current.monitor : "")};
     }).concat([{value: "", label: "Other workspace…"}]);
 }
+// Text typed by the user becomes a selector: numbers stay bare, anything
+// else gets the name: prefix. Validation happens as they type, not at Preview.
+function workspaceKey(text) {
+    var name = String(text || "").trim();
+    if (name && !/^\d+$/.test(name) && name.indexOf("name:") !== 0) name = "name:" + name;
+    return name;
+}
+// A resized screen keeps its neighbours attached: whatever sat at its right
+// or bottom edge moves by the change in size, so a scale, rotation or mode
+// change never leaves an overlap the user has to drag apart. Mutates in place.
+function reflow(displays, index, before) {
+    var changed = displays[index]
+    if (!changed.connected || !changed.enabled || changed.mirror_of) return false
+    var after = bounds(changed)
+    var dw = Math.round(after.w - before.w), dh = Math.round(after.h - before.h)
+    var moved = false
+    displays.forEach(function(display, otherIndex) {
+        if (otherIndex === index || !display.connected || !display.enabled || display.mirror_of) return
+        var rect = bounds(display)
+        if (dw && rect.x >= before.x + before.w - 1) { display.x = Math.round(rect.x + dw); moved = true }
+        if (dh && rect.y >= before.y + before.h - 1) { display.y = Math.round(rect.y + dh); moved = true }
+    })
+    return moved
+}
 function validWorkspace(value) {
     return (/^[1-9][0-9]*$/.test(value) && Number(value) <= 2147483647) || /^name:[A-Za-z0-9_.:-]{1,128}$/.test(value);
 }

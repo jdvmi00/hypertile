@@ -206,7 +206,11 @@ Card {
         if (previous === value || (value === null && previous === undefined))
             return;
         var next = Displays.clone(draft);
+        var before = Displays.bounds(next.displays[selectedIndex]);
         next.displays[selectedIndex][key] = value;
+        // A resized screen keeps its neighbours attached instead of overlapping them.
+        if (["scale", "transform", "width", "height"].indexOf(key) >= 0 && Displays.canArrange(next.displays))
+            Displays.reflow(next.displays, selectedIndex, before);
         draft = next;
         dirty = true;
     }
@@ -274,11 +278,9 @@ Card {
         confirmingDiscard = false;
     }
     function setAssignment(name, layout, preserveLayout) {
-        name = name.trim();
-        if (!name || !selectedDisplay)
+        name = Displays.workspaceKey(name);
+        if (!name || !selectedDisplay || !Displays.validWorkspace(name))
             return;
-        if (!/^\d+$/.test(name) && name.indexOf("name:") !== 0)
-            name = "name:" + name;
         var next = Displays.clone(draft);
         if (!next.workspaces)
             next.workspaces = {};
@@ -310,7 +312,11 @@ Card {
             return true;
         }
         if (event.key === Qt.Key_Escape) {
-            requestClose();
+            // A preview reverts in place; Escape again closes the pane.
+            if (pending)
+                revert();
+            else
+                requestClose();
             return true;
         }
         return false;
@@ -416,13 +422,21 @@ Card {
                     pane.overlay.placeDisplayConfirmation(pane.draft);
                 if (!pane.dirty && !pane.pending) {
                     var preferences = value.confirmed || {};
+                    var selectedId = pane.selectedDisplay ? pane.selectedDisplay.id : null;
                     pane.draft = {
                         version: 1,
                         displays: Displays.clone(value.displays || []),
                         workspaces: Displays.clone(preferences.workspaces || {})
                     };
-                    pane.selectedIndex = Math.min(pane.selectedIndex, Math.max(0, pane.draft.displays.length - 1));
+                    // Connected displays list first, so a reconnect can reorder
+                    // the catalog; the selection follows the display, not its slot.
+                    var kept = pane.draft.displays.findIndex(function (d) {
+                        return d.id === selectedId;
+                    });
+                    pane.selectedIndex = kept >= 0 ? kept : Math.min(pane.selectedIndex, Math.max(0, pane.draft.displays.length - 1));
                 }
+                // An output that fell asleep, from here or elsewhere, must not keep the overlay.
+                pane.overlay.placeDisplayConfirmation();
             } catch (e) {
                 pane.error = "The display service returned an unreadable response.";
             }
@@ -1079,12 +1093,17 @@ Card {
                             // it never offers to wake a display that is already on.
                             text: pane.selectedAsleep ? "Wake display" : "Sleep display"
                             enabled: !!pane.liveDisplay && !!pane.liveDisplay.enabled
-                            onClicked: pane.run([pane.selectedAsleep ? "wake" : "sleep", pane.selectedDisplay.connector])
+                            onClicked: {
+                                // Never go dark with the display the overlay is on: move first.
+                                if (!pane.selectedAsleep)
+                                    pane.overlay.placeDisplayConfirmation(null, pane.selectedDisplay.connector);
+                                pane.run([pane.selectedAsleep ? "wake" : "sleep", pane.selectedDisplay.connector]);
+                            }
                         }
                     }
                     Label {
                         width: parent.width
-                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep needs a connected, enabled display."
+                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. If Hypertile is on this display it moves to another awake one first. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep needs a connected, enabled display."
                         color: pane.muted
                         font.pixelSize: pane.overlay.uiCaption
                     }
@@ -1263,13 +1282,15 @@ Card {
                             }
                         }
                         Row {
+                            id: assignmentRow
                             width: parent.width
                             spacing: 8
+                            readonly property bool validEntry: Displays.validWorkspace(Displays.workspaceKey(workspaceField.text))
                             Entry {
                                 id: workspaceField
                                 width: parent.width - addAssignment.width - parent.spacing
                                 placeholderText: "Number or workspace name"
-                                onAccepted: {
+                                onAccepted: if (assignmentRow.validEntry) {
                                     pane.setAssignment(text, null, true);
                                     text = "";
                                 }
@@ -1278,12 +1299,19 @@ Card {
                                 id: addAssignment
                                 text: "Add"
                                 Accessible.name: "Assign workspace to this monitor"
-                                enabled: workspaceField.text.trim() !== ""
+                                enabled: assignmentRow.validEntry
                                 onClicked: {
                                     pane.setAssignment(workspaceField.text, null, true);
                                     workspaceField.text = "";
                                 }
                             }
+                        }
+                        Label {
+                            width: parent.width
+                            visible: workspaceField.text.trim() !== "" && !assignmentRow.validEntry
+                            text: "Use a number from 1, or a name made of letters, digits and . _ - :"
+                            color: pane.overlay.accent
+                            font.pixelSize: pane.overlay.uiCaption
                         }
                     }
                     Label {
@@ -1365,7 +1393,7 @@ Card {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 color: pane.error !== "" ? Color.urgent : pane.fg
-                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Display settings are saved with Keep changes. Apply switches workspaces immediately."))
+                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Enter keeps, Escape reverts. Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Display settings are saved with Keep changes. Apply switches workspaces immediately."))
             }
         }
     }

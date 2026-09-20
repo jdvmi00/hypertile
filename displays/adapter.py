@@ -199,7 +199,9 @@ class Adapter:
         self.run('eval', 'hl.monitor({' + ','.join(fields) + '})')
 
     def verify(self, desired):
-        for _ in range(15):
+        # A modeset or mirror can take a few seconds to show in the readback,
+        # on real panels and on a loaded compositor alike; only failure waits.
+        for _ in range(50):
             current = {d['connector']: d for d in self.displays()}
             if all(d['connector'] in current and same(d, current[d['connector']]) for d in desired):
                 return list(current.values())

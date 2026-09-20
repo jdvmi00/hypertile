@@ -47,6 +47,8 @@ def read(path, fallback=None):
 
 
 class Service:
+    PREVIEW_SECONDS = 15
+
     def __init__(self, adapter=None, directory=None):
         self.adapter = adapter or Adapter()
         self.configuration = Configuration() if adapter is None else None
@@ -140,7 +142,7 @@ class Service:
             config_plan = self.configuration.plan([] if migrate else baseline, document) if self.configuration else None
             if self.configuration:
                 document['configuration_backed'] = True
-            pending = dict(config_plan=config_plan, token=uuid.uuid4().hex, deadline=time.time() + 15, phase='applying',
+            pending = dict(config_plan=config_plan, token=uuid.uuid4().hex, deadline=time.time() + self.PREVIEW_SECONDS, phase='applying',
                            before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
                            expected={d['connector']: d for d in before}, touched=[],
                            policy_state=copy.deepcopy(self.policy.state) if self.policy else None,
@@ -168,7 +170,9 @@ class Service:
                 if not pending.get('placed'):
                     self.reconcile(document, 'preview')
                 actual = self.adapter.verify(desired)
-                pending.update(phase='preview', expected={d['connector']: d for d in actual})
+                # The countdown is time to look at the result, so it starts once
+                # every output has settled rather than before the first modeset.
+                pending.update(phase='preview', expected={d['connector']: d for d in actual}, deadline=time.time() + self.PREVIEW_SECONDS)
                 atomic(self.pending_path, pending)
                 return dict(token=pending['token'], deadline=pending['deadline'], seconds=max(0, pending['deadline'] - time.time()))
             except Exception:
@@ -577,6 +581,44 @@ def main():
         sys.exit(1)
 
 
+class Watcher:
+    """Consult the compositor only when socket2 reports something that can move
+    a workspace or change an output, on a slow safety poll, or while a sleeping
+    output needs its wake options settled. An idle desktop then costs nothing:
+    the earlier half-second poll spawned five processes and fsynced a file on
+    every tick."""
+    RELEVANT = ('configreloaded', 'monitoradded', 'monitorremoved', 'createworkspace',
+                'destroyworkspace', 'moveworkspace', 'renameworkspace')
+
+    def __init__(self, service, polling=False, interval=5.0):
+        self.service = service
+        self.interval = .5 if polling else interval
+        self.previous = None
+        self.last = None
+
+    def tick(self, lines, now):
+        names = {line.split('>>', 1)[0] for line in lines}
+        reloaded = 'configreloaded' in names
+        due = self.last is None or now - self.last >= self.interval
+        if not (reloaded or due or self.service.power_path.exists()
+                or any(name.startswith(self.RELEVANT) for name in names)):
+            return False
+        self.last = now
+        service = self.service
+        current = service.adapter.displays()
+        topology = tuple((d['id'], d['connector'], d['enabled'], d.get('mirror_connector')) for d in current)
+        if not service.pending_path.exists():
+            if reloaded:
+                service.restore('configreload')
+            elif self.previous is not None and topology != self.previous:
+                service.restore('reconnect')
+            elif service.policy:
+                service.event()
+        service.settle_power()
+        self.previous = topology
+        return True
+
+
 def daemon(service):
     # A separate per-preview watchdog survives daemon termination and shell crashes.
     with (service.directory / 'daemon.lock').open('a') as guard:
@@ -593,7 +635,6 @@ def daemon(service):
         signal.signal(signal.SIGINT, stop)
         if service.pending_path.exists():
             service.revert()
-        previous = None
         events = None
         event_buffer = ''
         try:
@@ -604,28 +645,26 @@ def daemon(service):
             if events:
                 events.close()
             events = None
+        watcher = Watcher(service, polling=events is None)
         while not stopping:
             try:
-                reloaded = False
+                lines = []
                 if events:
                     try:
-                        event_buffer += events.recv(65536).decode(errors='replace')
-                        lines = event_buffer.split('\n')
-                        event_buffer = lines.pop()
-                        reloaded = any(line.startswith('configreloaded>>') for line in lines)
+                        data = events.recv(65536)
+                        if not data:
+                            raise OSError('Hyprland event socket closed')
+                        event_buffer += data.decode(errors='replace')
+                        parts = event_buffer.split('\n')
+                        event_buffer = parts.pop()
+                        lines = parts
                     except BlockingIOError:
                         pass
-                current = service.adapter.displays()
-                topology = tuple((d['id'], d['connector'], d['enabled'], d.get('mirror_connector')) for d in current)
-                if not service.pending_path.exists():
-                    if reloaded:
-                        service.restore('configreload')
-                    elif previous is not None and topology != previous:
-                        service.restore('reconnect')
-                    elif service.policy:
-                        service.event()
-                service.settle_power()
-                previous = topology
+                    except OSError:
+                        events.close()
+                        events = None
+                        watcher.interval = .5
+                watcher.tick(lines, time.monotonic())
             except Exception as error:
                 atomic(service.directory / 'daemon-error.json', dict(error=str(error), time=time.time()))
             time.sleep(.5)

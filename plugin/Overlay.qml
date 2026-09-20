@@ -339,13 +339,21 @@ Item {
     displaysPane.refresh()
   }
 
-  // Keep recovery controls on an output that will remain in the arrangement.
-  // Re-evaluate as Qt adds/removes screens during the compositor transaction.
-  function placeDisplayConfirmation(document) {
+  // Keep recovery controls on an output that will remain in the arrangement
+  // and is awake: `avoid` names a connector about to sleep. Re-evaluate as Qt
+  // adds/removes screens during the compositor transaction.
+  function placeDisplayConfirmation(document, avoid) {
     var screens = Quickshell.screens
     if (!screens.length) return
     var desired = document || ((displaysPane.pending || displaysPane.busy) ? displaysPane.draft : null)
+    var catalog = displaysPane.catalog
+    function awake(screen) {
+      if (avoid && screen.name === avoid) return false
+      var live = catalog && (catalog.displays || []).find(function(d) { return d.connected && d.connector === screen.name })
+      return !live || live.awake !== false
+    }
     function usable(screen) {
+      if (!awake(screen)) return false
       if (!desired) return true
       return desired.displays.some(function(d) { return d.connector === screen.name && d.enabled && !d.mirror_of && d.connected !== false })
     }
