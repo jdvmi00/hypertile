@@ -58,7 +58,7 @@ class Tests(unittest.TestCase):
                 service.wallpaper({'previous':wallpaper.load(),'settings':self.doc})
             install.assert_not_called()
     def test_renderer_patch_and_upgrade_preserve_local_edits(self):
-        source = 'import QtQuick\nItem {\n  property string currentBackground: ""\n  IpcHandler {\n    target: "background"\n  }\n  Item {\n      screen: modelData\n      color: "transparent"\n'
+        source = 'import QtQuick\nItem {\n  property string currentBackground: ""\n  IpcHandler {\n    target: "background"\n  }\n  Item {\n      screen: modelData\n      color: "transparent"\n      onStatusChanged: { if (status === Image.Ready && root.finishingTransition) {} }\n'
         for name, image in [('base','displayedBackground'), ('oldFrame','oldBackground'), ('incomingFrame','incomingBackground')]:
             source += 'Image { id: ' + name + '\nanchors.fill: parent\nsource: root.imageUrl(root.' + image + ')\nfillMode: Image.PreserveAspectCrop\n}\n'
         source += '}\n}\n'
@@ -88,5 +88,14 @@ class Tests(unittest.TestCase):
 
     def test_adapter_fails_closed_for_unknown_renderer(self):
         with self.assertRaises(DisplayError): wallpaper.render('unexpected upstream code')
+        stock = Path(os.environ.get('OMARCHY_PATH', '/usr/share/omarchy')) / 'shell/plugins/background/Background.qml'
+        if stock.is_file():
+            self.assertIn('panel.customImageFailed = true', wallpaper.render(stock.read_text()))
+        for missing in ('if (status === Image.Ready && root.finishingTransition)', '      color: "transparent"', '    target: "background"'):
+            source = 'import QtQuick\nItem {\n  property string currentBackground: ""\n  IpcHandler {\n    target: "background"\n  }\n  Item {\n      screen: modelData\n      color: "transparent"\n      onStatusChanged: { if (status === Image.Ready && root.finishingTransition) {} }\n'
+            for name, image in [('base','displayedBackground'), ('oldFrame','oldBackground'), ('incomingFrame','incomingBackground')]:
+                source += 'Image { id: ' + name + '\nanchors.fill: parent\nsource: root.imageUrl(root.' + image + ')\nfillMode: Image.PreserveAspectCrop\n}\n'
+            with self.assertRaisesRegex(DisplayError, 'updated Hypertile'):
+                wallpaper.render(source.replace(missing, '/* changed upstream */'))
 
 if __name__ == '__main__': unittest.main()

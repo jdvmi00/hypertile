@@ -21,6 +21,8 @@ Column {
     readonly property string output: selectedDisplay ? selectedDisplay.connector : ""
     readonly property var group: Wallpaper.groupFor(draft, output)
     readonly property bool usable: !!selectedDisplay && !selectedDisplay.mirror_of
+    // Apply waits until the group can be saved, and says what is missing.
+    readonly property string incomplete: group.mode === "span" && group.outputs.length < 2 ? "Check at least one more display to span the wallpaper across." : group.image === "" ? "Choose an image file, or use the current theme wallpaper." : ""
     spacing: 12
     enabled: !busy && !blocked
     signal applied
@@ -43,7 +45,7 @@ Column {
     }
     function discard() { draft = JSON.parse(JSON.stringify(saved)); error = ""; }
     function apply() {
-        if (busy || blocked || !loaded) return;
+        if (busy || blocked || !loaded || incomplete) return;
         process.command = [overlay.ctl, "display", "wallpaper", "--json", JSON.stringify({settings: draft, previous: saved})];
         process.running = true;
     }
@@ -158,9 +160,10 @@ Column {
             onClicked: root.edit("fit", checked ? "fit" : "crop")
         }
         Label { text: "Otherwise, the image fills the display or group, cropping the edges as needed."; color: root.overlay.mutedForeground }
+        Label { visible: root.incomplete !== ""; text: root.incomplete; color: root.overlay.accent }
         Row {
             spacing: 8
-            Button { text: "Apply wallpaper"; enabled: root.dirty; onClicked: root.apply() }
+            Button { text: "Apply wallpaper"; enabled: root.dirty && root.incomplete === ""; onClicked: root.apply() }
             Button { text: "Reset"; enabled: root.dirty; onClicked: root.discard() }
             Button { text: "Refresh"; enabled: !root.dirty; onClicked: root.refresh() }
         }

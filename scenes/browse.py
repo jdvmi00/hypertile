@@ -5,6 +5,8 @@ import subprocess
 import time
 import uuid
 
+from scenes import BUILTIN_LAYOUTS
+
 
 class Browser:
     def __init__(self, controller, clock=time.monotonic):
@@ -46,8 +48,8 @@ class Browser:
             return self.end(workspace, token)
         if token in self.state["closed"]:
             return {"preview": False}
-        layout = request["name"].removeprefix("lua:")
-        entry = self.ctl.scenes.layouts.get(layout)
+        layout = request["name"]
+        entry = None if layout in BUILTIN_LAYOUTS else self.ctl.scenes.layouts.get(layout.removeprefix("lua:"))
         record = self.active.get(workspace)
         if record and record["token"] != token:
             self.end(workspace)
@@ -70,13 +72,16 @@ class Browser:
                       "instance": self.ctl.compositor.instance, "epoch": self.epoch}
             self.active[workspace] = record
         record["deadline"] = self.clock() + 10
-        target = "lua:" + entry["name"]
+        target = "lua:" + entry["name"] if entry else layout
         if target not in record["shown"]:
             record["shown"].append(target)
         # Persist the restoration target before changing the compositor.
         self.ctl.persist()
         try:
-            self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": target, "spec": entry["spec"]})
+            args = {"workspace": workspace, "layout": target}
+            if entry:
+                args["spec"] = entry["spec"]
+            self.ctl.compositor.call("scene_layout", args)
         except (OSError, ValueError, RuntimeError, subprocess.TimeoutExpired):
             record["ending"] = True
             self.ctl.persist()

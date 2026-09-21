@@ -90,6 +90,22 @@ def read_rules(directory=None):
     return result
 
 
+def inherited_rules(directory=None):
+    """The effective layout each inherited rule file currently caches."""
+    if directory is None:
+        state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+        directory = Path(os.environ.get("HYPERTILE_RULES_DIR") or state / "hypertile/workspace-rules")
+    result = {}
+    for path in Path(directory).glob("*.lua"):
+        text = path.read_text()
+        match = LAYOUT.search(text)
+        workspace = re.search(r'workspace\s*=\s*["\']([^"\']+)["\']', text)
+        key = workspace[1] if workspace else path.stem
+        if valid_workspace(key) and match and INHERITED in text:
+            result[key] = match[1]
+    return result
+
+
 def snapshot_rules(document):
     """Journal every file a kept policy can replace or remove."""
     state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
@@ -268,14 +284,21 @@ class WorkspacePolicy:
     def _save_runtime(self):
         if not self.state_dir:
             return
+        payload = json.dumps(self.state, sort_keys=True)
+        path = self.state_dir / "workspace-runtime.json"
+        try:
+            if path.read_text() == payload:
+                return  # An idle tick must not fsync an unchanged file.
+        except OSError:
+            pass
         self.state_dir.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".workspace-", dir=self.state_dir)
         try:
             with os.fdopen(fd, "w") as stream:
-                json.dump(self.state, stream)
+                stream.write(payload)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, self.state_dir / "workspace-runtime.json")
+            os.replace(temporary, path)
         finally:
             Path(temporary).unlink(missing_ok=True)
 
@@ -378,17 +401,38 @@ class WorkspacePolicy:
         """Stage rule writes; the service journal owns rollback until confirmation."""
         scenes = self._scenes()
         rules = read_rules()
+        cached = inherited_rules()
+        workspaces = available = fallback = None
         for key, preference in document.get("workspaces", {}).items():
             if "layout" not in preference or key in scenes:
                 continue
             if preference["layout"] is not None and qualify(preference["layout"]) == rules.get(key):
                 continue  # An unchanged explicit choice must preserve its current live layout.
+            if preference["layout"] is None and key in cached:
+                # Rewriting an inherited rule costs a process spawn, a live rule
+                # evaluation and a journalled fsync; skip it when the file already
+                # caches the layout the bridge would compute again.
+                if workspaces is None:
+                    workspaces, available = self.adapter.workspaces(), self._available(document)
+                    fallback = self._ctl("default").strip() or "dwindle"
+                if cached[key] == self._inherited_layout(key, document, workspaces, available, fallback):
+                    continue
             if before_rule:
                 before_rule(key)
             self._ctl("apply", preference["layout"] or "monitor-default", "--workspace", key, "--quiet",
                       preferences_path=preferences_path)
         self.plan(document, self.adapter.workspaces(), self._available(document), "apply")
         self._save_runtime()
+
+    def _inherited_layout(self, key, document, workspaces, available, fallback):
+        """What the bridge writes into an inherited rule: the monitor default of
+        the workspace's live output (or its preferred one before it exists),
+        else the global default."""
+        monitor = next((w.get("monitor") for w in workspaces if selector(w) == key), None)
+        identities = {connector: identity for identity, connector in available.items()}
+        identity = identities.get(monitor) if monitor else document.get("workspaces", {}).get(key, {}).get("monitor")
+        display = next((d for d in document.get("displays", []) if d["id"] == identity), {})
+        return qualify(display["default_layout"]) if display.get("default_layout") else fallback
 
     def capture_workspaces(self):
         """Keep placement metadata, but snapshot the authoritative live layout."""

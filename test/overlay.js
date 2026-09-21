@@ -351,3 +351,62 @@ for (const target of ['home', 'work']) {
   assert.deepEqual(calls, [["wallpaper-close"]]);
   assert(!root.dismissing);
 }
+
+// Built-in dwindle remains available with no saved layouts and through refreshes.
+for (const layouts of [[], [{name: "quad", spec: {name: "main"}}], [{name: "dwindle", spec: {name: "main"}}]]) {
+  const {root, context, calls} = fixture()
+  root.current.workspace.layout = "dwindle"
+  root.acceptLayouts(JSON.stringify({layouts}))
+  assert.equal(root.viewed.builtin, true)
+  assert.equal(root.layoutTarget(root.viewed), "dwindle")
+  assert.equal(root.layouts.length, layouts.length + 1)
+  root.acceptLayouts(JSON.stringify({layouts}))
+  assert.equal(root.viewed.builtin, true, "refresh preserves the built-in selection")
+  root.startEdit(false); root.startRename(); root.deleteViewed(); root.setInCycle(false)
+  assert.equal(root.editing, false)
+  assert.equal(root.renaming, undefined)
+  assert.equal(context.ctlProc.running, false, "file operations never target built-ins")
+  assert.equal(calls.length, 0)
+  root.contentCatalog = {}
+  root.browseTo(root.layoutTarget(root.viewed))
+  assert.deepEqual(clone(context.browseProc.command), ["ctl", "apply", "dwindle", "--workspace", "1", "--no-persist", "--quiet"])
+  root.applyViewed(true)
+  assert.deepEqual(clone(context.ctlProc.command), ["ctl", "apply", "dwindle", "--quiet"])
+  root.commitAppliedLayout(context.ctlProc.command[2])
+  assert.equal(root.committedLayout, "dwindle")
+  root.dismiss()
+  assert.deepEqual(calls, [["hide"]], "committed dwindle must not revert on close")
+}
+for (const managedContent of [false, true]) {
+  const {root, context, calls} = fixture()
+  root.acceptLayouts(JSON.stringify({layouts: root.layouts}))
+  Object.assign(root, {contentCatalog: {}, managedContent})
+  root.cycleFromShortcut("1", -1)
+  assert.equal(root.viewed.name, "dwindle", "reverse cycle reaches built-in dwindle")
+  root.browseTo(root.layoutTarget(root.viewed))
+  assert.equal(context.browseProc.command[managedContent ? 3 : 2], "dwindle")
+  root.dismiss()
+  assert.equal(calls[0][managedContent ? 2 : 1], managedContent ? "browse-end" : "apply")
+  assert.equal(root.committedLayout, "lua:quad", "canceling preserves the saved layout")
+}
+{
+  const {root, context} = fixture()
+  root.acceptLayouts('{"layouts":[]}')
+  root.managedContent = true
+  root.applyViewed(true)
+  assert.equal(context.ctlProc.running, false)
+  assert.equal(root.pendingSwitch.layoutName, "dwindle")
+  root.confirmSwitch()
+  assert.deepEqual(clone(context.ctlProc.command), ["ctl", "scene", "layout", "dwindle", "--workspace", "1", "--json"])
+  root.commitAppliedLayout(context.ctlProc.command[3])
+  assert.equal(root.committedLayout, "dwindle")
+}
+{
+  const {root, context} = fixture()
+  root.acceptLayouts('{"layouts":[]}')
+  root.applyTo("2")
+  assert.deepEqual(clone(context.ctlProc.command), ["ctl", "apply", "dwindle", "--workspace", "2", "--quiet"])
+  root.busy = false
+  root.setDefault()
+  assert.deepEqual(clone(context.ctlProc.command), ["ctl", "default", "dwindle"])
+}

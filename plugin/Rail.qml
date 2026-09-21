@@ -82,7 +82,7 @@ Card {
   readonly property var scene: (overlay.contentCatalog && overlay.contentCatalog.current) ? overlay.contentCatalog.current : null
   readonly property bool sceneNamed: !!(scene && scene.document && scene.document.name && ["none", "restored"].indexOf(scene.phase) === -1)
   readonly property bool sceneModified: Content.sceneModified(scene)
-  readonly property bool contentReady: overlay.contentCatalog !== null && !overlay.catalogFailed && overlay.viewedIsActive
+  readonly property bool contentReady: overlay.contentCatalog !== null && !overlay.catalogFailed && overlay.viewedIsActive && !overlay.viewedIsBuiltin
   readonly property bool scenesTab: overlay.contentMode && !overlay.editing
   readonly property string widthTarget: (sel && draft) ? Editor.extentTarget(draft, sel.name, "w") : ""
   readonly property string heightTarget: (sel && draft) ? Editor.extentTarget(draft, sel.name, "h") : ""
@@ -587,6 +587,7 @@ Card {
         }
 
         Muted { text: rail.metaText; visible: text !== "" }
+        Muted { visible: !overlay.editing && !overlay.contentMode && overlay.viewedIsBuiltin; text: "Dwindle automatically splits space as windows open. Its layout is managed by Hyprland." }
         Muted { visible: rail.scenesTab && rail.scene !== null && !!rail.scene.error; text: rail.scene ? (rail.scene.error || "") : ""; color: Color.urgent }
         Muted { visible: rail.scenesTab && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: Content.retrySummary(rail.scene) }
 
@@ -597,13 +598,13 @@ Card {
 
           // the Layouts tab
           Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.viewedIsActive; text: "Use"; selected: true; tooltipText: "Use on this workspace and close (Enter)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.applyViewed(true) }
-          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Edit"; tooltipText: "Edit this layout (e)"; enabled: overlay.viewed !== null; onClicked: overlay.startEdit(false) }
+          Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Edit"; tooltipText: "Edit this layout (e)"; enabled: overlay.viewed !== null && !overlay.viewedIsBuiltin; onClicked: overlay.startEdit(false) }
           Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "New"; selected: overlay.choosingNew; tooltipText: "New layout: blank, or a copy of this one (n)"; enabled: overlay.current !== null; onClicked: { overlay.confirmingDelete = false; overlay.choosingNew = !overlay.choosingNew } }
           Row {
             visible: !overlay.editing && !overlay.renaming && !overlay.contentMode
             spacing: Style.spacing.sm
-            Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Rename"; tooltipText: "Rename this layout (F2)"; enabled: overlay.viewed !== null && !overlay.busy; onClicked: overlay.startRename() }
-            Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.confirmingDelete; text: "Delete"; accent: Color.urgent; tooltipText: overlay.viewedIsDefault ? "The default layout cannot be deleted; make another the default first" : "Delete this layout's file (d)"; enabled: overlay.viewed !== null && !overlay.viewedIsDefault && !overlay.busy; onClicked: { overlay.choosingNew = false; overlay.confirmingDelete = true } }
+            Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode; text: "Rename"; tooltipText: "Rename this layout (F2)"; enabled: overlay.viewed !== null && !overlay.viewedIsBuiltin && !overlay.busy; onClicked: overlay.startRename() }
+            Action { visible: !overlay.editing && !overlay.renaming && !overlay.contentMode && !overlay.confirmingDelete; text: "Delete"; accent: Color.urgent; tooltipText: overlay.viewedIsDefault ? "The default layout cannot be deleted; make another the default first" : "Delete this layout's file (d)"; enabled: overlay.viewed !== null && !overlay.viewedIsBuiltin && !overlay.viewedIsDefault && !overlay.busy; onClicked: { overlay.choosingNew = false; overlay.confirmingDelete = true } }
           }
           // the Scenes tab
           Action { visible: rail.scenesTab && !overlay.namingScene && rail.sceneNamed; text: "Save"; tooltipText: rail.sceneModified ? "Save the changes to " + rail.scene.document.name : "Saved"; enabled: rail.sceneModified && !overlay.busy; onClicked: overlay.saveScene(rail.scene.document.name) }
@@ -636,7 +637,7 @@ Card {
           width: parent.width
           spacing: Style.spacing.sm
           Action { text: "Blank"; tooltipText: "One zone filling the screen (b)"; selected: true; onClicked: overlay.startEdit(true, true) }
-          Action { visible: overlay.viewed !== null; text: "A copy of " + (overlay.viewed ? overlay.viewed.name : ""); tooltipText: "c"; onClicked: overlay.startEdit(true, false) }
+          Action { visible: overlay.viewed !== null && !overlay.viewedIsBuiltin; text: "A copy of " + (overlay.viewed ? overlay.viewed.name : ""); tooltipText: "c"; onClicked: overlay.startEdit(true, false) }
           Action { text: "Cancel"; onClicked: overlay.choosingNew = false }
         }
       }
@@ -651,7 +652,7 @@ Card {
           text: {
             var using = []
             for (var i = 0; i < overlay.workspaces.length; i++)
-              if (overlay.viewed && overlay.workspaces[i].layout === "lua:" + overlay.viewed.name) using.push(overlay.workspaces[i].id)
+              if (overlay.viewed && overlay.workspaces[i].layout === overlay.layoutTarget(overlay.viewed)) using.push(overlay.workspaces[i].id)
             var s = "The file in ~/.config/hypr/layouts is removed and Hyprland reloads."
             if (using.length > 0) s += " Workspace " + using.join(", ") + " falls back to the default layout."
             else s += " Any workspace rule that points at it falls back to the default layout."
@@ -671,12 +672,12 @@ Card {
         id: switchPrompt
         visible: !overlay.editing && overlay.pendingSwitch !== null
         warning: true
-        PromptTitle { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName) : "") + " anyway?" }
+        PromptTitle { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName.replace(/^lua:/, "")) : "") + " anyway?" }
         Muted { width: parent.width; text: overlay.switchSummary() }
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
-          Action { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName) : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
+          Action { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName.replace(/^lua:/, "")) : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
           Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.pendingSwitch = null }
         }
       }
@@ -753,8 +754,8 @@ Card {
               // original object (plain JS arrays inside) is what the helpers expect.
               readonly property var entry: overlay.layouts[index] || modelData
               readonly property bool viewing: index === overlay.viewIndex
-              readonly property bool inUse: overlay.committedLayout === "lua:" + modelData.name
-              readonly property bool isDefault: overlay.defaultLayout === "lua:" + modelData.name
+              readonly property bool inUse: overlay.committedLayout === overlay.layoutTarget(entry)
+              readonly property bool isDefault: overlay.defaultLayout === overlay.layoutTarget(entry)
               readonly property bool inCycle: !(entry.spec && entry.spec.in_cycle === false)
               width: column.width
               implicitHeight: rowContent.implicitHeight + Style.spacing.sm * 2
@@ -802,6 +803,7 @@ Card {
                       if (layoutRow.isDefault) bits.push("default")
                       if (!layoutRow.inCycle) bits.push("not in cycle")
                       var spec = layoutRow.entry.spec
+                      if (layoutRow.entry.builtin) { bits.push("built-in"); return bits.join("  ·  ") }
                       var n = Array.isArray(spec.fill) ? spec.fill.length : Editor.leafNames(spec).length
                       bits.push(n + (n === 1 ? " slot" : " slots"))
                       return bits.join("  ·  ")
@@ -828,7 +830,7 @@ Card {
 
       // ---- View mode: fill order.
       Section {
-        visible: !overlay.editing && !overlay.contentMode && overlay.viewed !== null && overlay.viewed.spec !== undefined
+        visible: !overlay.editing && !overlay.contentMode && overlay.viewed !== null && !!overlay.viewed.spec
         title: "FILL ORDER"
         Body {
           text: {
@@ -858,7 +860,7 @@ Card {
             Item {
               id: wsRow
               required property var modelData
-              readonly property bool uses: overlay.viewed !== null && String(modelData.effective_layout || modelData.layout) === "lua:" + overlay.viewed.name
+              readonly property bool uses: overlay.viewed !== null && String(modelData.effective_layout || modelData.layout) === overlay.layoutTarget(overlay.viewed)
               width: column.width
               implicitHeight: Math.max(wsText.implicitHeight, wsControl.implicitHeight)
 
@@ -1004,7 +1006,7 @@ Card {
           label: "In the SUPER+L cycle"
           description: overlay.viewedInCycle ? "SUPER+L reaches this layout" : "SUPER+L skips it; the overlay still shows it"
           checked: overlay.viewedInCycle
-          enabled: !overlay.busy
+          enabled: !overlay.busy && !overlay.viewedIsBuiltin
           onClicked: overlay.setInCycle(!overlay.viewedInCycle)
         }
       }

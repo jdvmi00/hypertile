@@ -2,7 +2,9 @@
 
 Open Hypertile and choose **Displays**. The diagram uses logical desktop
 coordinates: resolution, rotation, and scale all affect a screen's size. Drag a
-screen to align its edges, or enter its X and Y position.
+screen to align its edges, or enter its X and Y position. Changing a screen's
+scale, rotation, or resolution moves the screens attached to its right and
+bottom edges by the same amount, so they stay attached instead of overlapping.
 
 ![Displays arrangement and settings](screenshots/displays.png)
 
@@ -23,9 +25,11 @@ If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a
 saved configuration.
 
-Choose **Preview changes**, then **Keep changes** within 15 seconds. **Revert**,
-closing during preview, or letting the countdown expire restores the previous
-arrangement and workspace placement where possible. A separate watchdog runs
+Choose **Preview changes**, then **Keep changes** within 15 seconds. The
+countdown starts once every display has settled on the new settings, not when
+the first one starts changing. Enter keeps; Escape reverts and leaves the pane
+open. **Revert**, closing during preview, or letting the countdown expire
+restores the previous arrangement and workspace placement where possible. A separate watchdog runs
 outside the overlay and display watcher. Confirmation is required even when
 only workspace or layout preferences change. Unsupported modes and overlapping
 independent screens produce an error before application.
@@ -56,7 +60,9 @@ displays first and keeps a remaining output usable if a source disappears.
 ## Sleep and disable
 
 **Sleep display** turns off the output using DPMS without changing its workspace
-placement. The same button reads **Wake display** while the output is asleep;
+placement. If the overlay is on that display it moves to another awake display
+first, so its Wake button stays visible. The same button reads **Wake display**
+while the output is asleep;
 it follows the compositor's power state, not unsaved edits, so it is only
 offered for a connected, enabled output. Sleeping displays are marked in the
 diagram and the display list, and **Wake all** appears in the header only while
@@ -97,7 +103,8 @@ Expand **Workspace preferences** in the selected display’s settings to adjust
 optional layout defaults and workspace assignments. This section starts collapsed.
 
 Add a numbered workspace, or a named workspace using `name:research`, and choose
-its preferred screen. The workspace need not exist yet. Apply moves an existing
+its preferred screen. The Add button waits until the entry is a valid selector
+and says why otherwise. The workspace need not exist yet. Apply moves an existing
 workspace immediately; the preference also applies at startup and when the
 preferred output returns. Moving a workspace normally does not rewrite this
 preference or cause Hypertile to move it back continuously.
@@ -153,6 +160,10 @@ on purge. Existing saved preferences from the earlier display implementation
 are migrated once on upgrade before the old replay behavior is retired.
 
 Supported edits are literal `hl.monitor({ ... })` declarations in `monitors.lua`.
+The declaration edited for an output is the one Hyprland applies: a `desc:`
+selector matches a prefix of the description, and when several declarations
+match one output the last one in the file wins, so a partial description rule
+keeps its other fields (such as `vrr`) instead of being shadowed by a new rule.
 Custom control flow, computed output selectors, duplicate declarations, or
 monitor rules in other loaded user modules receive a source-specific explanation
 before preview changes are applied. They are never rewritten speculatively.
@@ -202,8 +213,11 @@ hypertile-ctl display recover
 
 `restore` recovers interrupted work and reconciles workspace preferences;
 monitor geometry comes from the Lua configuration. `recover` rolls back an
-interrupted preview. `watch` is the long-running display watcher; `stop` stops it
-after recovery. The former `--takeover` flag remains accepted for script
+interrupted preview. `watch` is the long-running display watcher: it listens to
+Hyprland's event socket and consults the compositor only when a workspace or
+output event arrives, every five seconds as a safety net, or while an output
+sleeps, and it rewrites its runtime file only when something changed. `stop`
+stops it after recovery. The former `--takeover` flag remains accepted for script
 compatibility and is no longer necessary. The UI also displays per-output
 identify labels.
 
@@ -233,7 +247,8 @@ Independent screens following the theme repeat the image on each screen.
 Each group can use **the current theme wallpaper** or **Choose image…** for a
 fixed image that does not change with the theme. Crop fills the screen/group;
 **Fit entire image** preserves the entire image with black borders as needed.
-**Apply wallpaper** saves all wallpaper edits immediately. This is separate
+**Apply wallpaper** saves all wallpaper edits immediately, once a spanning
+group has at least two displays and a custom image has a file. This is separate
 from display geometry's Preview/Keep. Unsaved wallpaper edits are retained while
 selecting other monitors; closing asks before discarding them.
 

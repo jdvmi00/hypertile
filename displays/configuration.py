@@ -105,6 +105,19 @@ def declarations(source):
     return rules
 
 
+def rule_for(rules, display):
+    """The specific declaration Hyprland applies to this output: the last one
+    whose selector matches, by connector or by description prefix (Hyprland's
+    matchesStaticSelector uses starts_with and its rule manager scans in
+    reverse). None when only the fallback would apply."""
+    description = display.get('description', '')
+    chosen = None
+    for selector in rules:
+        if selector == display['connector'] or (selector.startswith('desc:') and description.startswith(selector[5:].strip())):
+            chosen = selector
+    return chosen
+
+
 def replace(path, content):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -203,7 +216,7 @@ class Configuration:
             for d in document['displays']:
                 if not d['enabled'] or d.get('mirror_of') or not d.get('connected', True):
                     continue
-                rule = rules.get(d['connector']) or rules.get('desc:' + d.get('description', '')) or rules.get('')
+                rule = rules.get(rule_for(rules, d) or '')
                 span = rule['fields'].get('position') if rule else None
                 position = source[span[0]:span[1]] if span else ''
                 if re.fullmatch(r"([\"'])-?\d+x-?\d+\1", position):
@@ -216,8 +229,9 @@ class Configuration:
         additions = []
         for d, fields in changes:
             connector = d['connector']
-            rule = rules.get(connector) or rules.get('desc:' + d.get('description', ''))
-            if rule and connector not in rules and d.get('ambiguous'):
+            selector = rule_for(rules, d)
+            rule = rules.get(selector) if selector else None
+            if rule and selector != connector and d.get('ambiguous'):
                 raise DisplayError(f'{self.path}: description rule matches multiple connections; use connector-specific rules')
             if rule:
                 extra = []

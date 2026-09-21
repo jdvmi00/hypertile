@@ -70,6 +70,23 @@ def same(a, b):
     return all(a.get(k) == b.get(k) for k in geometry) and abs(a['scale'] - b['scale']) < .001 and abs(a['refresh'] - b['refresh']) < .1
 
 
+def clean_scale(width, height, scale):
+    # Hyprland accepts only scales that divide the mode into whole logical pixels.
+    # Otherwise it rounds to 1/120, then searches outward in 1/120 steps and silently
+    # substitutes the first clean value. Make the same substitution here so the
+    # readback matches the request instead of failing and reverting.
+    def clean(value):
+        return value > 0 and all(abs(size / value - round(size / value)) < 1e-6 for size in (width, height))
+    if width <= 0 or height <= 0 or clean(scale):
+        return scale
+    base = round(scale * 120)
+    for step in range(90):
+        for candidate in ((base + step) / 120, (base - step) / 120):
+            if clean(candidate):
+                return candidate
+    return scale
+
+
 def bounds(d):
     w, h = d['width'], d['height']
     if d['transform'] % 2:
@@ -134,6 +151,7 @@ def validate(document, current):
             raise DisplayError('Display position is outside the supported desktop range.')
         if d['width'] < 0 or d['height'] < 0 or d['refresh'] < 0:
             raise DisplayError('Display dimensions and refresh cannot be negative.')
+        d['scale'] = clean_scale(d['width'], d['height'], d['scale'])
         if not actual:
             continue  # Keep valid disconnected preferences without testing mode availability.
         if actual['connector'] in connectors:
@@ -199,7 +217,9 @@ class Adapter:
         self.run('eval', 'hl.monitor({' + ','.join(fields) + '})')
 
     def verify(self, desired):
-        for _ in range(15):
+        # A modeset or mirror can take a few seconds to show in the readback,
+        # on real panels and on a loaded compositor alike; only failure waits.
+        for _ in range(50):
             current = {d['connector']: d for d in self.displays()}
             if all(d['connector'] in current and same(d, current[d['connector']]) for d in desired):
                 return list(current.values())
