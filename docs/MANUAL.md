@@ -84,6 +84,12 @@ You now have:
 cannot return to a Lua layout. If you had already rebound `SUPER+L`, setup
 leaves it alone and says so in the install log.
 
+**Dwindle remains available:** choose **dwindle** in the Layouts overlay and
+press Enter, or reach it with `SUPER+L`. It appears after saved layouts, even
+when there are none. Browsing previews it; Escape restores the previous
+layout. You can also use dwindle as the default. As a built-in layout, it
+cannot be edited, renamed, deleted, or removed from the cycle here.
+
 ### Your first layout
 
 A fresh install includes **welcome**, a four-zone layout with horizontal

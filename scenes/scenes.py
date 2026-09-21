@@ -11,6 +11,8 @@ import uuid
 from service import atomic_json
 from apps import AppPlacement
 
+BUILTIN_LAYOUTS = ("dwindle", "scrolling", "master")
+
 
 def check(condition, message):
     if not condition:
@@ -338,12 +340,29 @@ class Manager:
         if action == "apply":
             return self.start(self.load(request["name"]), workspace, snap)
         if action == "layout":
-            entry = self.layouts.ensure(request["name"])
+            target = request["name"]
+            if target in BUILTIN_LAYOUTS:
+                active = self.records.get(workspace)
+                if active:
+                    # Keep the pending target durable until both the compositor
+                    # and workspace rule have switched; no app is terminated.
+                    active.update(phase="restore-builtin", builtin_target=target,
+                                  operation=uuid.uuid4().hex, restoring=False)
+                    active.pop("error", None)
+                    self.ctl.persist()
+                    self.step(active)
+                    self.ctl.persist()
+                    return self.public(active)
+                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": target})
+                self.layouts.persist(workspace, rule)
+                return {"phase": "restored", "layout": target}
+            entry = self.layouts.ensure(target.removeprefix("lua:"))
             return self.start({"version": 1, "layout": entry["name"], "layout_id": entry["spec"]["layout_id"], "sources": {}}, workspace, snap)
         if action in ("restore", "cancel"):
             active = self.records.get(workspace)
             check(active and active.get("baseline"), "No scene changes to restore")
             baseline = active["baseline"]
+            active.pop("builtin_target", None)
             if baseline["document"]:
                 return self.start(baseline["document"], workspace, snap, restoring=True)
             active.update(phase="restore-builtin", restoring=True)
@@ -352,6 +371,13 @@ class Manager:
         if action == "retry":
             active = self.records.get(workspace)
             check(active, "No active scene")
+            if active.get("builtin_target"):
+                active.update(phase="restore-builtin")
+                active.pop("error", None)
+                self.ctl.persist()
+                self.step(active)
+                self.ctl.persist()
+                return self.public(active)
             self.apps.retry(active)
             return self.start(active["document"], workspace, snap, force=True)
         if action == "content":
@@ -409,7 +435,8 @@ class Manager:
         if phase in ("stopping", "restore-builtin"):
             self.ctl.compositor.call("scene_clear", {"workspace": workspace})
             if phase == "restore-builtin":
-                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": record["baseline"]["layout"]})
+                target = record.get("builtin_target") or record["baseline"]["layout"]
+                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": target})
                 self.layouts.persist(workspace, rule)
                 record["phase"] = "restored"
                 return

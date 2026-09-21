@@ -1,6 +1,7 @@
 """Opt-in real Hyprland adapter smoke in an isolated compositor.
 
 Run from a Wayland session: python3 test/display_integration.py.
+Use --workspace-only for immediate workspace switching without mode changes.
 No physical output or user configuration is changed.
 """
 import copy
@@ -86,6 +87,20 @@ def main():
                 assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays'] if d['enabled']), initial
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
+                if '--workspace-only' in sys.argv:
+                    before_show = display('list')['confirmed']
+                    # Immediate Show creates, moves and selects workspaces without a saved preference.
+                    display('show-workspace', 'WAYLAND-1', '81')
+                    assert json.loads(ctl('-j', 'activeworkspace'))['id'] == 81
+                    display('show-workspace', 'WAYLAND-2', '81')
+                    active = json.loads(ctl('-j', 'activeworkspace'))
+                    assert active['id'] == 81 and active['monitor'] == 'WAYLAND-2', active
+                    display('show-workspace', 'WAYLAND-1', 'name:research')
+                    active = json.loads(ctl('-j', 'activeworkspace'))
+                    assert active['name'] == 'research' and active['monitor'] == 'WAYLAND-1', active
+                    assert display('list')['confirmed'] == before_show, 'Show must not save placement'
+                    print('PASS: isolated workspace creation, cross-monitor movement, named workspaces and unchanged saved preferences')
+                    return
                 document = dict(version=1, displays=outputs)
                 # Mirror preview, rollback to Extended, persistence, and explicit clear.
                 mirrored = dict(version=1, displays=display('list')['displays'], workspaces={})

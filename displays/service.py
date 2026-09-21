@@ -14,8 +14,8 @@ import sys
 import time
 import uuid
 
-from adapter import Adapter, DisplayError, match, same, validate, independent, apply_order
-from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules
+from adapter import Adapter, DisplayError, match, same, validate, independent, apply_order, lua_string
+from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules, valid_workspace, selector
 from configuration import Configuration
 
 
@@ -47,6 +47,8 @@ def read(path, fallback=None):
 
 
 class Service:
+    PREVIEW_SECONDS = 15
+
     def __init__(self, adapter=None, directory=None):
         self.adapter = adapter or Adapter()
         self.configuration = Configuration() if adapter is None else None
@@ -108,7 +110,7 @@ class Service:
             if d.get('mirror_connector'):
                 d['mirror_of'] = ids.get(d['mirror_connector'], d.get('mirror_of'))
         current.extend(disconnected)
-        return dict(version=1, displays=current, confirmed=confirmed,
+        return dict(version=1, displays=current, workspaces=self.adapter.workspaces(), confirmed=confirmed,
                     pending=read(self.pending_path), configuration=str(self.configuration.path) if self.configuration else None,
                     recovery=read(self.directory / 'recovery.json'), service_error=read(self.directory / 'daemon-error.json'))
 
@@ -140,7 +142,7 @@ class Service:
             config_plan = self.configuration.plan([] if migrate else baseline, document) if self.configuration else None
             if self.configuration:
                 document['configuration_backed'] = True
-            pending = dict(config_plan=config_plan, token=uuid.uuid4().hex, deadline=time.time() + 15, phase='applying',
+            pending = dict(config_plan=config_plan, token=uuid.uuid4().hex, deadline=time.time() + self.PREVIEW_SECONDS, phase='applying',
                            before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
                            expected={d['connector']: d for d in before}, touched=[],
                            policy_state=copy.deepcopy(self.policy.state) if self.policy else None,
@@ -168,7 +170,9 @@ class Service:
                 if not pending.get('placed'):
                     self.reconcile(document, 'preview')
                 actual = self.adapter.verify(desired)
-                pending.update(phase='preview', expected={d['connector']: d for d in actual})
+                # The countdown is time to look at the result, so it starts once
+                # every output has settled rather than before the first modeset.
+                pending.update(phase='preview', expected={d['connector']: d for d in actual}, deadline=time.time() + self.PREVIEW_SECONDS)
                 atomic(self.pending_path, pending)
                 return dict(token=pending['token'], deadline=pending['deadline'], seconds=max(0, pending['deadline'] - time.time()))
             except Exception:
@@ -406,6 +410,49 @@ class Service:
             # The daemon is gone; finish any independently journalled preview.
             return self.revert()
 
+    def wallpaper(self, request=None):
+        import wallpaper
+        if request is None:
+            return dict(settings=wallpaper.load())
+        document = wallpaper.validate(request.get('settings'))
+        with self.lock():
+            if self.pending_path.exists():
+                raise DisplayError('Keep or revert the display preview before changing wallpaper.')
+            current = wallpaper.load()
+            if request.get('previous') != current:
+                raise DisplayError('Wallpaper settings changed elsewhere. Refresh before applying.')
+            known = {d['connector'] for d in self.adapter.displays()}
+            known.update(d['connector'] for d in read(self.confirmed_path, {'displays': []})['displays'])
+            known.update(o for g in current['groups'] for o in g['outputs'])
+            if any(o not in known for g in document['groups'] for o in g['outputs']):
+                raise DisplayError('A selected display is no longer available. Refresh before applying.')
+            # Validate/install the renderer before committing preference changes.
+            renderer, reload = wallpaper.install_renderer()
+            atomic(wallpaper.config_path(), document)
+            if reload:
+                wallpaper.reload_shell_later()
+            return dict(settings=document, renderer=renderer, message='Wallpaper groups applied and saved.')
+
+    def show_workspace(self, connector, workspace):
+        if not valid_workspace(workspace) or (workspace.isdigit() and int(workspace) > 2147483647):
+            raise DisplayError('Workspace must be a positive number or name:<name>.')
+        with self.lock():
+            if self.pending_path.exists():
+                raise DisplayError('Keep or revert the display preview before showing a workspace.')
+            target = next((d for d in self.adapter.displays() if d['connector'] == connector), None)
+            if not target or not independent(target) or not target.get('awake', True):
+                raise DisplayError('Choose a connected, enabled, awake extended display.')
+            existing = next((w for w in self.adapter.workspaces() if selector(w) == workspace), None)
+            if existing and existing.get('monitor') != connector:
+                self.adapter.move(workspace, connector)
+            self.adapter.dispatch('focus', '{monitor=' + lua_string(connector) + '}')
+            self.adapter.dispatch('focus', '{workspace=' + lua_string(workspace) + '}')
+            actual = json.loads(self.adapter.run('-j', 'activeworkspace'))
+            if selector(actual) != workspace or actual.get('monitor') != connector:
+                raise DisplayError('Hyprland did not show the requested workspace on this display.')
+            return dict(message='Showing workspace ' + workspace.removeprefix('name:') + ' on ' + connector + '.',
+                        workspace=workspace, connector=connector)
+
     def power(self, connector, awake):
         with self.lock():
             if self.pending_path.exists():
@@ -469,12 +516,18 @@ def main():
             parser.add_argument('--offline', action='store_true')
         if name in ('list', 'status'):
             parser.add_argument('--json', action='store_true')
+    wallpaper = sub.add_parser('wallpaper')
+    wallpaper.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
+    wallpaper.add_argument('--json', help='Apply settings and previous settings as JSON; - reads stdin')
     sub.add_parser('identify').add_argument('connector', nargs='?')
     preview = sub.add_parser('preview')
     preview.add_argument('--json', required=True, help='Version 1 display settings JSON; use - for stdin')
     preview.add_argument('--takeover', action='store_true', help=argparse.SUPPRESS)
     sub.add_parser('keep').add_argument('token')
     sub.add_parser('revert').add_argument('token', nargs='?')
+    show = sub.add_parser('show-workspace')
+    show.add_argument('connector')
+    show.add_argument('workspace')
     sub.add_parser('sleep').add_argument('connector')
     sub.add_parser('wake').add_argument('connector', nargs='?', default='')
     sub.add_parser('_watchdog').add_argument('token')
@@ -493,6 +546,12 @@ def main():
             result = service.setup(offline=args.offline)
         elif args.command == 'restore':
             result = service.restore()
+        elif args.command == 'wallpaper':
+            import wallpaper
+            request = json.loads(sys.stdin.read() if args.json == '-' else args.json) if args.json else None
+            result = wallpaper.apply_detached(request) if request is not None and not args.worker else service.wallpaper(request)
+        elif args.command == 'show-workspace':
+            result = service.show_workspace(args.connector, args.workspace)
         elif args.command in ('sleep', 'wake'):
             result = service.power(args.connector, args.command == 'wake')
         elif args.command == '_watchdog':
@@ -522,6 +581,44 @@ def main():
         sys.exit(1)
 
 
+class Watcher:
+    """Consult the compositor only when socket2 reports something that can move
+    a workspace or change an output, on a slow safety poll, or while a sleeping
+    output needs its wake options settled. An idle desktop then costs nothing:
+    the earlier half-second poll spawned five processes and fsynced a file on
+    every tick."""
+    RELEVANT = ('configreloaded', 'monitoradded', 'monitorremoved', 'createworkspace',
+                'destroyworkspace', 'moveworkspace', 'renameworkspace')
+
+    def __init__(self, service, polling=False, interval=5.0):
+        self.service = service
+        self.interval = .5 if polling else interval
+        self.previous = None
+        self.last = None
+
+    def tick(self, lines, now):
+        names = {line.split('>>', 1)[0] for line in lines}
+        reloaded = 'configreloaded' in names
+        due = self.last is None or now - self.last >= self.interval
+        if not (reloaded or due or self.service.power_path.exists()
+                or any(name.startswith(self.RELEVANT) for name in names)):
+            return False
+        self.last = now
+        service = self.service
+        current = service.adapter.displays()
+        topology = tuple((d['id'], d['connector'], d['enabled'], d.get('mirror_connector')) for d in current)
+        if not service.pending_path.exists():
+            if reloaded:
+                service.restore('configreload')
+            elif self.previous is not None and topology != self.previous:
+                service.restore('reconnect')
+            elif service.policy:
+                service.event()
+        service.settle_power()
+        self.previous = topology
+        return True
+
+
 def daemon(service):
     # A separate per-preview watchdog survives daemon termination and shell crashes.
     with (service.directory / 'daemon.lock').open('a') as guard:
@@ -538,7 +635,6 @@ def daemon(service):
         signal.signal(signal.SIGINT, stop)
         if service.pending_path.exists():
             service.revert()
-        previous = None
         events = None
         event_buffer = ''
         try:
@@ -549,28 +645,26 @@ def daemon(service):
             if events:
                 events.close()
             events = None
+        watcher = Watcher(service, polling=events is None)
         while not stopping:
             try:
-                reloaded = False
+                lines = []
                 if events:
                     try:
-                        event_buffer += events.recv(65536).decode(errors='replace')
-                        lines = event_buffer.split('\n')
-                        event_buffer = lines.pop()
-                        reloaded = any(line.startswith('configreloaded>>') for line in lines)
+                        data = events.recv(65536)
+                        if not data:
+                            raise OSError('Hyprland event socket closed')
+                        event_buffer += data.decode(errors='replace')
+                        parts = event_buffer.split('\n')
+                        event_buffer = parts.pop()
+                        lines = parts
                     except BlockingIOError:
                         pass
-                current = service.adapter.displays()
-                topology = tuple((d['id'], d['connector'], d['enabled'], d.get('mirror_connector')) for d in current)
-                if not service.pending_path.exists():
-                    if reloaded:
-                        service.restore('configreload')
-                    elif previous is not None and topology != previous:
-                        service.restore('reconnect')
-                    elif service.policy:
-                        service.event()
-                service.settle_power()
-                previous = topology
+                    except OSError:
+                        events.close()
+                        events = None
+                        watcher.interval = .5
+                watcher.tick(lines, time.monotonic())
             except Exception as error:
                 atomic(service.directory / 'daemon-error.json', dict(error=str(error), time=time.time()))
             time.sleep(.5)

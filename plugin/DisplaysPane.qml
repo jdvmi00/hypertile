@@ -6,6 +6,7 @@ import Quickshell.Wayland
 import qs.Commons
 import qs.Ui
 import "Displays.js" as Displays
+import "Wallpaper.js" as Wallpaper
 
 Card {
     id: pane
@@ -17,7 +18,17 @@ Card {
         })
     property int selectedIndex: 0
     property string matchingConnector: ""
-    onSelectedIndexChanged: matchingConnector = ""
+    onSelectedIndexChanged: {
+        matchingConnector = "";
+        workspaceChoice = null;
+        customWorkspace = "";
+    }
+    property var workspaceChoice: null
+    property string customWorkspace: ""
+    readonly property var workspaceOptions: Displays.workspaceOptions(catalog, draft)
+    readonly property string selectedWorkspace: workspaceChoice === "" ? customWorkspace.trim() : workspaceChoice !== null ? workspaceChoice : liveDisplay && liveDisplay.active_workspace && liveDisplay.active_workspace.name ? Displays.workspaceSelector(liveDisplay.active_workspace) : "1"
+    readonly property bool validSelectedWorkspace: Displays.validWorkspace(selectedWorkspace)
+    readonly property bool canShowWorkspace: validSelectedWorkspace && !!liveDisplay && liveDisplay.enabled && !liveDisplay.mirror_of && liveDisplay.awake !== false && !busy && !pending
     readonly property var matchOptions: [
         {
             label: "Choose a connected display…",
@@ -36,6 +47,9 @@ Card {
         readonly property color foreground: pane.fg
         readonly property color background: pane.overlay.surfaceColor
     }
+    property alias wallpaperEditor: wallpaperEditor
+    property bool wallpaperMode: false
+    onWallpaperModeChanged: inspector.contentY = 0
     property bool workspacePreferencesExpanded: false
     property bool dirty: false
     property bool closeAfterRevert: false
@@ -192,7 +206,11 @@ Card {
         if (previous === value || (value === null && previous === undefined))
             return;
         var next = Displays.clone(draft);
+        var before = Displays.bounds(next.displays[selectedIndex]);
         next.displays[selectedIndex][key] = value;
+        // A resized screen keeps its neighbours attached instead of overlapping them.
+        if (["scale", "transform", "width", "height"].indexOf(key) >= 0 && Displays.canArrange(next.displays))
+            Displays.reflow(next.displays, selectedIndex, before);
         draft = next;
         dirty = true;
     }
@@ -240,16 +258,18 @@ Card {
         }
     }
     function requestClose() {
+        if (wallpaperEditor.busy) return;
         if (pending) {
             closeAfterRevert = true;
             revert();
             notice = "Reverting display changes before closing.";
-        } else if (dirty)
+        } else if (dirty || wallpaperEditor.dirty)
             confirmingDiscard = true;
         else
             closeRequested();
     }
     function discardAndClose() {
+        wallpaperEditor.discard();
         confirmingDiscard = false;
         dirty = false;
         closeRequested();
@@ -258,11 +278,9 @@ Card {
         confirmingDiscard = false;
     }
     function setAssignment(name, layout, preserveLayout) {
-        name = name.trim();
-        if (!name || !selectedDisplay)
+        name = Displays.workspaceKey(name);
+        if (!name || !selectedDisplay || !Displays.validWorkspace(name))
             return;
-        if (!/^\d+$/.test(name) && name.indexOf("name:") !== 0)
-            name = "name:" + name;
         var next = Displays.clone(draft);
         if (!next.workspaces)
             next.workspaces = {};
@@ -294,7 +312,11 @@ Card {
             return true;
         }
         if (event.key === Qt.Key_Escape) {
-            requestClose();
+            // A preview reverts in place; Escape again closes the pane.
+            if (pending)
+                revert();
+            else
+                requestClose();
             return true;
         }
         return false;
@@ -400,13 +422,21 @@ Card {
                     pane.overlay.placeDisplayConfirmation(pane.draft);
                 if (!pane.dirty && !pane.pending) {
                     var preferences = value.confirmed || {};
+                    var selectedId = pane.selectedDisplay ? pane.selectedDisplay.id : null;
                     pane.draft = {
                         version: 1,
                         displays: Displays.clone(value.displays || []),
                         workspaces: Displays.clone(preferences.workspaces || {})
                     };
-                    pane.selectedIndex = Math.min(pane.selectedIndex, Math.max(0, pane.draft.displays.length - 1));
+                    // Connected displays list first, so a reconnect can reorder
+                    // the catalog; the selection follows the display, not its slot.
+                    var kept = pane.draft.displays.findIndex(function (d) {
+                        return d.id === selectedId;
+                    });
+                    pane.selectedIndex = kept >= 0 ? kept : Math.min(pane.selectedIndex, Math.max(0, pane.draft.displays.length - 1));
                 }
+                // An output that fell asleep, from here or elsewhere, must not keep the overlay.
+                pane.overlay.placeDisplayConfirmation();
             } catch (e) {
                 pane.error = "The display service returned an unreadable response.";
             }
@@ -643,13 +673,13 @@ Card {
                 }
                 Label {
                     width: parent.width
-                    text: pane.canArrange ? "Drag screens to align their edges. Select a screen to adjust its settings." : "Select a screen to adjust its settings."
+                    text: pane.wallpaperMode ? "Select a screen to configure its wallpaper group." : pane.canArrange ? "Drag screens to align their edges. Select a screen to adjust its settings." : "Select a screen to adjust its settings."
                     color: pane.muted
                 }
                 Rectangle {
                     id: diagram
                     width: parent.width
-                    height: Math.max(190, parent.height - 290)
+                    height: Math.max(150, parent.height - 340)
                     color: Util.alpha(pane.fg, .025)
                     radius: pane.overlay.radiusControl
                     border.color: Util.alpha(pane.fg, .15)
@@ -666,6 +696,8 @@ Card {
                             readonly property var logical: Displays.bounds(modelData)
                             readonly property bool selectedGroup: index === pane.selectedIndex || (pane.selectedMirrors && pane.selectedDisplay.mirror_of === modelData.id)
                             readonly property bool asleep: pane.isAsleep(modelData)
+                            readonly property var wallpaperGroup: Wallpaper.groupFor(wallpaperEditor.draft, modelData.connector)
+                            readonly property bool wallpaperMember: pane.wallpaperMode && pane.selectedDisplay && Wallpaper.groupFor(wallpaperEditor.draft, pane.selectedDisplay.connector).outputs.indexOf(modelData.connector) >= 0
                             visible: modelData.connected && modelData.enabled && !modelData.mirror_of
                             opacity: asleep ? .55 : 1
                             x: (logical.x - diagram.extent.x) * diagram.factor + (diagram.width - diagram.extent.w * diagram.factor) / 2
@@ -673,8 +705,8 @@ Card {
                             width: Math.max(16, logical.w * diagram.factor)
                             height: Math.max(16, logical.h * diagram.factor)
                             radius: 8
-                            color: Util.alpha(pane.overlay.accent, selectedGroup ? .25 : .07)
-                            border.color: selectedGroup ? pane.overlay.accent : Util.alpha(pane.fg, .45)
+                            color: Util.alpha(pane.overlay.accent, selectedGroup || wallpaperMember ? .25 : .07)
+                            border.color: selectedGroup || wallpaperMember ? pane.overlay.accent : Util.alpha(pane.fg, .45)
                             border.width: activeFocus ? 3 : 2
                             activeFocusOnTab: true
                             Accessible.role: Accessible.Button
@@ -686,7 +718,7 @@ Card {
                             Keys.onPressed: function (event) {
                                 var dx = event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0;
                                 var dy = event.key === Qt.Key_Up ? -1 : event.key === Qt.Key_Down ? 1 : 0;
-                                if ((dx || dy) && !pane.pending && !pane.busy) {
+                                if ((dx || dy) && !pane.wallpaperMode && !pane.pending && !pane.busy) {
                                     pane.selectedIndex = index;
                                     pane.setPosition(index, logical.x + dx * (event.modifiers & Qt.ShiftModifier ? 10 : 1), logical.y + dy * (event.modifiers & Qt.ShiftModifier ? 10 : 1));
                                     event.accepted = true;
@@ -717,15 +749,26 @@ Card {
                                     wrapMode: Text.NoWrap
                                 }
                             }
+                            Label {
+                                anchors.bottom: parent.bottom
+                                anchors.bottomMargin: 10
+                                width: parent.width
+                                horizontalAlignment: Text.AlignHCenter
+                                visible: pane.wallpaperMode && screen.height > 90
+                                text: screen.wallpaperGroup.mode === "span" ? "Span · " + screen.wallpaperGroup.outputs.join(" + ") : "Independent"
+                                font.pixelSize: pane.overlay.uiCaption
+                                elide: Text.ElideRight
+                                wrapMode: Text.NoWrap
+                            }
                             MouseArea {
                                 anchors.fill: parent
-                                cursorShape: pane.canArrange && !pane.pending && !pane.busy ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
+                                cursorShape: !pane.wallpaperMode && pane.canArrange && !pane.pending && !pane.busy ? (pressed ? Qt.ClosedHandCursor : Qt.OpenHandCursor) : Qt.ArrowCursor
                                 property point origin
                                 property point startPosition
                                 onPressed: function (mouse) {
                                     screen.forceActiveFocus();
                                     pane.selectedIndex = screen.index;
-                                    if (!pane.canArrange || pane.pending || pane.busy)
+                                    if (pane.wallpaperMode || !pane.canArrange || pane.pending || pane.busy)
                                         return;
                                     diagram.frozenExtent = Displays.clone(pane.arrangement);
                                     pane.frozenNumbering = pane.liveNumbering.slice();
@@ -773,6 +816,12 @@ Card {
                     color: pane.muted
                     text: (pane.canArrange ? "Numbered left to right, then top to bottom. Keyboard: Tab to a display, arrows move 1 px, Shift + arrows move 10 px." : "Keyboard: Tab to a display.") + " Positions use logical pixels."
                     font.pixelSize: pane.overlay.uiCaption
+                }
+                Action {
+                    text: pane.wallpaperMode ? "Back to display settings" : "Wallpaper groups…"
+                    selected: pane.wallpaperMode
+                    enabled: !pane.busy && !pane.pending && !wallpaperEditor.busy
+                    onClicked: pane.wallpaperMode = !pane.wallpaperMode
                 }
                 // Desktop text size is one setting for the whole desktop, not a
                 // property of the selected display, and it applies at once rather
@@ -837,7 +886,7 @@ Card {
                 id: inspector
                 width: parent.width - parent.children[0].width - parent.spacing
                 height: parent.height
-                contentHeight: settings.implicitHeight + 36
+                contentHeight: (pane.wallpaperMode ? wallpaperEditor.implicitHeight : settings.implicitHeight) + 36
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 Controls.ScrollBar.vertical: Controls.ScrollBar {
@@ -870,8 +919,18 @@ Card {
                         font.pixelSize: pane.overlay.uiCaption
                     }
                 }
+                WallpaperSettings {
+                    id: wallpaperEditor
+                    width: inspector.width - 12
+                    visible: pane.wallpaperMode
+                    overlay: pane.overlay
+                    displays: pane.draft.displays
+                    selectedDisplay: pane.selectedDisplay
+                    blocked: pane.busy || !!pane.pending || pane.dirty
+                }
                 Column {
                     id: settings
+                    visible: !pane.wallpaperMode
                     width: inspector.width - 12
                     spacing: 12
                     enabled: !pane.busy && !pane.pending
@@ -953,6 +1012,72 @@ Card {
                             pane.dirty = true;
                         }
                     }
+                    Column {
+                        width: parent.width
+                        spacing: 8
+                        visible: !!pane.selectedDisplay && pane.selectedDisplay.enabled && !pane.selectedMirrors
+                        Label {
+                            text: "Workspace"
+                            font.bold: true
+                        }
+                        Row {
+                            width: parent.width
+                            spacing: 8
+                            Choice {
+                                width: parent.width - showWorkspaceAction.width - 8
+                                accessibleLabel: "Workspace to show on this display"
+                                model: pane.workspaceOptions
+                                textRole: "label"
+                                currentIndex: Math.max(0, model.findIndex(function (o) {
+                                    return o.value === (pane.workspaceChoice === "" ? "" : pane.selectedWorkspace);
+                                }))
+                                onActivated: function (index) { pane.workspaceChoice = model[index].value; }
+                            }
+                            Action {
+                                id: showWorkspaceAction
+                                text: "Apply"
+                                Accessible.name: "Apply selected workspace to this display"
+                                enabled: pane.canShowWorkspace
+                                onClicked: pane.run(["show-workspace", pane.selectedDisplay.connector, pane.selectedWorkspace])
+                            }
+                        }
+                        Entry {
+                            width: parent.width
+                            visible: pane.workspaceChoice === ""
+                            placeholderText: "Number or name:research"
+                            text: pane.customWorkspace
+                            onTextEdited: pane.customWorkspace = text
+                            onAccepted: if (pane.canShowWorkspace)
+                                pane.run(["show-workspace", pane.selectedDisplay.connector, pane.selectedWorkspace])
+                        }
+                        Controls.CheckBox {
+                            width: parent.width
+                            text: "Use this workspace at startup"
+                            font.family: pane.overlay.fontFamily
+                            font.pixelSize: pane.overlay.uiFontSmall
+                            enabled: pane.validSelectedWorkspace
+                            checked: !!pane.selectedDisplay && pane.selectedDisplay.initial_workspace === pane.selectedWorkspace
+                            onClicked: pane.setDisplay("initial_workspace", checked ? pane.selectedWorkspace : null)
+                            onActiveFocusChanged: if (activeFocus) pane.reveal(this)
+                            contentItem: Label {
+                                text: parent.text
+                                leftPadding: parent.indicator.width + parent.spacing
+                                verticalAlignment: Text.AlignVCenter
+                            }
+                        }
+                        Label {
+                            width: parent.width
+                            text: "Apply switches immediately and brings the workspace here if it is on another display. Startup changes are saved with Preview changes → Keep changes."
+                            color: pane.muted
+                            font.pixelSize: pane.overlay.uiCaption
+                        }
+                        Label {
+                            width: parent.width
+                            visible: !!pane.selectedDisplay && !!pane.selectedDisplay.initial_workspace && pane.selectedDisplay.initial_workspace !== pane.selectedWorkspace
+                            text: "Startup workspace: " + (pane.selectedDisplay ? String(pane.selectedDisplay.initial_workspace || "").replace(/^name:/, "") : "")
+                            color: pane.muted
+                        }
+                    }
                     Label {
                         width: parent.width
                         visible: pane.selectedMirrors
@@ -968,12 +1093,17 @@ Card {
                             // it never offers to wake a display that is already on.
                             text: pane.selectedAsleep ? "Wake display" : "Sleep display"
                             enabled: !!pane.liveDisplay && !!pane.liveDisplay.enabled
-                            onClicked: pane.run([pane.selectedAsleep ? "wake" : "sleep", pane.selectedDisplay.connector])
+                            onClicked: {
+                                // Never go dark with the display the overlay is on: move first.
+                                if (!pane.selectedAsleep)
+                                    pane.overlay.placeDisplayConfirmation(null, pane.selectedDisplay.connector);
+                                pane.run([pane.selectedAsleep ? "wake" : "sleep", pane.selectedDisplay.connector]);
+                            }
                         }
                     }
                     Label {
                         width: parent.width
-                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep needs a connected, enabled display."
+                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. If Hypertile is on this display it moves to another awake one first. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep needs a connected, enabled display."
                         color: pane.muted
                         font.pixelSize: pane.overlay.uiCaption
                     }
@@ -1152,13 +1282,15 @@ Card {
                             }
                         }
                         Row {
+                            id: assignmentRow
                             width: parent.width
                             spacing: 8
+                            readonly property bool validEntry: Displays.validWorkspace(Displays.workspaceKey(workspaceField.text))
                             Entry {
                                 id: workspaceField
                                 width: parent.width - addAssignment.width - parent.spacing
                                 placeholderText: "Number or workspace name"
-                                onAccepted: {
+                                onAccepted: if (assignmentRow.validEntry) {
                                     pane.setAssignment(text, null, true);
                                     text = "";
                                 }
@@ -1167,12 +1299,19 @@ Card {
                                 id: addAssignment
                                 text: "Add"
                                 Accessible.name: "Assign workspace to this monitor"
-                                enabled: workspaceField.text.trim() !== ""
+                                enabled: assignmentRow.validEntry
                                 onClicked: {
                                     pane.setAssignment(workspaceField.text, null, true);
                                     workspaceField.text = "";
                                 }
                             }
+                        }
+                        Label {
+                            width: parent.width
+                            visible: workspaceField.text.trim() !== "" && !assignmentRow.validEntry
+                            text: "Use a number from 1, or a name made of letters, digits and . _ - :"
+                            color: pane.overlay.accent
+                            font.pixelSize: pane.overlay.uiCaption
                         }
                     }
                     Label {
@@ -1242,7 +1381,7 @@ Card {
                     visible: !pane.confirmingDiscard
                     text: pane.pending ? "Keep changes" : "Preview changes"
                     primary: true
-                    enabled: !pane.busy && (pane.dirty || !!pane.pending)
+                    enabled: !pane.busy && !wallpaperEditor.dirty && !wallpaperEditor.busy && (pane.dirty || !!pane.pending)
                     onClicked: pane.pending ? pane.run(["keep", pane.pending.token]) : pane.preview()
                 }
             }
@@ -1254,7 +1393,7 @@ Card {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 color: pane.error !== "" ? Color.urgent : pane.fg
-                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Changes are saved only after you choose Keep changes."))
+                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Enter keeps, Escape reverts. Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Display settings are saved with Keep changes. Apply switches workspaces immediately."))
             }
         }
     }

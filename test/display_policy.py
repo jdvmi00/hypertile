@@ -92,6 +92,19 @@ class PolicyTests(unittest.TestCase):
         moves = self.policy.plan(doc, [self.ws('DP-1', 'name:work')], self.both, 'apply')
         self.assertEqual(moves, [{'workspace': 'name:work', 'monitor': 'DP-2'}])
 
+    def test_unchanged_runtime_state_is_not_rewritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            policy = WorkspacePolicy(state_dir=directory)
+            policy.state["locations"] = {"1": "DP-1"}
+            policy._save_runtime()
+            path = Path(directory) / "workspace-runtime.json"
+            stat = path.stat()
+            policy._save_runtime()
+            self.assertEqual((path.stat().st_ino, path.stat().st_mtime_ns), (stat.st_ino, stat.st_mtime_ns), "an idle tick leaves the file alone")
+            policy.state["locations"]["1"] = "DP-2"
+            policy._save_runtime()
+            self.assertEqual(json.loads(path.read_text())["locations"], {"1": "DP-2"})
+
 
 class RuntimeTests(unittest.TestCase):
     class Adapter:
@@ -114,7 +127,7 @@ class RuntimeTests(unittest.TestCase):
             {"id": "portrait", "connector": "DP-2", "default_layout": "master", "enabled": True}],
             "workspaces": {"1": {"monitor": "wide", "layout": None}}}
         self.commands = []
-        def ctl(*args):
+        def ctl(*args, **kwargs):
             self.commands.append(args)
             if args[0] == "default": return "scrolling"
             if args[0] == "workspaces": return json.dumps({"workspaces": self.adapter.workspaces()})
@@ -190,6 +203,19 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(result['layouts'][0]['layout'], 'dwindle')
         self.assertEqual(self.doc['workspaces']['1']['monitor'], 'portrait')
         self.assertEqual(self.doc['displays'][1]['default_layout'], 'master')
+
+    def test_keep_skips_inherited_rules_that_already_cache_the_effective_layout(self):
+        # Workspace 1 lives on DP-2 whose monitor default is master.
+        with patch("policy.inherited_rules", return_value={"1": "master"}):
+            self.policy.commit(self.doc)
+        self.assertFalse(any(args[0] == "apply" for args in self.commands), "a current inherited rule is not rewritten")
+        with patch("policy.inherited_rules", return_value={"1": "dwindle"}):
+            self.policy.commit(self.doc)
+        self.assertTrue(any(args[:2] == ("apply", "monitor-default") for args in self.commands), "a stale cache is refreshed")
+        with patch("policy.inherited_rules", return_value={}):
+            self.commands.clear()
+            self.policy.commit(self.doc)
+        self.assertTrue(any(args[:2] == ("apply", "monitor-default") for args in self.commands), "a missing rule is still written")
 
 if __name__ == "__main__":
     unittest.main()

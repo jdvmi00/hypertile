@@ -9,9 +9,9 @@ import sys
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
-from adapter import DisplayError, bounds, match, normalized, validate
+from adapter import DisplayError, bounds, clean_scale, match, normalized, validate
 from service import Service, atomic, read
 
 
@@ -65,6 +65,44 @@ class Tests(unittest.TestCase):
     def doc(self): return dict(version=1, displays=self.adapter.displays(), workspaces={})
     def awake(self, connector):
         return next(m for m in self.adapter.current if m['connector'] == connector)['awake']
+    def test_show_workspace_moves_existing_then_focuses_without_saving(self):
+        self.adapter.workspaces = lambda: [dict(id=5, name='5', monitor='DP-1')]
+        self.adapter.dispatch = Mock()
+        self.adapter.run = Mock(return_value=json.dumps(dict(id=5, name='5', monitor='DP-2')))
+        result = self.service.show_workspace('DP-2', '5')
+        self.assertEqual(result['workspace'], '5')
+        self.assertEqual(self.adapter.calls, [('move', '5', 'DP-2')])
+        self.assertEqual([c.args for c in self.adapter.dispatch.call_args_list],
+                         [('focus', '{monitor="DP-2"}'), ('focus', '{workspace="5"}')])
+        self.assertFalse(self.service.confirmed_path.exists())
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_show_new_named_workspace_and_verify_readback(self):
+        self.adapter.dispatch = Mock()
+        self.adapter.run = Mock(return_value=json.dumps(dict(id=-1337, name='research', monitor='DP-2')))
+        self.service.show_workspace('DP-2', 'name:research')
+        self.assertEqual(self.adapter.calls, [])
+        self.adapter.run.return_value = json.dumps(dict(id=1, name='1', monitor='DP-1'))
+        with self.assertRaisesRegex(DisplayError, 'did not show'):
+            self.service.show_workspace('DP-2', 'name:research')
+
+    def test_show_workspace_rejects_unavailable_outputs_invalid_ids_and_preview(self):
+        self.adapter.dispatch = Mock()
+        for workspace in ('0', '-1', '2147483648', 'special:scratchpad', 'name:x";error()'):
+            with self.assertRaises(DisplayError):
+                self.service.show_workspace('DP-2', workspace)
+        for changes in ({'awake': False}, {'enabled': False}, {'mirror_of': 'connector:DP-1'}):
+            self.adapter.current[1] = dict(display('DP-2', 1920), **changes)
+            with self.assertRaises(DisplayError):
+                self.service.show_workspace('DP-2', '1')
+        with self.assertRaises(DisplayError):
+            self.service.show_workspace('missing', '1')
+        atomic(self.service.pending_path, dict(token='test'))
+        with self.assertRaisesRegex(DisplayError, 'preview'):
+            self.service.show_workspace('DP-1', '1')
+        self.adapter.dispatch.assert_not_called()
+        self.assertEqual(self.adapter.calls, [])
+
     def test_sleep_holds_input_wake_off_while_another_display_is_awake(self):
         # Hyprland's global DPMS flag would otherwise let any key or mouse move undo the sleep.
         self.adapter.options = dict(key_press_enables_dpms=True, mouse_move_enables_dpms=False)
@@ -228,6 +266,17 @@ class Tests(unittest.TestCase):
         doc['displays'].append(offline)
         with self.assertRaisesRegex(DisplayError, 'finite'):
             validate(doc, self.adapter.displays())
+    def test_scale_snaps_to_the_divisor_hyprland_would_pick(self):
+        self.assertAlmostEqual(clean_scale(6144, 2560, 1.4), 4 / 3)
+        self.assertAlmostEqual(clean_scale(6144, 2560, 1.5), 1.6)
+        self.assertAlmostEqual(clean_scale(2304, 1536, 1.33333), 4 / 3)
+        self.assertEqual(clean_scale(1920, 1080, 1.5), 1.5)
+        self.assertEqual(clean_scale(0, 0, 1.4), 1.4)
+        self.adapter.current[0].update(width=6144, height=2560, modes=['6144x2560@60.00Hz'])
+        doc = self.doc(); doc['displays'][0].update(width=6144, height=2560, scale=1.4); doc['displays'][1]['x'] = 4608
+        result = validate(doc, self.adapter.displays())
+        self.assertAlmostEqual(result[0]['scale'], 4 / 3)
+        self.assertEqual(doc['displays'][0]['scale'], 1.4)
     def test_restore_unavailable_mode_keeps_usable_desktop_and_intent(self):
         doc = self.doc(); doc['displays'][1]['refresh'] = 144
         atomic(self.service.confirmed_path, doc)
@@ -466,5 +515,40 @@ class Tests(unittest.TestCase):
         actual = runtime_mirrors(doc, self.adapter.displays())
         self.assertIsNone(actual['displays'][1]['mirror_of'])
         self.assertEqual(doc['displays'][1]['mirror_of'], doc['displays'][0]['id'])
+
+    def test_countdown_starts_after_application_settles(self):
+        original = self.adapter.apply
+        def slow(d):
+            time.sleep(.3)
+            original(d)
+        self.adapter.apply = slow
+        doc = self.doc(); doc['displays'][1]['x'] = 2000
+        start = time.time()
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertGreaterEqual(pending['deadline'], start + Service.PREVIEW_SECONDS + .25)
+        self.assertEqual(read(self.service.pending_path)['deadline'], pending['deadline'])
+        self.assertGreater(pending['seconds'], Service.PREVIEW_SECONDS - 1)
+
+    def test_watcher_idles_until_events_or_safety_poll(self):
+        from service import Watcher
+        consulted = []
+        original = self.adapter.displays
+        self.adapter.displays = lambda: consulted.append(1) or original()
+        watcher = Watcher(self.service)
+        self.assertTrue(watcher.tick([], 0.0))
+        for now in (.5, 1.0, 4.9):
+            self.assertFalse(watcher.tick([], now), 'a quiet desktop is not polled')
+        self.assertFalse(watcher.tick(['workspace>>2', 'activewindow>>foot,shell'], 2.0), 'focus events are not placement events')
+        self.assertTrue(watcher.tick(['moveworkspacev2>>1,1,DP-2'], 2.5))
+        self.assertFalse(watcher.tick([], 7.0))
+        self.assertTrue(watcher.tick([], 7.6), 'the safety poll still runs')
+        self.assertTrue(watcher.tick(['monitorremoved>>DP-2'], 7.7))
+        self.assertEqual(len(consulted), 4)
+        atomic(self.service.power_path, dict(original={}, apply={}))
+        self.assertTrue(watcher.tick([], 7.8), 'wake options settle while an output sleeps')
+        self.service.power_path.unlink(missing_ok=True)
+        polling = Watcher(self.service, polling=True)
+        self.assertTrue(polling.tick([], 0.0))
+        self.assertTrue(polling.tick([], .5), 'without the event socket the old cadence remains')
 
 if __name__ == '__main__': unittest.main()

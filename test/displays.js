@@ -65,6 +65,7 @@ console.log('Display power state reads the compositor catalog passed')
 // Closing never drops unsaved edits silently; a pending preview reverts first.
 function closing(state) {
     const ctx = Object.assign({closed: 0, reverted: 0, refreshed: 0, notice: '', closeAfterRevert: false, confirmingDiscard: false, pending: null, dirty: false}, state)
+    ctx.wallpaperEditor = {busy: false, dirty: false, discard() { this.dirty = false }}
     ctx.closeRequested = () => ctx.closed++
     ctx.run = () => ctx.reverted++
     ctx.refresh = () => ctx.refreshed++
@@ -88,6 +89,9 @@ assert.deepStrictEqual([close.closed, close.confirmingDiscard, close.dirty], [1,
 close = closing({dirty: true, pending: {token: 't'}})
 close.requestClose()
 assert.deepStrictEqual([close.reverted, close.closeAfterRevert, close.confirmingDiscard], [1, true, false], 'a preview reverts instead of asking')
+close = closing({dirty: true, pending: {token: 't'}})
+assert.strictEqual(close.handleKey({key: 1, modifiers: 0}), true)
+assert.deepStrictEqual([close.reverted, close.closed, close.closeAfterRevert], [1, 0, false], 'Escape reverts a preview in place instead of closing')
 close = closing({dirty: true, confirmingDiscard: true})
 close.revert()
 assert.deepStrictEqual([close.confirmingDiscard, close.dirty, close.refreshed], [false, false, 1], 'Reset clears the confirmation')
@@ -245,3 +249,57 @@ assert.strictEqual(textPane.dirty,false,'global text sizing must not stage a dis
 textPane.setTextSize(6)
 assert.strictEqual(textPane.pendingTextSize,14,'an in-flight text-size command must not be overwritten')
 console.log('Resolution-compatible scale presets and global text-size actions passed')
+
+const choices = plain(D.workspaceOptions({workspaces: [
+    {id: 5, name: '5', monitor: 'HDMI-A-1'},
+    {id: -1337, name: 'research', monitor: 'DP-1'},
+    {id: -99, name: 'special:scratchpad', monitor: 'DP-1'}
+]}, {workspaces: {'20': {}}, displays: [{initial_workspace: '30'}]}));
+assert.strictEqual(choices.filter(o => o.value === '5').length, 1);
+assert.strictEqual(choices.find(o => o.value === '5').label, '5 · HDMI-A-1');
+assert.strictEqual(choices.find(o => o.value === 'name:research').label, 'research · DP-1');
+assert(choices.some(o => o.value === '20') && choices.some(o => o.value === '30'));
+assert(!choices.some(o => o.value.includes('special')));
+assert.strictEqual(choices.at(-1).value, '');
+for (const value of ['1', '2147483647', 'name:research']) assert(D.validWorkspace(value));
+for (const value of ['0', '2147483648', '-1', 'name:', 'special:scratchpad']) assert(!D.validWorkspace(value));
+assert.strictEqual(D.workspaceKey(' 7 '), '7');
+assert.strictEqual(D.workspaceKey('research'), 'name:research');
+assert.strictEqual(D.workspaceKey('name:research'), 'name:research');
+assert.strictEqual(D.workspaceKey(''), '');
+for (const text of ['0', '007', 'two words', 'name:']) assert(!D.validWorkspace(D.workspaceKey(text)), 'typed text is validated before Add: ' + text);
+pane.setAssignment('two words', null, true);
+assert(!('name:two words' in pane.draft.workspaces), 'an invalid entry never reaches the draft');
+// Resizing a screen keeps the screens attached to its right and bottom edges attached.
+const left = {connected:true, enabled:true, mirror_of:null, width:2560, height:1440, scale:1, transform:0, x:0, y:0};
+const right = {connected:true, enabled:true, mirror_of:null, width:1920, height:1080, scale:1, transform:0, x:2560, y:0};
+const below = {connected:true, enabled:true, mirror_of:null, width:1920, height:1080, scale:1, transform:0, x:0, y:1440};
+const west = {connected:true, enabled:true, mirror_of:null, width:1920, height:1080, scale:1, transform:0, x:-1920, y:0};
+let row = plain([left, right, below, west]);
+let before = D.bounds(row[0]);
+row[0].scale = 2;
+assert.strictEqual(D.reflow(row, 0, before), true);
+assert.deepStrictEqual([row[1].x, row[2].y, row[3].x], [1280, 720, -1920], 'right and bottom neighbours follow; the left one stays');
+row = plain([left, right, below, west]);
+before = D.bounds(row[0]);
+row[0].transform = 1;
+D.reflow(row, 0, before);
+assert.deepStrictEqual([row[1].x, row[2].y], [1440, 2560], 'rotation swaps the edges the neighbours attach to');
+row = plain([left, right]);
+row[1].mirror_of = 'x';
+before = D.bounds(row[0]);
+row[0].scale = 2;
+assert.strictEqual(D.reflow(row, 0, before), false, 'mirrors and disabled outputs are not on the desktop');
+row = plain([left, right]);
+before = D.bounds(row[1]);
+row[1].mirror_of = 'x';
+assert.strictEqual(D.reflow(row, 1, before), false, 'a screen leaving the desktop moves nothing');
+console.log('Typed workspace selectors are validated before Add; resized screens keep neighbours attached');
+console.log('Workspace picker includes live locations, saved and custom choices; rejects invalid selectors');
+
+close = closing({});
+close.wallpaperEditor.dirty = true;
+close.requestClose();
+assert(close.confirmingDiscard && !close.closed);
+close.discardAndClose();
+assert(!close.wallpaperEditor.dirty && close.closed);

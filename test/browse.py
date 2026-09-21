@@ -44,6 +44,57 @@ class BrowseTests(unittest.TestCase):
         self.assertEqual(self.command("current"), scene)
         self.assertEqual((self.root / "scenes/work.json").read_bytes(), saved)
 
+    def test_builtin_preview_cancel_and_confirm(self):
+        self.ready()
+        before = self.command("current")
+        saved = (self.root / "scenes/work.json").read_bytes()
+        self.start(name="dwindle")
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "dwindle")
+        self.assertNotIn("spec", self.comp.calls[-1][1])
+        self.tick(3)
+        self.assertEqual(self.command("current"), before)
+        self.command("browse-end", browse_token="overlay")
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "lua:quad")
+        self.start(token="confirm", name="dwindle")
+        with patch.object(self.layouts, "persist") as persist:
+            result = self.command("layout", name="dwindle")
+        self.assertEqual(result["phase"], "restored")
+        persist.assert_called_once_with("1", "scene rule")
+        self.assertFalse(self.ctl.browser.active)
+        self.assertFalse(self.comp.desktop["scene_content"])
+        self.command("browse-end", browse_token="confirm")
+        self.tick(3)
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "dwindle")
+        self.assertEqual(self.command("catalog")["active_workspaces"], [])
+        self.assertEqual((self.root / "scenes/work.json").read_bytes(), saved)
+        self.apply()
+        self.tick(3)
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "lua:quad")
+        self.assertEqual(self.command("current")["phase"], "ready")
+
+    def test_builtin_failed_switch_keeps_durable_target_for_retry(self):
+        self.ready()
+        self.comp.fail_layout = True
+        with self.assertRaisesRegex(RuntimeError, "injected"):
+            self.command("layout", name="dwindle")
+        self.ctl = self.controller()
+        self.tick()
+        self.assertEqual(self.command("current")["phase"], "needs-attention")
+        self.comp.fail_layout = False
+        self.command("retry")
+        self.assertEqual(self.command("current")["phase"], "restored")
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "dwindle")
+
+    def test_qualified_custom_layout_named_dwindle_is_not_builtin(self):
+        self.layouts.entries.append({"name": "dwindle", "spec": {"layout_id": "custom-dwindle", "name": "main", "id": "zone"}})
+        self.ready()
+        self.start(name="lua:dwindle")
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "lua:dwindle")
+        self.assertIn("spec", self.comp.calls[-1][1])
+        self.command("layout", name="lua:dwindle")
+        self.tick(3)
+        self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "lua:dwindle")
+
     def test_close_before_start_and_late_old_owner_cannot_move_windows(self):
         self.ready()
         self.command("browse-end", browse_token="old")

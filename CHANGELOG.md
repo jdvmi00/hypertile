@@ -1,5 +1,31 @@
 # Changelog
 
+## 1.4.2 (2026-09-20)
+
+- Displays: the preview countdown starts after every output has settled;
+  Escape reverts a preview in place instead of closing; sleeping the display
+  that shows the overlay moves the overlay to an awake display first; the
+  selection survives a catalog refresh; changing scale, rotation, or
+  resolution keeps attached screens attached; the workspace Add field and the
+  wallpaper Apply button validate before, not after, the request.
+- Displays: `monitors.lua` edits pick the declaration Hyprland applies
+  (`desc:` prefix matching, last match wins) instead of shadowing a partial
+  description rule with a new connector rule. Keep no longer rewrites
+  inherited workspace rules that already cache the effective layout, and
+  every renderer patch point is checked before a wallpaper clone is written.
+  Readback after each display change waits up to five seconds instead of
+  1.5 before declaring a failure and reverting.
+- Displays: a saved scale that does not divide the mode into whole logical
+  pixels (for example 1.4 on 6144×2560) is snapped to the nearest clean 1/120
+  step the way Hyprland does, instead of failing readback and reverting.
+- Displays: the watcher is driven by Hyprland's event socket with a slow
+  safety poll and skips unchanged runtime writes, instead of spawning five
+  processes and fsyncing a file twice a second on an idle desktop.
+- Keep dwindle available in the Layouts picker and its Super+L browsing cycle,
+  including preview/cancel, defaults, and switching from scene assignments.
+- New marketplace preview image and a benefit-led manifest description; the
+  GitHub social preview matches.
+
 ## 1.4.1 (2026-09-18)
 
 - Resolve inherited default layouts when `looknfeel.lua` has no layout override,

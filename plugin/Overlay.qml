@@ -139,6 +139,7 @@ Item {
   property string hoverZone: ""
 
   readonly property var viewed: (layouts.length > 0 && viewIndex >= 0 && viewIndex < layouts.length) ? layouts[viewIndex] : null
+  readonly property bool viewedIsBuiltin: viewed !== null && viewed.builtin === true
   readonly property var activeSpec: editing ? draft : (viewed ? viewed.spec : null)
   // The area this layout gets: the layout's own outer gap wins over the global.
   readonly property var area: Geometry.areaFor(current, activeSpec)
@@ -167,7 +168,7 @@ Item {
   readonly property var dividers: (editing && activeSpec && area) ? Editor.dividers(activeSpec, area) : []
   // "In use" means the layout the workspace is persisted on, not whatever
   // browsing has it showing at the moment.
-  readonly property bool viewedIsActive: viewed !== null && committedLayout !== "" && ("lua:" + viewed.name) === committedLayout
+  readonly property bool viewedIsActive: viewed !== null && committedLayout !== "" && layoutTarget(viewed) === committedLayout
   readonly property string workspaceId: (current && current.workspace) ? String(current.workspace.id) : ""
   readonly property var selectedZone: {
     if ((!editing && !contentMode) || selected === "") return null
@@ -338,13 +339,21 @@ Item {
     displaysPane.refresh()
   }
 
-  // Keep recovery controls on an output that will remain in the arrangement.
-  // Re-evaluate as Qt adds/removes screens during the compositor transaction.
-  function placeDisplayConfirmation(document) {
+  // Keep recovery controls on an output that will remain in the arrangement
+  // and is awake: `avoid` names a connector about to sleep. Re-evaluate as Qt
+  // adds/removes screens during the compositor transaction.
+  function placeDisplayConfirmation(document, avoid) {
     var screens = Quickshell.screens
     if (!screens.length) return
     var desired = document || ((displaysPane.pending || displaysPane.busy) ? displaysPane.draft : null)
+    var catalog = displaysPane.catalog
+    function awake(screen) {
+      if (avoid && screen.name === avoid) return false
+      var live = catalog && (catalog.displays || []).find(function(d) { return d.connected && d.connector === screen.name })
+      return !live || live.awake !== false
+    }
     function usable(screen) {
+      if (!awake(screen)) return false
       if (!desired) return true
       return desired.displays.some(function(d) { return d.connector === screen.name && d.enabled && !d.mirror_of && d.connected !== false })
     }
@@ -570,6 +579,12 @@ Item {
   }
 
   function dismiss() {
+    if (displaysPane.wallpaperEditor.dirty || displaysPane.wallpaperEditor.busy) {
+      root.displaysMode = true
+      displaysPane.wallpaperMode = true
+      displaysPane.requestClose()
+      return
+    }
     if (root.displaysMode && (displaysPane.pending || displaysPane.dirty)) { displaysPane.requestClose(); return }
     // Unsaved edits get the prompt Esc gives, so a click outside or a close
     // request cannot leave the workspace on a preview nobody saved.
@@ -609,11 +624,20 @@ Item {
     catch (e) { root.errorText = "Could not parse " + what + ": " + e; return null }
   }
 
+  function layoutTarget(entry) {
+    return entry ? (entry.builtin ? entry.name : "lua:" + entry.name) : ""
+  }
+
+  function commitAppliedLayout(name) {
+    root.committedLayout = name.indexOf("lua:") === 0 || ["dwindle", "scrolling", "master"].indexOf(name) !== -1 ? name : "lua:" + name
+    root.liveLayout = root.committedLayout
+  }
+
   function selectActive() {
     if (!root.current || !root.current.workspace) return
     var want = root.current.workspace.layout
     for (var i = 0; i < root.layouts.length; i++)
-      if ("lua:" + root.layouts[i].name === want) { root.viewIndex = i; return }
+      if (layoutTarget(root.layouts[i]) === want) { root.viewIndex = i; return }
     if (root.viewIndex >= root.layouts.length) root.viewIndex = 0
   }
 
@@ -699,7 +723,7 @@ Item {
     if (!root.editing || !root.dirty || root.managedContent || root.workspaceId === "") return
     previewTimer.stop()
     if (root.draftIsNew || !root.viewed || !root.viewed.spec) {
-      var back = root.committedLayout !== "" ? root.committedLayout : (root.viewed ? "lua:" + root.viewed.name : "")
+      var back = root.committedLayout !== "" ? root.committedLayout : layoutTarget(root.viewed)
       if (back === "") return
       Quickshell.execDetached(["sh", "-c", 'sleep 0.3; exec "$1" apply "$2" --workspace "$3" --no-persist --quiet', "sh", root.ctl, back, root.workspaceId])
       return
@@ -731,7 +755,7 @@ Item {
   Timer {
     id: browseTimer
     interval: 200
-    onTriggered: if (!root.editing && root.viewed) root.browseTo("lua:" + root.viewed.name)
+    onTriggered: if (!root.editing && root.viewed) root.browseTo(root.layoutTarget(root.viewed))
   }
 
   // Process completion owns feedback so successful stderr is never an error,
@@ -767,7 +791,7 @@ Item {
     onFinished: Qt.callLater(root.runBrowse)
   }
 
-  readonly property bool viewedIsDefault: viewed !== null && defaultLayout === "lua:" + viewed.name
+  readonly property bool viewedIsDefault: viewed !== null && defaultLayout === layoutTarget(viewed)
   readonly property bool viewedInCycle: viewed !== null && !(viewed.spec && viewed.spec.in_cycle === false)
   // Window corner radius this layout gives its tiled windows; the zone
   // cards use the same radius so the picture matches the workspace.
@@ -776,7 +800,7 @@ Item {
   // Rename the viewed layout: its file, every workspace rule that points
   // at it, and the default follow the new name.
   function startRename() {
-    if (!root.viewed || root.editing || root.busy) return
+    if (!root.viewed || root.viewed.builtin || root.editing || root.busy) return
     if (root.browseToken !== "") revertBrowse()
     root.confirmingDelete = false
     root.choosingNew = false
@@ -787,7 +811,7 @@ Item {
 
   // False when the name is refused; the error says why.
   function renameViewed(name) {
-    if (!root.viewed || root.editing) return false
+    if (!root.viewed || root.viewed.builtin || root.editing) return false
     name = String(name || "").trim()
     if (name === root.viewed.name) return true
     if (!Editor.validName(name)) { root.errorText = "Name: letters, digits, _ and - only"; return false }
@@ -804,7 +828,7 @@ Item {
   // Delete the viewed layout's file. Workspaces whose rule points at it
   // fall back to the default; the default itself cannot be deleted.
   function deleteViewed() {
-    if (!root.viewed || root.editing || root.viewedIsDefault) return
+    if (!root.viewed || root.viewed.builtin || root.editing || root.viewedIsDefault) return
     root.confirmingDelete = false
     runCtl(["remove", root.viewed.name, "--force"], "Deleting " + root.viewed.name + "…", "Deleted " + root.viewed.name)
   }
@@ -812,7 +836,7 @@ Item {
   // Take the viewed layout out of (or put it back into) the SUPER+L cycle.
   // Saved straight to its file; the cycle reads the files, so no reload.
   function setInCycle(on) {
-    if (!root.viewed || root.editing || root.busy) return
+    if (!root.viewed || root.viewed.builtin || root.editing || root.busy) return
     var spec = Editor.clone(root.viewed.spec)
     if (on) delete spec.in_cycle
     else spec.in_cycle = false
@@ -871,23 +895,24 @@ Item {
     if (!root.viewed) return
     if (root.managedContent && !root.viewedIsActive) { askSwitch([root.workspaceId], andClose === true); return }
     browseTimer.stop()
-    if (!runCtl(["apply", root.viewed.name, "--quiet"], "Using " + root.viewed.name + "…", "Now using " + root.viewed.name)) return
+    if (!runCtl(["apply", layoutTarget(root.viewed), "--quiet"], "Using " + root.viewed.name + "…", "Now using " + root.viewed.name)) return
     root.commitOnRefresh = true
     root.dismissAfterApply = andClose === true
   }
 
   function applyTo(workspace, layoutName) {
-    layoutName = layoutName || root.applyQueueLayout || (root.viewed ? root.viewed.name : "")
+    layoutName = layoutName || root.applyQueueLayout || layoutTarget(root.viewed)
     if (!layoutName) return
     workspace = String(workspace)
+    var label = layoutName.replace(/^lua:/, "")
     if (contentWorkspace(workspace)) {
       if (!root.switchConfirmed) { askSwitch([workspace], false, layoutName); return }
       // The controller replaces the content along with the layout.
-      if (runCtl(["scene", "layout", layoutName, "--workspace", workspace, "--json"], "Switching workspace " + workspace + " to " + layoutName + "…", "Workspace " + workspace + " uses " + layoutName)
+      if (runCtl(["scene", "layout", layoutName, "--workspace", workspace, "--json"], "Switching workspace " + workspace + " to " + label + "…", "Workspace " + workspace + " uses " + label)
           && workspace === root.workspaceId) root.commitOnRefresh = true
       return
     }
-    runCtl(["apply", layoutName, "--workspace", workspace, "--quiet"], "Using " + layoutName + " on workspace " + workspace + "…", "Workspace " + workspace + " uses " + layoutName)
+    runCtl(["apply", layoutName, "--workspace", workspace, "--quiet"], "Using " + label + " on workspace " + workspace + "…", "Workspace " + workspace + " uses " + label)
   }
 
   // Whether a workspace has content assigned to zones (a scene).
@@ -905,7 +930,7 @@ Item {
     root.confirmingDelete = false
     root.choosingNew = false
     root.pendingSwitch = { workspaces: workspaces.map(String), close: close === true,
-      layoutName: layoutName || (root.viewed ? root.viewed.name : "") }
+      layoutName: layoutName || layoutTarget(root.viewed) }
   }
 
   function switchSummary() {
@@ -932,7 +957,7 @@ Item {
     root.applyQueueLayout = p.layoutName
     if (p.close) {
       browseTimer.stop()
-      if (!runCtl(["scene", "layout", p.layoutName, "--workspace", root.workspaceId, "--json"], "Switching to " + p.layoutName + "…", "Now using " + p.layoutName)) { root.switchConfirmed = false; return }
+      if (!runCtl(["scene", "layout", p.layoutName, "--workspace", root.workspaceId, "--json"], "Switching to " + p.layoutName.replace(/^lua:/, "") + "…", "Now using " + p.layoutName.replace(/^lua:/, ""))) { root.switchConfirmed = false; return }
       root.commitOnRefresh = true
       root.dismissAfterApply = true
       return
@@ -956,7 +981,7 @@ Item {
 
   function setDefault() {
     if (!root.viewed) return
-    runCtl(["default", root.viewed.name], "Making " + root.viewed.name + " the default…", root.viewed.name + " is the default")
+    runCtl(["default", layoutTarget(root.viewed)], "Making " + root.viewed.name + " the default…", root.viewed.name + " is the default")
   }
 
   function layoutNameTaken(name) {
@@ -1327,7 +1352,7 @@ Item {
     // change to undo and no reason to send a preview on the way out.
     if (root.managedContent) { leaveEdit("Changes discarded"); return }
     if (root.draftIsNew || !root.viewed || !root.viewed.spec) {
-      var back = root.committedLayout !== "" ? root.committedLayout : (root.viewed ? "lua:" + root.viewed.name : "")
+      var back = root.committedLayout !== "" ? root.committedLayout : layoutTarget(root.viewed)
       if (back === "" || root.workspaceId === "") { leaveEdit("Changes discarded"); return }
       root.liveLayout = back
       root.browseTarget = back
@@ -1400,14 +1425,14 @@ Item {
   function acceptLayouts(text) {
     var doc = root.parseJson(text, "list --json")
     if (!doc || !Array.isArray(doc.layouts)) return
-    var chosen = root.pendingView || (root.viewed ? root.viewed.name : "")
+    var chosen = root.pendingView ? "lua:" + root.pendingView : layoutTarget(root.viewed)
     var ok = []
     for (var i = 0; i < doc.layouts.length; i++) if (doc.layouts[i].spec) ok.push(doc.layouts[i])
+    ok.push({ name: "dwindle", builtin: true, spec: null })
     root.layouts = ok
-    for (var p = 0; p < ok.length; p++) if (ok[p].name === chosen) root.viewIndex = p
+    for (var p = 0; p < ok.length; p++) if (layoutTarget(ok[p]) === chosen) root.viewIndex = p
     if (!root.editing && root.pendingView === "" && !browseTimer.running && root.browseTarget === root.committedLayout) root.selectActive()
     root.pendingView = ""
-    if (ok.length === 0) { root.statusText = "No layouts yet. Press n to make one."; root.statusSticky = true }
   }
 
   CtlProcess {
@@ -1518,8 +1543,7 @@ Item {
       if (root.dismissAfterApply) {
         // The switch is persisted now: closing must not revert it.
         root.dismissAfterApply = false
-        if (root.applyQueueLayout || root.viewed) root.committedLayout = "lua:" + (root.applyQueueLayout || root.viewed.name)
-        root.liveLayout = root.committedLayout
+        root.commitAppliedLayout(command[1] === "scene" ? command[3] : command[2])
         root.dismiss()
         return
       }
@@ -1655,7 +1679,7 @@ Item {
     if (plain && k === Qt.Key_E) { startEdit(false); return true }
     if (plain && k === Qt.Key_N) { root.confirmingDelete = false; root.choosingNew = !root.choosingNew; return true }
     if (k === Qt.Key_F2) { startRename(); return true }
-    if (k === Qt.Key_Delete || (plain && k === Qt.Key_D)) { root.choosingNew = false; if (root.viewed && !root.viewedIsDefault) root.confirmingDelete = !root.confirmingDelete; return true }
+    if (k === Qt.Key_Delete || (plain && k === Qt.Key_D)) { root.choosingNew = false; if (root.viewed && !root.viewed.builtin && !root.viewedIsDefault) root.confirmingDelete = !root.confirmingDelete; return true }
     return false
   }
 
@@ -1908,6 +1932,13 @@ Item {
     function refresh(): void { root.refresh() }
     function content(on: bool): void { root.showContent(on) }
     function displays(): void { root.showDisplays() }
+    function wallpapers(): void { root.showDisplays(); displaysPane.wallpaperMode = true }
+    function wallpaperState(): string { return JSON.stringify({draft: displaysPane.wallpaperEditor.draft, saved: displaysPane.wallpaperEditor.saved, dirty: displaysPane.wallpaperEditor.dirty, error: displaysPane.wallpaperEditor.error}) }
+    function wallpaperSet(key: string, value: string): void { if (["mode", "image", "fit"].indexOf(key) >= 0) displaysPane.wallpaperEditor.edit(key, value === "theme" && key === "image" ? null : value) }
+    function wallpaperMember(output: string, selected: bool): void { displaysPane.wallpaperEditor.member(output, selected) }
+    function wallpaperApply(): void { displaysPane.wallpaperEditor.apply() }
+    function wallpaperReset(): void { displaysPane.wallpaperEditor.discard() }
+
     function displayState(): string { return JSON.stringify({draft: displaysPane.draft, pending: displaysPane.pending, dirty: displaysPane.dirty, confirmingDiscard: displaysPane.confirmingDiscard, error: displaysPane.error, selected: displaysPane.selectedIndex, screen: window.screen ? window.screen.name : null, panel: {x: displaysPane.x, y: displaysPane.y, width: displaysPane.width, height: displaysPane.height}, window: {width: window.width, height: window.height}}) }
     function displaySet(index: int, key: string, value: string): void {
       displaysPane.selectedIndex = index
@@ -1935,7 +1966,8 @@ Item {
     function viewed(): string { return root.viewed ? root.viewed.name : "" }
     function view(name: string): void {
       if (root.editing) return
-      for (var i = 0; i < root.layouts.length; i++) if (root.layouts[i].name === name) { root.viewAt(i); return }
+      for (var i = 0; i < root.layouts.length; i++) if (root.layoutTarget(root.layouts[i]) === name) { root.viewAt(i); return }
+      for (var j = 0; j < root.layouts.length; j++) if (root.layouts[j].name === name) { root.viewAt(j); return }
     }
     // editing
     function edit(): void { root.startEdit(false) }
