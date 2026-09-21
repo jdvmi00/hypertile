@@ -20,7 +20,7 @@
   (merge of PR #23), both with GitHub releases. Their verifications
   [#7463](https://github.com/omacom/omarchy-plugin-marketplace/issues/7463)
   and [#7073](https://github.com/omacom/omarchy-plugin-marketplace/issues/7073)
-  were closed by the marketplace as superseded, so **1.2.0** (tag `v1.2.0`,
+  were closed by the author as superseded on 2026-09-18, unreviewed, so **1.2.0** (tag `v1.2.0`,
   at `2c02a8210780bf503e2d96fafe8e7df0ced753a1`, verified and published on
   2026-09-13 through
   [#6562](https://github.com/omacom/omarchy-plugin-marketplace/issues/6562)
