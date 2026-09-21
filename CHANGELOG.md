@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.4.2 (2026-09-20)
 
 - Displays: the preview countdown starts after every output has settled;
   Escape reverts a preview in place instead of closing; sleeping the display
@@ -21,10 +21,8 @@
 - Displays: the watcher is driven by Hyprland's event socket with a slow
   safety poll and skips unchanged runtime writes, instead of spawning five
   processes and fsyncing a file twice a second on an idle desktop.
-
 - Keep dwindle available in the Layouts picker and its Super+L browsing cycle,
   including preview/cancel, defaults, and switching from scene assignments.
-
 - New marketplace preview image and a benefit-led manifest description; the
   GitHub social preview matches.
 
