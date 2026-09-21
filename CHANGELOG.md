@@ -15,6 +15,9 @@
   every renderer patch point is checked before a wallpaper clone is written.
   Readback after each display change waits up to five seconds instead of
   1.5 before declaring a failure and reverting.
+- Displays: a saved scale that does not divide the mode into whole logical
+  pixels (for example 1.4 on 6144×2560) is snapped to the nearest clean 1/120
+  step the way Hyprland does, instead of failing readback and reverting.
 - Displays: the watcher is driven by Hyprland's event socket with a slow
   safety poll and skips unchanged runtime writes, instead of spawning five
   processes and fsyncing a file twice a second on an idle desktop.
