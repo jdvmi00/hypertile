@@ -2,16 +2,18 @@
 
 ## Current release state
 
-- Prepared version: **1.4.2** (this manifest), with the display pane review
-  fixes, the event-driven display watcher, saved-scale snapping, and dwindle
-  kept in the Layouts picker. Promote through the procedure below, then tag
-  the resulting `main` commit `v1.4.2` and publish its release.
-- Latest published version before this preparation: **1.4.1**, tag `v1.4.1`,
-  at `cf402f082fa2b7eb70fbf1fe4a8cd7df9515018b` (merge of PR #35), with a
-  GitHub release. Marketplace update verification
+- Latest published version: **1.4.2**, tag `v1.4.2`, at
+  `10f74a0b35ff9d0df5551808c836dbbec519f73b` (merge of PR #41 into `main` on
+  2026-09-20), with a GitHub release. Marketplace update verification
+  [#7896](https://github.com/omacom/omarchy-plugin-marketplace/issues/7896)
+  was requested for that exact snapshot. No newer version is prepared; the
+  manifest on `develop` still says 1.4.2 until the next release is prepared.
+- Previous published version: **1.4.1**, tag `v1.4.1`, at
+  `cf402f082fa2b7eb70fbf1fe4a8cd7df9515018b` (merge of PR #35), with a
+  GitHub release. Its verification
   [#7478](https://github.com/omacom/omarchy-plugin-marketplace/issues/7478)
-  was requested for that exact snapshot and was still awaiting maintainer
-  approval when 1.4.2 was prepared; it does not cover 1.4.2.
+  was still awaiting maintainer approval when 1.4.2 was published and does
+  not cover 1.4.2.
 - Previous published versions: **1.4.0**, tag `v1.4.0`, at
   `c423bc9ab23b1a0abcc0c48d8f5ce719bcd2dfff` (merge of PR #29), and
   **1.3.0**, tag `v1.3.0`, at `20ee1c30823bdc967a7c04402699e58bc744f6eb`
@@ -30,7 +32,7 @@
 - `main` is the default branch and is locked including for administrators.
   Unlock only for the authorized promotion, then lock it again immediately.
   Keep it fixed while the marketplace reviews and publishes that exact commit.
-- Preserve published tags, including `v1.4.1`, `v1.4.0`, `v1.3.0`, `v1.2.0`, `v1.1.2`, `v1.1.1`, `v1.1.0`,
+- Preserve published tags, including `v1.4.2`, `v1.4.1`, `v1.4.0`, `v1.3.0`, `v1.2.0`, `v1.1.2`, `v1.1.1`, `v1.1.0`,
   `v1.0.1`, and `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
   installed plugin contents. CI rejects tracked instruction files; an ignore
   rule alone does not remove local files from a linked installation.
