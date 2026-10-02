@@ -244,7 +244,7 @@ class Adapter:
 
     def move(self, workspace, connector):
         name = str(workspace)
-        selector = name if name.isdigit() or name.startswith('name:') else 'name:' + name
+        selector = name if name.isdigit() or name.startswith(('name:', 'special:')) else 'name:' + name
         self.dispatch('workspace.move', '{workspace=' + lua_string(selector) + ',monitor=' + lua_string(connector) + '}')
 
     def dispatch(self, operation, arguments):

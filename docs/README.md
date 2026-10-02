@@ -170,5 +170,13 @@ python3 test/scenes.py && node test/content.js         # scenes
 
 `.github/workflows/test.yml` is the authoritative list; CI runs every suite.
 
+For display source switching, run `python3 test/display_integration.py --handoff-only`
+from an Omarchy Wayland session. It uses two nested outputs, disposable windows,
+and separate configuration/state to check mixed resolutions, workspace/focus
+handoff, save failures, and watchdog recovery. `python3 test/display_ui.py`
+opens a disposable QML panel with simulated outputs to check immediate switching,
+catalog refresh, and Switch back. Add `--screenshots /tmp/hypertile-display-ui`
+to save its panel images. Neither test changes physical monitor configuration.
+
 See also [session recovery](SESSIONS.md), [engine internals](INTERNALS.md), and
 the [Hyprland sizing bug](HYPRLAND-SIZING-BUG.md).

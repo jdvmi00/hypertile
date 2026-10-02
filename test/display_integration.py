@@ -2,6 +2,7 @@
 
 Run from a Wayland session: python3 test/display_integration.py.
 Use --workspace-only for immediate workspace switching without mode changes.
+Use --removal-only for immediate disconnected-profile removal.
 No physical output or user configuration is changed.
 """
 import copy
@@ -59,13 +60,13 @@ def main():
 
                 def ctl(*args):
                     result = subprocess.run(['hyprctl', *args], env=env, text=True, capture_output=True, timeout=10)
-                    assert result.returncode == 0, result.stdout + result.stderr
+                    assert result.returncode == 0, str(args) + ': ' + result.stdout + result.stderr
                     return result.stdout
 
                 def display(*args, input=None):
                     result = subprocess.run([str(ROOT / 'bin/hypertile-displays'), *args], input=input,
                                             env=env, text=True, capture_output=True, timeout=25)
-                    assert result.returncode == 0, result.stdout + result.stderr
+                    assert result.returncode == 0, str(args) + ': ' + result.stdout + result.stderr
                     return json.loads(result.stdout)
 
                 names = {m['name'] for m in json.loads(ctl('-j', 'monitors', 'all'))}
@@ -87,6 +88,130 @@ def main():
                 assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays'] if d['enabled']), initial
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
+                if '--removal-only' in sys.argv:
+                    document = dict(version=1, displays=outputs, workspaces={})
+                    pending = display('preview', '--json', json.dumps(document))
+                    display('keep', pending['token'])
+                    removed = next(d for d in outputs if d['connector'] == 'WAYLAND-2')
+                    ctl('output', 'remove', removed['connector'])
+                    # Reproduce a saved mirror rule whose absent source makes
+                    # the compositor report an independent remaining output.
+                    monitors.write_text(monitors.read_text().replace('output="WAYLAND-1",', 'output="WAYLAND-1",mirror="WAYLAND-2",'))
+                    ctl('reload')
+                    before = display('list')
+                    live = next(d for d in before['displays'] if d['connected'])
+                    assert not live['mirror_of'], live
+                    result = display('remove-display', removed['id'])
+                    assert result['removed'] == removed['id'] and 'token' not in result, result
+                    after = display('list')
+                    assert not after['pending'] and len(after['displays']) == len(after['confirmed']['displays']) == 1, after
+                    for key in ('width', 'height', 'refresh', 'scale', 'transform', 'x', 'y'):
+                        assert after['displays'][0][key] == live[key], key
+                    assert 'mirror=""' in monitors.read_text()
+                    assert 'output="WAYLAND-2"' not in monitors.read_text()
+                    assert not ctl('configerrors').strip()
+                    print('PASS: real CLI immediate removal of a disconnected profile and stale mirror rule; no pending preview, preserved native geometry and clean config reload')
+                    return
+                if '--handoff-only' in sys.argv:
+                    applications = []
+                    try:
+                        for client in json.loads(subprocess.check_output(['hyprctl', '-j', 'clients'], text=True)):
+                            if client.get('pid') == process.pid and client.get('title', '').endswith('WAYLAND-2'):
+                                address = json.dumps('address:' + client['address'])
+                                subprocess.run(['hyprctl', 'eval', 'hl.dispatch(hl.dsp.window.resize({window=' + address + ',x=960,y=540}))'],
+                                               check=True, capture_output=True, timeout=5)
+                        monitors.write_text(monitors.read_text().replace('output="WAYLAND-2",mode="1280x720@60"',
+                                                                         'output="WAYLAND-2",mode="960x540@60"'))
+                        ctl('reload')
+                        time.sleep(.5)
+                        mirror = dict(version=1, displays=display('list')['displays'], workspaces={})
+                        source, target = mirror['displays']
+                        assert target['width'] == 960 and target['height'] == 540, target
+                        target['mirror_of'] = source['id']
+                        pending = display('preview', '--json', json.dumps(mirror))
+                        display('keep', pending['token'])
+                        for workspace in ('81', '82', 'special:scratchpad'):
+                            if workspace.startswith('special:'):
+                                ctl('eval', 'hl.dispatch(hl.dsp.workspace.toggle_special("scratchpad"))')
+                            else:
+                                display('show-workspace', source['connector'], workspace)
+                            app = subprocess.Popen(['foot', '--app-id=hypertile-handoff-test', 'sh', '-c', 'sleep 120'],
+                                                   env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            applications.append(app)
+                            deadline = time.monotonic() + 5
+                            while time.monotonic() < deadline:
+                                if len(json.loads(ctl('-j', 'clients'))) == len(applications):
+                                    break
+                                time.sleep(.1)
+                            else:
+                                raise AssertionError('Disposable test windows did not appear')
+                        ctl('eval', 'hl.dispatch(hl.dsp.workspace.toggle_special("scratchpad"))')
+                        display('show-workspace', source['connector'], '81')
+                        original_windows = json.loads(ctl('-j', 'clients'))
+                        focused = json.loads(ctl('-j', 'activewindow'))['address']
+                        result = display('use-display', target['connector'])
+                        assert result['previous_source'] == source['connector'], result
+                        live = display('list')
+                        assert not live['pending'], live
+                        assert next(d for d in live['displays'] if d['connector'] == source['connector'])['mirror_connector'] == target['connector']
+                        assert {(d['connector'], d['width'], d['height']) for d in live['displays']} == {
+                            (source['connector'], 1280, 720), (target['connector'], 960, 540)}
+                        assert all(w['monitor'] == target['connector'] for w in json.loads(ctl('-j', 'workspaces')) if w['id'] in (81, 82))
+                        assert next(w for w in json.loads(ctl('-j', 'workspaces')) if w['name'] == 'special:scratchpad')['monitor'] == target['connector']
+                        assert json.loads(ctl('-j', 'activewindow'))['address'] == focused
+                        smaller = json.loads(ctl('-j', 'clients'))
+                        assert {w['address'] for w in smaller} == {w['address'] for w in original_windows}
+                        assert all(w['size'][0] <= 960 and w['size'][1] <= 540 for w in smaller), smaller
+                        ctl('reload')
+                        assert next(d for d in display('list')['displays'] if d['connector'] == source['connector'])['mirror_connector'] == target['connector']
+                        result = display('use-display', 'next')
+                        assert result['connector'] == source['connector'], result
+                        assert json.loads(ctl('-j', 'activewindow'))['address'] == focused
+                        assert all(w['monitor'] == source['connector'] for w in json.loads(ctl('-j', 'workspaces')) if w['id'] in (81, 82))
+                        assert next(w for w in json.loads(ctl('-j', 'workspaces')) if w['name'] == 'special:scratchpad')['monitor'] == source['connector']
+                        assert not display('status')['pending']
+                        original_config = monitors.read_text()
+                        for failure in ('raise', 'crash'):
+                            script = '''import os, sys
+sys.path.insert(0, sys.argv[1])
+from service import Service
+from adapter import DisplayError
+service = Service()
+service.PREVIEW_SECONDS = 1
+def fail_save(plan, before_write=None):
+    if sys.argv[3] == 'crash': os._exit(23)
+    raise DisplayError('Injected handoff save failure')
+service.configuration.commit = fail_save
+try:
+    service.use_display(sys.argv[2])
+except DisplayError as error:
+    assert 'Injected handoff' in str(error), error
+'''
+                            failed = subprocess.run([sys.executable, '-c', script, str(ROOT / 'displays'), target['connector'], failure],
+                                                    env=env, capture_output=True, text=True, timeout=15)
+                            assert failed.returncode == (23 if failure == 'crash' else 0), failed.stdout + failed.stderr
+                            deadline = time.monotonic() + 8
+                            while display('status')['pending'] and time.monotonic() < deadline:
+                                time.sleep(.1)
+                            restored = display('status')
+                            assert not restored['pending'], restored
+                            assert not restored['recovery']['errors'], restored['recovery']
+                            assert monitors.read_text() == original_config
+                            assert next(d for d in restored['displays'] if d['connector'] == target['connector'])['mirror_connector'] == source['connector']
+                            assert all(w['monitor'] == source['connector'] for w in json.loads(ctl('-j', 'workspaces')) if w['id'] in (81, 82))
+                            assert next(w for w in json.loads(ctl('-j', 'workspaces')) if w['name'] == 'special:scratchpad')['monitor'] == source['connector']
+                            assert json.loads(ctl('-j', 'activewindow'))['address'] == focused
+                        print('PASS: handoff save failure and independent watchdog after process crash restore topology, configuration, windows and focus')
+                        print('PASS: immediate mirror source handoff at 1280×720 and 960×540, native modes, all windows/workspaces, focus, resize, saved reload and next/switch-back')
+                        return
+                    finally:
+                        for app in applications:
+                            app.terminate()
+                            try:
+                                app.wait(timeout=3)
+                            except subprocess.TimeoutExpired:
+                                app.kill()
+                                app.wait()
                 if '--workspace-only' in sys.argv:
                     before_show = display('list')['confirmed']
                     # Immediate Show creates, moves and selects workspaces without a saved preference.
@@ -287,12 +412,13 @@ def main():
                     pending = display('preview', '--json', json.dumps(transient))
                     daemon.kill()
                     daemon.wait(timeout=5)
-                    assert display('status')['pending']['token'] == pending['token']
+                    applying = display('status')['pending']
+                    assert applying['token'] == pending['token']
                     deadline = time.monotonic() + 18
                     while time.monotonic() < deadline and display('status')['pending']:
                         time.sleep(.25)
                     assert not display('status')['pending'], 'Watchdog did not recover after daemon SIGKILL'
-                    assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
+                    assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['transform'] == 1, (display('status'), applying['expected'])
                     assert display('status')['confirmed']['displays'][1]['transform'] == 1
                 finally:
                     if daemon.poll() is None:

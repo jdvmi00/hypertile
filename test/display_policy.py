@@ -204,6 +204,18 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(self.doc['workspaces']['1']['monitor'], 'portrait')
         self.assertEqual(self.doc['displays'][1]['default_layout'], 'master')
 
+    def test_source_handoff_keeps_manually_moved_workspaces_on_other_outputs(self):
+        self.doc['displays'][1]['mirror_of'] = 'wide'
+        self.adapter.live[0]['monitor'] = 'DP-3'
+        self.adapter.outputs.append(dict(id='other', identity='other', connector='DP-3', enabled=True, ambiguous=False))
+        self.doc['displays'].append(dict(id='other', connector='DP-3', enabled=True, default_layout='master'))
+        result = self.policy.reconcile(self.doc, 'handoff')
+        self.assertEqual(result['moves'], [])
+        self.assertEqual(self.adapter.moves, [])
+        self.assertEqual(self.adapter.live[0]['monitor'], 'DP-3')
+        self.policy.reconcile(self.doc, 'keep')
+        self.assertEqual(self.adapter.moves, [], 'saving the source switch must not reapply retained placement')
+
     def test_keep_skips_inherited_rules_that_already_cache_the_effective_layout(self):
         # Workspace 1 lives on DP-2 whose monitor default is master.
         with patch("policy.inherited_rules", return_value={"1": "master"}):

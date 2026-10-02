@@ -11,7 +11,7 @@ same overlay.
   destinations, or drag and drop.
 - **Scenes:** assign apps to zones and save arrangements you can return to.
 - **Displays:** arrange or mirror screens, adjust resolution and scale, and
-  choose workspace placement and monitor layout defaults.
+choose workspace placement and monitor layout defaults.
 - **Session recovery:** save the desktop and restore supported apps when you
   log in again.
 
@@ -243,10 +243,18 @@ rate, scale and rotation, or sleep and wake outputs. Select a display and use
 **Workspace → Apply** to switch its workspace immediately; **Use this workspace at
 startup** saves a starting workspace through Preview/Keep. Expand **Workspace
 preferences** to assign workspaces and choose a default layout for a monitor.
+**Remove saved display** forgets a disconnected display immediately, without
+Preview or Keep, and preserves unrelated unsaved edits.
 
 **Wallpaper groups…** spans an image across selected displays while keeping
 others independent. Each group can follow the theme or use a fixed custom image.
 Apply wallpaper saves immediately.
+
+In a mirror group, **Use this display** fits the shared desktop to the selected
+monitor while every output retains its own resolution and refresh rate.
+Switching saves immediately; **Switch back to …** returns to the previous
+source. The active display renders the desktop and the others show a scaled
+copy. `hypertile-ctl display use-display next` cycles the focused mirror group.
 
 Arrangement and workspace preference changes use a 15-second **Keep/Revert**
 preview with an independent rollback watchdog. **Keep changes** saves adjusted

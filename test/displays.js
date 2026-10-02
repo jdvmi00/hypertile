@@ -47,15 +47,26 @@ function removing(state) {
     const ctx = Object.assign({Displays:D, draft:plain(removalDraft), selectedIndex:1, busy:false, pending:null,
         queryProcess:{running:false}, dirty:false, error:'', notice:'', matchingConnector:'old',
         workspaceChoice:'2', customWorkspace:'work', confirmingDiscard:true}, state)
+    ctx.run = args => { ctx.sent = args }
     Object.defineProperty(ctx, 'selectedDisplay', {get() {return this.draft.displays[this.selectedIndex] || null}})
     vm.runInNewContext(helper('removeSelectedDisplay'), ctx)
+    vm.runInNewContext(helper('removedDisplay'), ctx)
     return ctx
 }
 let remove = removing({})
 remove.removeSelectedDisplay()
-assert.deepStrictEqual([remove.draft.displays.length, remove.selectedIndex, remove.dirty, remove.confirmingDiscard], [1,0,true,false])
+assert.deepStrictEqual(plain(remove.sent), ['remove-display','saved'])
+assert.deepStrictEqual([remove.draft.displays.length, remove.selectedIndex, remove.dirty, remove.confirmingDiscard], [2,1,false,false])
+remove.removedDisplay('saved')
+assert.deepStrictEqual([remove.draft.displays.length, remove.selectedIndex, remove.dirty], [1,0,false])
 assert.deepStrictEqual([remove.matchingConnector, remove.workspaceChoice, remove.customWorkspace], ['',null,''])
-assert.match(remove.notice, /DP-2.*Preview changes.*Keep changes/)
+assert.strictEqual(remove.draft.removed_displays, undefined, 'completed removal does not need Preview or Keep')
+remove = removing({dirty:true})
+remove.draft.displays[0].scale = 2
+remove.removeSelectedDisplay()
+remove.removedDisplay('saved')
+assert.strictEqual(remove.dirty, true)
+assert.strictEqual(remove.draft.displays[0].scale, 2, 'unrelated unsaved edits survive immediate removal')
 for (const state of [{busy:true}, {pending:{token:'t'}}, {queryProcess:{running:true}}]) {
     remove = removing(state)
     remove.removeSelectedDisplay()
@@ -244,6 +255,37 @@ assert.strictEqual(extendedDraft.displays[1].y, b.y)
 assert.strictEqual(D.usageOptions(mirrorDraft.displays, mirrorDraft.displays[0]).length, 2)
 assert.strictEqual(D.setUsage(mirrorDoc, 1, 'disabled').displays[1].enabled, false)
 console.log('Mirror groups, source selection, retained preferences and Extended restoration passed')
+
+const switchedMirrors = plain(mirrorDraft.displays)
+switchedMirrors[0].connector = 'DP-1'
+switchedMirrors[1].connector = 'DP-2'
+switchedMirrors[0].mirror_of = 'b'
+switchedMirrors[1].mirror_of = null
+switchedMirrors[1].x = switchedMirrors[0].x
+switchedMirrors[1].y = switchedMirrors[0].y
+assert.deepStrictEqual(plain(D.numbering(switchedMirrors)), [1, 2], 'physical numbers must survive a source switch')
+assert.strictEqual(D.mirrorSource(switchedMirrors, switchedMirrors[0]).id, 'b')
+assert(D.canUseDisplay(switchedMirrors, switchedMirrors[0]))
+assert(!D.canUseDisplay(switchedMirrors, switchedMirrors[1]))
+assert(!D.canUseDisplay(switchedMirrors, {...switchedMirrors[0], awake:false}))
+assert(!D.canUseDisplay(mirrorDoc.displays, mirrorDoc.displays[0]), 'independent displays have no source switch')
+assert(D.mirrorStatus(switchedMirrors, switchedMirrors[0]).includes('display 2 · DP-2'))
+const switching = {catalog:{displays:switchedMirrors}, Displays:D, dirty:false, busy:false, pending:null,
+    wallpaperEditor:{dirty:false}, queryProcess:{running:false}, confirmingDiscard:true, calls:[]}
+switching.run = args => switching.calls.push(plain(args))
+vm.runInNewContext(helper('useDisplay'), switching)
+switching.useDisplay(switchedMirrors[0].connector)
+assert.deepStrictEqual(switching.calls, [['use-display', switchedMirrors[0].connector]])
+assert(!switching.confirmingDiscard)
+for (const field of ['dirty', 'busy', 'pending']) {
+    switching[field] = true
+    switching.useDisplay(switchedMirrors[0].connector)
+    switching[field] = false
+}
+switching.wallpaperEditor.dirty = true
+switching.useDisplay(switchedMirrors[0].connector)
+assert.strictEqual(switching.calls.length, 1, 'source switching never mixes with unsaved edits or an active operation')
+console.log('Immediate mirror handoff controls, source status, stable numbering and unsaved edit guards passed')
 
 // A lone desktop rectangle has no relative arrangement, including a mirror group.
 for (const others of [[], [{...b, enabled:false}], [{...b, connected:false}], [{...b, mirror_of:'a'}]]) {

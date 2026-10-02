@@ -129,84 +129,191 @@ class Service:
 
     def preview(self, document, takeover=False, watchdog=True, migrate=False):
         with self.lock():
-            if self.pending_path.exists():
-                raise DisplayError('A display preview is already active. Keep or revert it first.')
-            scene_root = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'hypertile/scenes'
-            if read(scene_root / 'state.json', {}).get('browse', {}).get('active'):
-                raise DisplayError('Finish the layout preview before applying display changes.')
-            status = read(self.directory.parent / 'sessions/status.json', {})
-            if status.get('mode') == 'restoring':
-                raise DisplayError('Wait for session restoration to finish before changing displays.')
-            before = self.adapter.displays()
-            known = read(self.confirmed_path, {}).get('displays', [])
-            desired = validate(document, before, known=known)
-            removed = self.validate_removals(document, before, known)
-            remaining = {d['connector']: d for d in before}
-            remaining.update({d['connector']: d for d in desired})
-            # Newly enabled destinations are explicitly woken below. An already
-            # enabled sleeping output must be woken before removing its controls.
-            awake = {d['connector'] for d in before if d.get('awake', True) or not d['enabled']}
-            if not any(independent(d) and d['connector'] in awake for d in remaining.values()):
-                raise DisplayError('Wake an extended display before disabling or mirroring the last awake display.')
-            if self.policy:
-                self.policy.validate_changes(document)
-            document = copy.deepcopy(document)
-            resolved = {d['id']: d for d in desired}
-            for d in document['displays']:
-                if d['id'] in resolved:
-                    d['connector'] = resolved[d['id']]['connector']
-                    # Preview, configuration writes and confirmed preferences
-                    # must describe the same normalized scale.
-                    d['scale'] = resolved[d['id']]['scale']
-                    old = match(d, before)
-                    if d.get('mirror_of') and old and independent(old):
-                        d['extended_position'] = dict(x=old['x'], y=old['y'])
-            document.pop('takeover', None)
-            baseline = before + [d for d in read(self.confirmed_path, {}).get('displays', [])
-                                 if not any(m['connector'] == d['connector'] for m in before)]
-            config_plan = self.configuration.plan([] if migrate else baseline, document) if self.configuration else None
-            if self.configuration:
-                document['configuration_backed'] = True
-            pending = dict(config_plan=config_plan, removed=removed, token=uuid.uuid4().hex, deadline=time.time() + self.PREVIEW_SECONDS, phase='applying',
-                           before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
-                           expected={d['connector']: d for d in before}, touched=[],
-                           policy_state=copy.deepcopy(self.policy.state) if self.policy else None,
-                           rule_files=snapshot_rules(document) if self.policy else [], rule_touched=[])
-            atomic(self.pending_path, pending)
-            if watchdog:
-                try:
-                    subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '_watchdog', pending['token']],
-                                     start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                     stderr=subprocess.DEVNULL, env=dict(os.environ, HYPERTILE_DISPLAY_STATE=str(self.directory)))
-                except Exception:
-                    self.pending_path.unlink(missing_ok=True)
-                    raise
+            return self._preview(document, takeover, watchdog, migrate)
+
+    def _preview(self, document, takeover=False, watchdog=True, migrate=False, handoff=None, save_only=False):
+        if self.pending_path.exists():
+            raise DisplayError('A display preview is already active. Keep or revert it first.')
+        scene_root = Path(os.environ.get('XDG_STATE_HOME') or Path.home() / '.local/state') / 'hypertile/scenes'
+        if read(scene_root / 'state.json', {}).get('browse', {}).get('active'):
+            raise DisplayError('Finish the layout preview before applying display changes.')
+        status = read(self.directory.parent / 'sessions/status.json', {})
+        if status.get('mode') == 'restoring':
+            raise DisplayError('Wait for session restoration to finish before changing displays.')
+        before = self.adapter.displays()
+        known = read(self.confirmed_path, {}).get('displays', [])
+        desired = validate(document, before, known=known)
+        removed = self.validate_removals(document, before, known)
+        remaining = {d['connector']: d for d in before}
+        remaining.update({d['connector']: d for d in desired})
+        # Newly enabled destinations are explicitly woken below. An already
+        # enabled sleeping output must be woken before removing its controls.
+        awake = {d['connector'] for d in before if d.get('awake', True) or not d['enabled']}
+        if not save_only and not any(independent(d) and d['connector'] in awake for d in remaining.values()):
+            raise DisplayError('Wake an extended display before disabling or mirroring the last awake display.')
+        if self.policy:
+            self.policy.validate_changes(document)
+        document = copy.deepcopy(document)
+        resolved = {d['id']: d for d in desired}
+        for d in document['displays']:
+            if d['id'] in resolved:
+                d['connector'] = resolved[d['id']]['connector']
+                # Preview, configuration writes and confirmed preferences
+                # must describe the same normalized scale.
+                d['scale'] = resolved[d['id']]['scale']
+                old = match(d, before)
+                if d.get('mirror_of') and old and independent(old) and not (handoff and d.get('extended_position')):
+                    d['extended_position'] = dict(x=old['x'], y=old['y'])
+        document.pop('takeover', None)
+        baseline = before + [d for d in read(self.confirmed_path, {}).get('displays', [])
+                             if not any(m['connector'] == d['connector'] for m in before)]
+        config_plan = self.configuration.plan([] if migrate else baseline, document) if self.configuration else None
+        if self.configuration:
+            document['configuration_backed'] = True
+        pending = dict(config_plan=config_plan, removed=removed, token=uuid.uuid4().hex, deadline=time.time() + self.PREVIEW_SECONDS, phase='applying',
+                       before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
+                       expected={d['connector']: d for d in before}, touched=[],
+                       policy_state=copy.deepcopy(self.policy.state) if self.policy else None,
+                       rule_files=snapshot_rules(document) if self.policy else [], rule_touched=[], handoff=handoff, save_only=save_only)
+        atomic(self.pending_path, pending)
+        if watchdog:
             try:
-                # Establish destinations first, move assigned workspaces, disable sources last.
-                for d in sorted(desired, key=apply_order):
-                    if not independent(d) and not pending.get('placed'):
-                        self.reconcile(document, 'preview')
-                        pending['placed'] = True
-                    pending['touched'].append(d['connector'])
-                    pending['expected'][d['connector']] = d
-                    atomic(self.pending_path, pending)  # journal before each compositor mutation
-                    self.adapter.apply(d)
-                    old = next((m for m in before if m['connector'] == d['connector']), None)
-                    if independent(d) and old and not old['enabled'] and not old.get('awake', True):
-                        self.adapter.power(d['connector'], True)
-                    self.adapter.verify([d])
-                if not pending.get('placed'):
-                    self.reconcile(document, 'preview')
-                actual = self.adapter.verify(desired)
-                self._settle_power(actual)
-                # The countdown is time to look at the result, so it starts once
-                # every output has settled rather than before the first modeset.
-                pending.update(phase='preview', expected={d['connector']: d for d in actual}, deadline=time.time() + self.PREVIEW_SECONDS)
-                atomic(self.pending_path, pending)
-                return dict(token=pending['token'], deadline=pending['deadline'], seconds=max(0, pending['deadline'] - time.time()))
+                subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '_watchdog', pending['token']],
+                                 start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                 stderr=subprocess.DEVNULL, env=dict(os.environ, HYPERTILE_DISPLAY_STATE=str(self.directory)))
             except Exception:
-                self._rollback(pending)
+                self.pending_path.unlink(missing_ok=True)
                 raise
+        try:
+            # Establish destinations first, move assigned workspaces, disable sources last.
+            for d in sorted(desired, key=apply_order) if not save_only else []:
+                if handoff and any(old['connector'] == d['connector'] and same(d, old) for old in before):
+                    continue
+                application = d
+                if handoff and d['connector'] == handoff['target']:
+                    from handoff import promotion
+                    application = promotion(d, before)
+                if not independent(d) and not pending.get('placed'):
+                    if handoff:
+                        self._move_handoff(pending)
+                    self.reconcile(document, 'handoff' if handoff else 'preview')
+                    pending['placed'] = True
+                pending['touched'].append(d['connector'])
+                pending['expected'][d['connector']] = application
+                atomic(self.pending_path, pending)  # journal before each compositor mutation
+                self.adapter.apply(application)
+                old = next((m for m in before if m['connector'] == d['connector']), None)
+                if handoff and independent(d) and old and not independent(old):
+                    self.adapter.apply(application)
+                if independent(d) and old and not old['enabled'] and not old.get('awake', True):
+                    self.adapter.power(d['connector'], True)
+                self.adapter.verify([application])
+            if not save_only and not pending.get('placed'):
+                self.reconcile(document, 'preview')
+            if handoff:
+                target = next(d for d in desired if d['connector'] == handoff['target'])
+                pending['expected'][target['connector']] = target
+                atomic(self.pending_path, pending)
+                # Both displays cannot occupy the group's anchor while they are
+                # independent. Anchor the new source after demoting the old one.
+                self.adapter.apply(target)
+                self.adapter.verify([target])
+            actual = self.adapter.verify(desired)
+            if not save_only:
+                self._settle_power(actual)
+            if handoff:
+                self._focus_handoff(handoff, handoff['target'])
+            # The countdown is time to look at the result, so it starts once
+            # every output has settled rather than before the first modeset.
+            pending.update(phase='preview', expected={d['connector']: d for d in actual}, deadline=time.time() + self.PREVIEW_SECONDS)
+            atomic(self.pending_path, pending)
+            return dict(token=pending['token'], deadline=pending['deadline'], seconds=max(0, pending['deadline'] - time.time()))
+        except Exception:
+            self._rollback(pending)
+            raise
+
+    def remove_display(self, identity, watchdog=True):
+        """Forget one disconnected profile immediately, without a modeset."""
+        with self.lock():
+            if self.pending_path.exists():
+                raise DisplayError('Keep or revert the display preview before removing a saved display.')
+            catalog = self.catalog()
+            selected = next((d for d in catalog['displays'] if d['id'] == identity), None)
+            if not selected:
+                raise DisplayError('Saved display is no longer available. Refresh and try again.')
+            document = dict(version=1,
+                            displays=[d for d in catalog['displays'] if d['id'] != identity],
+                            workspaces=copy.deepcopy(catalog['confirmed'].get('workspaces', {})),
+                            removed_displays=[identity])
+            for preference in document['workspaces'].values():
+                if preference.get('monitor') == identity:
+                    preference['monitor'] = None
+            # Reuse the recovery journal and atomic save, but apply no preview
+            # geometry and return only after the save is durably committed.
+            transaction = self._preview(document, watchdog=watchdog, save_only=True)
+            self._keep(transaction['token'])
+            return dict(removed=identity, connector=selected['connector'],
+                        message=selected['connector'] + ' saved display removed.')
+
+    def use_display(self, connector, watchdog=True):
+        """Switch and save a mirror group's source as one recoverable transaction."""
+        from handoff import plan, source_for
+        with self.lock():
+            if self.pending_path.exists():
+                raise DisplayError('Keep or revert the display preview before switching displays.')
+            catalog = self.catalog()
+            active = json.loads(self.adapter.run('-j', 'activeworkspace'))
+            if connector == 'next':
+                _, _, group = source_for(catalog['displays'], active.get('monitor'))
+                choices = [d for d in group if d.get('connected', True) and d['enabled'] and d.get('awake', True)]
+                current = next(i for i, d in enumerate(choices) if d['connector'] == active.get('monitor'))
+                connector = choices[(current + 1) % len(choices)]['connector']
+            document = dict(version=1, displays=catalog['displays'],
+                            workspaces=catalog['confirmed'].get('workspaces', {}))
+            selected, source, _ = source_for(document['displays'], connector)
+            if selected['id'] == source['id']:
+                return dict(used=True, connector=connector, message='The desktop is already sized for ' + connector + '.')
+            desired, previous = plan(document, connector)
+            window = json.loads(self.adapter.run('-j', 'activewindow'))
+            handoff = dict(source=previous, target=connector, active=active, window=window.get('address'),
+                           visible=source.get('active_workspace') or (active if active.get('monitor') == previous else {}))
+            preview = self._preview(desired, watchdog=watchdog, handoff=handoff)
+            self._keep(preview['token'])
+            return dict(used=True, connector=connector, previous_source=previous,
+                        message='Desktop sized for ' + connector + '. Other displays in the group mirror it.')
+
+    @staticmethod
+    def _handoff_workspace(workspace):
+        name = workspace.get('name', '')
+        return name if name.startswith('special:') else selector(workspace)
+
+    def _move_handoff(self, pending):
+        handoff = pending['handoff']
+        existing = {self._handoff_workspace(w) for w in self.adapter.workspaces()}
+        moved = []
+        for workspace in pending['workspaces']:
+            key = self._handoff_workspace(workspace)
+            if workspace.get('monitor') == handoff['source'] and key in existing:
+                self.adapter.move(key, handoff['target'])
+                moved.append(key)
+        actual = {self._handoff_workspace(w): w.get('monitor') for w in self.adapter.workspaces()}
+        if any(actual.get(key) != handoff['target'] for key in moved):
+            raise DisplayError('Hyprland did not move the shared desktop. Restoring the previous display.')
+
+    def _focus_handoff(self, handoff, source):
+        # Restore the group's visible workspace, then the user's global focus.
+        visible = handoff.get('visible', {})
+        if visible.get('name') and not visible['name'].startswith('special:'):
+            self.adapter.dispatch('focus', '{monitor=' + lua_string(source) + '}')
+            self.adapter.dispatch('focus', '{workspace=' + lua_string(selector(visible)) + '}')
+        active = handoff.get('active', {})
+        if active.get('name'):
+            monitor = source if active.get('monitor') == handoff['source'] else active.get('monitor')
+            if monitor and any(d['connector'] == monitor and independent(d) for d in self.adapter.displays()):
+                self.adapter.dispatch('focus', '{monitor=' + lua_string(monitor) + '}')
+                self.adapter.dispatch('focus', '{workspace=' + lua_string(selector(active)) + '}')
+        if handoff.get('window'):
+            self.adapter.dispatch('focus', '{window=' + lua_string('address:' + handoff['window']) + '}')
 
     def validate_removals(self, document, current, known):
         ids = document.get('removed_displays', [])
@@ -256,6 +363,7 @@ class Service:
                 report['external'].append(name)
                 continue
             restore.append(old)
+        anchors = []
         for d in sorted(restore, key=apply_order):
             # Never disable the only output left after a physical unplug.
             live = self.adapter.displays()
@@ -263,9 +371,22 @@ class Service:
                 report['fallback'] = True
                 continue
             try:
+                was_mirror = any(x['connector'] == d['connector'] and not independent(x) for x in live)
+                if pending.get('handoff') and independent(d) and was_mirror:
+                    from handoff import promotion
+                    anchors.append(d)
+                    d = promotion(d, live)
                 if d.get('mirror_connector') and not any(x['connector'] == d['mirror_connector'] and independent(x) for x in live):
                     d = dict(d, mirror_of=None, mirror_connector=None)
                     report['fallback'] = True
+                self.adapter.apply(d)
+                if pending.get('handoff') and independent(d) and was_mirror:
+                    self.adapter.apply(d)
+                self.adapter.verify([d])
+            except Exception as error:
+                report['errors'].append(str(error))
+        for d in anchors:
+            try:
                 self.adapter.apply(d)
                 self.adapter.verify([d])
             except Exception as error:
@@ -282,15 +403,17 @@ class Service:
             self.adapter.verify([rescue])
             report['fallback'] = True
         enabled = {d['connector'] for d in self.adapter.displays() if independent(d)}
-        existing = {selector(w) for w in self.adapter.workspaces()}
+        key_for = self._handoff_workspace if pending.get('handoff') else selector
+        existing = {key_for(w) for w in self.adapter.workspaces()}
         for w in pending['workspaces']:
+            key = key_for(w)
             # Hyprland destroys empty workspaces during output evacuation. They
             # have no windows to recover and cannot be moved after rollback.
-            if selector(w) not in existing:
+            if key not in existing:
                 continue
             if w.get('monitor') in enabled and w['monitor'] not in report['external']:
                 try:
-                    self.adapter.move(selector(w), w['monitor'])
+                    self.adapter.move(key, w['monitor'])
                 except Exception as error:
                     report['errors'].append(str(error))
             elif w.get('monitor') not in enabled:
@@ -302,6 +425,11 @@ class Service:
                     self.policy._save_runtime()
                 if hasattr(self.policy, 'restore_layouts'):
                     self.policy.restore_layouts(pending['workspaces'])
+            except Exception as error:
+                report['errors'].append(str(error))
+        if pending.get('handoff'):
+            try:
+                self._focus_handoff(pending['handoff'], pending['handoff']['source'])
             except Exception as error:
                 report['errors'].append(str(error))
         atomic(self.directory / 'recovery.json', report)
@@ -332,56 +460,61 @@ class Service:
 
     def keep(self, token):
         with self.lock():
-            pending = read(self.pending_path)
-            if not pending or pending['token'] != token:
-                raise DisplayError('Preview no longer exists.')
-            if time.time() >= pending['deadline']:
-                self._rollback(pending)
-                raise DisplayError('Preview expired and was reverted.')
-            if pending['phase'] != 'preview':
-                raise DisplayError('Display changes are still being applied.')
-            try:
-                # A screen can reconnect while the user inspects the preview.
-                # Recheck immediately before any durable preferences/config writes.
-                self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
-                self.adapter.verify([d for d in pending['expected'].values() if d['connector'] in pending['touched']])
-            except Exception:
-                self._rollback(pending)
-                raise
-            # Keep is a recoverable transaction: journal precedes all rule writes,
-            # and the confirmed token is the single durable commit point.
-            pending['phase'] = 'committing'
+            return self._keep(token)
+
+    def _keep(self, token):
+        pending = read(self.pending_path)
+        if not pending or pending['token'] != token:
+            raise DisplayError('Preview no longer exists.')
+        if time.time() >= pending['deadline']:
+            self._rollback(pending)
+            raise DisplayError('Preview expired and was reverted.')
+        if pending['phase'] != 'preview':
+            raise DisplayError('Display changes are still being applied.')
+        try:
+            # A screen can reconnect while the user inspects the preview.
+            # Recheck immediately before any durable preferences/config writes.
+            self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
+            self.adapter.verify([d for d in pending['expected'].values() if d['connector'] in pending['touched']])
+        except Exception:
+            self._rollback(pending)
+            raise
+        # Keep is a recoverable transaction: journal precedes all rule writes,
+        # and the confirmed token is the single durable commit point.
+        pending['phase'] = 'committing'
+        atomic(self.pending_path, pending)
+        staged_path = self.directory / 'staged.json'
+        def before_rule(key):
+            pending['rule_touched'].append(key)
             atomic(self.pending_path, pending)
-            staged_path = self.directory / 'staged.json'
-            def before_rule(key):
-                pending['rule_touched'].append(key)
-                atomic(self.pending_path, pending)
-            try:
-                atomic(staged_path, pending['document'])
-                if self.policy:
-                    self.policy.commit(pending['document'], preferences_path=staged_path, before_rule=before_rule)
-                sync_rules(pending.get('rule_files', []))
-                if self.configuration and pending.get('config_plan'):
-                    def before_config():
-                        self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
-                        pending['config_touched'] = True
-                        atomic(self.pending_path, pending)
-                    self.configuration.commit(pending['config_plan'], before_write=before_config)
-                    self.adapter.reload()
-                    self.adapter.verify([d for d in pending['expected'].values() if d['connector'] in pending['touched']])
+        try:
+            atomic(staged_path, pending['document'])
+            if self.policy:
+                self.policy.commit(pending['document'], preferences_path=staged_path, before_rule=before_rule)
+            sync_rules(pending.get('rule_files', []))
+            if self.configuration and pending.get('config_plan'):
+                def before_config():
+                    self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
+                    pending['config_touched'] = True
+                    atomic(self.pending_path, pending)
+                self.configuration.commit(pending['config_plan'], before_write=before_config)
+                self.adapter.reload()
+                self.adapter.verify([d for d in pending['expected'].values()
+                                     if pending.get('save_only') or d['connector'] in pending['touched']])
+                if not pending.get('save_only'):
                     self.reconcile(pending['document'], 'keep')
-                confirmed = dict(pending['document'], _transaction=token)
-                confirmed.pop('removed_displays', None)
-                atomic(self.confirmed_path, confirmed)
-            except Exception:
-                # An fsync failure may occur after replace; inspect the durable
-                # marker before deciding whether rollback is still permissible.
-                if read(self.confirmed_path, {}).get('_transaction') != token:
-                    self._rollback(pending)
-                raise
-            self.pending_path.unlink(missing_ok=True)
-            staged_path.unlink(missing_ok=True)
-            return dict(kept=True)
+            confirmed = dict(pending['document'], _transaction=token)
+            confirmed.pop('removed_displays', None)
+            atomic(self.confirmed_path, confirmed)
+        except Exception:
+            # An fsync failure may occur after replace; inspect the durable
+            # marker before deciding whether rollback is still permissible.
+            if read(self.confirmed_path, {}).get('_transaction') != token:
+                self._rollback(pending)
+            raise
+        self.pending_path.unlink(missing_ok=True)
+        staged_path.unlink(missing_ok=True)
+        return dict(kept=True)
 
     def setup(self, offline=False):
         """Adopt existing config without changing it; migrate legacy saved intent once."""
@@ -604,6 +737,8 @@ def main():
     show = sub.add_parser('show-workspace')
     show.add_argument('connector')
     show.add_argument('workspace')
+    sub.add_parser('use-display', help='Size a mirror group for this display and save immediately').add_argument('connector', help='Output connector, or next to cycle the focused mirror group')
+    sub.add_parser('remove-display', help='Forget a disconnected display immediately').add_argument('identity', help='Saved display id from display list')
     sub.add_parser('sleep').add_argument('connector')
     sub.add_parser('wake').add_argument('connector', nargs='?', default='')
     sub.add_parser('_watchdog').add_argument('token')
@@ -628,6 +763,10 @@ def main():
             result = wallpaper.apply_detached(request) if request is not None and not args.worker else service.wallpaper(request)
         elif args.command == 'show-workspace':
             result = service.show_workspace(args.connector, args.workspace)
+        elif args.command == 'use-display':
+            result = service.use_display(args.connector)
+        elif args.command == 'remove-display':
+            result = service.remove_display(args.identity)
         elif args.command in ('sleep', 'wake'):
             result = service.power(args.connector, args.command == 'wake')
         elif args.command == '_watchdog':
