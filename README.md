@@ -5,6 +5,11 @@ move your windows between them. Browse and edit layouts directly over your
 desktop, save app arrangements as scenes, and manage your displays from the
 same overlay.
 
+[![Watch the Hypertile explainer: design zones once and let your windows follow](docs/explainer/public/poster.jpg)](https://hypertile.jimmartin.workers.dev/)
+
+**[Watch Hypertile in two minutes](https://hypertile.jimmartin.workers.dev/)** —
+a narrated introduction with real desktop footage (1:56).
+
 - **Layouts:** split and resize zones, choose their fill order, and tune gaps,
   corners, aspect ratios, and stacking.
 - **Window movement:** move or swap windows with keyboard shortcuts, numbered
@@ -15,9 +20,7 @@ same overlay.
 - **Session recovery:** save the desktop and restore supported apps when you
   log in again.
 
-[![Hypertile highlights: layout switching, window swaps, live zone editing, and display arrangement](docs/demo.gif)](docs/media/hypertile-highlights.mp4)
-
-[Watch the full 73-second demo](docs/media/hypertile-highlights.mp4).
+[Watch the 73-second feature demo](docs/media/hypertile-highlights.mp4).
 
 [Install](#install) · [Everyday use](#using-it) · [Overlay](#overlay) ·
 [CLI](#cli) · [Update](#update) · [Uninstall](#uninstall) ·
