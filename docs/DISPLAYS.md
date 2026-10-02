@@ -37,6 +37,16 @@ The automatic mode's displayed size is an estimate. Preview checks the mode and
 scale Hyprland actually selects, including a supported fallback, and reverts if
 the resulting arrangement overlaps. Keep saves the automatic choice and the
 resolved preview. If the mode changes again before Keep, start a fresh preview.
+
+Displays whose edges touch keep that relationship when their logical size
+changes outside the editor, including full-width/PBP input switches. Top,
+bottom and center alignment are retained; a staggered edge keeps its offset.
+The display service waits for the outputs to settle before moving them. It
+keeps intentional gaps fixed, excludes disabled and mirrored outputs, and
+retains missing displays' relationships for reconnect. If resizing an uneven
+grid creates a conflict, it uses the closest free position. The diagram
+refreshes automatically while there are no unsaved edits.
+
 Saved screens that are disconnected remain visible, with their preferences retained.
 If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a
@@ -246,11 +256,16 @@ The first save keeps `monitors.lua.hypertile.bak`; each preview also journals th
 exact pre-save content for crash recovery. External edits during preview cause
 the save to stop and ask you to refresh, rather than overwrite them.
 
-Configuration reloads and reconnects use Hyprland's saved monitor rules directly;
-Hypertile no longer reapplies a competing geometry snapshot. Disabling or
-uninstalling Hypertile leaves the saved monitor configuration usable, including
-on purge. Existing saved preferences from the earlier display implementation
-are migrated once on upgrade before the old replay behavior is retired.
+Configuration reloads and reconnects use Hyprland's saved mode, scale, rotation,
+power and mirroring rules. Hypertile remembers the confirmed adjoining edges
+in a separate placement journal and adjusts positions using the current sizes;
+it never replays old resolutions during this adjustment. Manual position or
+topology edits in the configuration establish a new reference arrangement.
+Display previews suspend this adjustment until Keep or Revert finishes.
+Disabling or uninstalling Hypertile leaves the last saved monitor configuration
+usable, including on purge; automatic edge adjustment requires its service.
+Existing saved preferences from the earlier display implementation are migrated
+once on upgrade before the old mode replay behavior is retired.
 
 Supported edits are literal `hl.monitor({ ... })` declarations in `monitors.lua`.
 The declaration edited for an output is the one Hyprland applies: a `desc:`

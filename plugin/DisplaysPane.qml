@@ -395,12 +395,12 @@ Card {
         }
     }
     Timer {
-        interval: 1000
+        interval: pane.pending ? 1000 : 2000
         running: pane.visible
         repeat: true
         onTriggered: {
             pane.clock = Date.now() / 1000;
-            if (pane.pending)
+            if (pane.pending || !pane.dirty)
                 pane.refresh();
         }
     }

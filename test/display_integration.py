@@ -5,6 +5,7 @@ Use --workspace-only for immediate workspace switching without mode changes.
 Use --removal-only for immediate disconnected-profile removal.
 Use --disable-only for workspace/window migration and rollback.
 Use --mode-safety-only for partial mode preservation and virtual-output guards.
+Use --placement-only for external resizing, adjoining edges and watcher restarts.
 No physical output or user configuration is changed.
 """
 import copy
@@ -90,6 +91,64 @@ def main():
                 assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays'] if d['enabled']), initial
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
+                if '--placement-only' in sys.argv:
+                    # Physical PBP switches change modes without a position edit.
+                    # Exercise the same transition with isolated virtual outputs.
+                    full = '''hl.monitor({output="WAYLAND-1", mode="1280x720@60", position="0x0", scale=1})
+hl.monitor({output="WAYLAND-2", mode="1280x720@60", position="1280x0", scale=1})
+'''
+                    monitors.write_text(full)
+                    ctl('reload')
+                    time.sleep(.5)
+                    daemon = None
+                    def start_watcher():
+                        return subprocess.Popen([str(ROOT / 'bin/hypertile-displays'), 'watch'],
+                                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    def stop_watcher():
+                        if daemon and daemon.poll() is None:
+                            daemon.terminate()
+                            daemon.wait(timeout=5)
+                    def settled(width, right):
+                        deadline = time.monotonic() + 12
+                        while time.monotonic() < deadline:
+                            actual = {m['name']: m for m in json.loads(ctl('-j', 'monitors'))}
+                            a, b = actual['WAYLAND-1'], actual['WAYLAND-2']
+                            if (a['width'], b['width'], a['x'], b['x']) == (width, width, 0, right):
+                                return
+                            time.sleep(.2)
+                        error = root / 'state/hypertile/displays/daemon-error.json'
+                        raise AssertionError(('placement did not settle', actual,
+                                              error.read_text() if error.exists() else 'no daemon error'))
+                    try:
+                        daemon = start_watcher()
+                        journal = root / 'state/hypertile/displays/placement.json'
+                        deadline = time.monotonic() + 10
+                        while not journal.exists() and time.monotonic() < deadline:
+                            time.sleep(.2)
+                        assert journal.exists(), 'watcher did not capture the initial arrangement'
+                        for width in (640, 1280, 640):
+                            for name in ('WAYLAND-1', 'WAYLAND-2'):
+                                ctl('eval', f'hl.monitor({{output="{name}",mode="{width}x720@60"}})')
+                            settled(width, width)
+                            assert monitors.read_text() == full, 'reflow must not write the configuration'
+                        # Reload restores old coordinates with the new mode.
+                        monitors.write_text(full.replace('1280x720', '640x720'))
+                        ctl('reload')
+                        settled(640, 640)
+                        # Keep split geometry, stop the watcher, expand and restart.
+                        document = dict(version=1, displays=display('list')['displays'], workspaces={})
+                        pending = display('preview', '--json', json.dumps(document))
+                        display('keep', pending['token'])
+                        stop_watcher()
+                        for name in ('WAYLAND-1', 'WAYLAND-2'):
+                            ctl('eval', f'hl.monitor({{output="{name}",mode="1280x720@60"}})')
+                        daemon = start_watcher()
+                        settled(1280, 1280)
+                        assert not ctl('configerrors').strip(), ctl('configerrors')
+                        print('PASS: full/split/full placement, external mode preservation, reload and watcher restart', flush=True)
+                    finally:
+                        stop_watcher()
+                    return
                 if '--mode-safety-only' in sys.argv:
                     # Wayland outputs advertise no modes. Exercise real partial
                     # rules with a fixed mode, and reject unsupported selectors.

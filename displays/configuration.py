@@ -198,6 +198,53 @@ class Configuration:
         return {name: value if value in AUTOMATIC else 'fixed'
                 for name, value in self.mode_values(displays).items() if value is not None}
 
+    def placement_source(self):
+        """Placement declarations only; mode/scale edits retain adjoining edges.
+
+        Ignore comments and formatting. A manual position/topology edit, a
+        changed selector or a changed import invalidates saved relationships.
+        Unsupported/generated declarations are left to their owner.
+        """
+        sources = self.sources()
+        if str(self.path) not in sources:
+            raise DisplayError('The monitor configuration is not loaded.')
+        result = {}
+        for path, source in sources.items():
+            if not any(t[0] == 'monitor' for t in tokens(source)):
+                continue
+            rules = declarations(source)
+            if rules:
+                for rule in rules.values():
+                    for key in ('position', 'disabled', 'mirror'):
+                        if key not in rule['fields']:
+                            continue
+                        a, b = rule['fields'][key]
+                        value = source[a:b]
+                        literal = value in ('true', 'false') if key == 'disabled' else re.fullmatch(r"([\"'])[^\"'\\]*\1", value)
+                        if not literal:
+                            raise DisplayError('Computed placement is controlled by the monitor configuration.')
+                result[path] = [[selector, {key: [t[0] for t in tokens(source[a:b])]
+                                           for key, (a, b) in rule['fields'].items()
+                                           if key in ('position', 'disabled', 'mirror')}]
+                                for selector, rule in rules.items()]
+        return result
+
+    def positions_match(self, displays):
+        """Recognize saved coordinates restored by a config reload.
+
+        Also permits adoption of pre-placement-journal confirmed settings,
+        but never guesses what an automatic/computed declaration resolves to.
+        """
+        source = self.path.read_text()
+        rules = declarations(source)
+        for display in displays:
+            rule = rules.get(rule_for(rules, display) or '')
+            span = rule['fields'].get('position') if rule else None
+            literal = re.fullmatch(r"([\"'])(-?\d+)x(-?\d+)\1", source[span[0]:span[1]]) if span else None
+            if not literal or (int(literal[2]), int(literal[3])) != (display['x'], display['y']):
+                return False
+        return bool(displays)
+
     def plan(self, before, document):
         baseline = {d['connector']: d for d in before}
         removed = [d for d in before if d['id'] in document.get('removed_displays', [])]
@@ -270,8 +317,9 @@ class Configuration:
                 changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
         # Preview uses explicit coordinates. A geometry/topology change can move
         # another automatically placed output even when its draft did not move.
-        # Pin those dependencies, leaving explicit positions and the fallback
-        # rule (including preferred modes and shared expressions) untouched.
+        # Pin those dependencies to match the preview. The confirmed placement
+        # reference retains adjoining edges across subsequent size changes.
+        # Leave the fallback (including modes and shared expressions) untouched.
         arrangement_changed = any(
             any(key in fields for key in ('position', 'scale', 'transform', 'disabled', 'mirror'))
             or any(d[n] != baseline.get(d['connector'], {}).get(n) for n in ('width', 'height'))

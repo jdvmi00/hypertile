@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Displays keep adjoining edges together when an input switch, PBP mode,
+  scaling or rotation changes their logical size. Placement survives reloads
+  and service restarts without restoring stale resolutions. Manual moves and
+  intentional gaps are retained, and the open display diagram refreshes.
+
 - A calmer overlay for first-time use. The Layouts tab keeps **Use** and
   **Edit** in view and moves Rename, Duplicate, Export…, the `SUPER+L` cycle
   switch, and Delete into a **⋯** menu; **+ New** on the LAYOUTS heading starts
