@@ -84,7 +84,12 @@ class Service:
             return True
 
     def catalog(self):
-        self.settle_power()
+        with self.lock():
+            return self._catalog()
+
+    def _catalog(self):
+        """Read the catalog and settle power while the caller holds the lock."""
+        self._settle_power()
         current = self.adapter.displays()
         confirmed = read(self.confirmed_path, dict(version=1, displays=[], workspaces={}))
         if self.policy:
@@ -237,7 +242,7 @@ class Service:
         with self.lock():
             if self.pending_path.exists():
                 raise DisplayError('Keep or revert the display preview before removing a saved display.')
-            catalog = self.catalog()
+            catalog = self._catalog()
             selected = next((d for d in catalog['displays'] if d['id'] == identity), None)
             if not selected:
                 raise DisplayError('Saved display is no longer available. Refresh and try again.')
@@ -261,7 +266,7 @@ class Service:
         with self.lock():
             if self.pending_path.exists():
                 raise DisplayError('Keep or revert the display preview before switching displays.')
-            catalog = self.catalog()
+            catalog = self._catalog()
             active = json.loads(self.adapter.run('-j', 'activeworkspace'))
             if connector == 'next':
                 _, _, group = source_for(catalog['displays'], active.get('monitor'))
