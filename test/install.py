@@ -47,6 +47,8 @@ import sys
 root = Path(os.environ["TEST_SOURCE"])
 destination = Path(sys.argv[-1])
 if destination.parent == Path(os.environ["XDG_CONFIG_HOME"]) / "hypr":
+    if destination.name == "hypertile.lua":
+        assert (destination.parent / "hypertile-pattern.lua").read_bytes() == (root / "hypertile-pattern.lua").read_bytes()
     for source in (root / "bin").glob("hypertile-*"):
         target = Path(os.environ["HOME"]) / ".local/bin" / source.name
         assert target.read_bytes() == source.read_bytes(), str(target)
@@ -324,12 +326,13 @@ o.bind("SUPER + U", "User", "keep-me")
             stream.write('local navigation = require("hypr.hypertile-navigation")\n')
         result = self.run_script("uninstall.sh", "--purge", success=False)
         self.assertIn("still references hypertile-navigation; runtime files retained", result.stderr)
-        for name in ("hypertile-navigation.lua", "hypertile-session.lua", "hypertile.lua"):
+        for name in ("hypertile-navigation.lua", "hypertile-session.lua", "hypertile.lua", "hypertile-pattern.lua"):
             self.assertTrue((self.hypr / name).exists())
         self.assertTrue((self.hypr / "layouts").exists())
         self.bindings.write_text('-- user removed custom navigation binding\n')
         self.run_script("uninstall.sh")
         self.assertFalse((self.hypr / "hypertile-navigation.lua").exists())
+        self.assertFalse((self.hypr / "hypertile-pattern.lua").exists())
 
     def test_incomplete_marker_keeps_navigation_runtime(self):
         self.run_script("install.sh")

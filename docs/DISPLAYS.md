@@ -369,6 +369,11 @@ changes before applying wallpaper.
 Hypertile refuses to overwrite an existing custom clone or locally edited
 renderer. Subsequent Apply operations update an unmodified managed clone when
 needed. The original renderer is retained as `Background.omarchy.qml.bak`.
+The adapter supports both the original image renderer and the newer
+`BackgroundMedia` renderer. On the newer renderer, images wait for their native
+dimensions and decode for the display or span; small images are not enlarged
+in memory. Temporary transition images are released even when a group keeps
+the same custom image through a theme change.
 
 The clone and wallpaper preferences are independent user customizations and
 remain usable if Hypertile is disabled or uninstalled. To return to stock

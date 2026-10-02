@@ -603,7 +603,8 @@ python3 test/displays.py && python3 test/display_configuration.py && python3 tes
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
-lua test/harness.lua && lua test/loader.lua      # engine: placement, rules, capacity, messages, hot swap
+lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
+                                                 # engine, bounded Lua patterns, capacity, hot swap
 lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
 lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl
 python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lua && node test/session.js
@@ -612,6 +613,7 @@ python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && lua tes
 node test/content.js && node test/content_keys.js  # scenes, app catalog, placement, the Scenes tab
 python3 test/browse.py && node test/browse.js    # managed layout browsing
 node test/wallpaper.js && python3 test/wallpaper.py # wallpaper groups and settings
+python3 test/wallpaper_integration.py             # opt-in installed Omarchy renderer in isolated compositor
 node test/geometry.js                            # overlay drawing math
 node test/editor.js && node test/overlay.js && node test/readability.js
                                                  # editor operations (validated by the engine), overlay, contrast
@@ -645,6 +647,7 @@ plugin/                the shell plugin: Overlay.qml, Rail.qml (inspector), Zone
                        (session status); Service.qml (automatic setup on enable and
                        update); Readability.js (text contrast)
 hypertile.lua          engine: spec -> layout provider (hot-swappable)
+hypertile-pattern.lua  bounded Lua-pattern compiler and matcher for placement rules
 hypertile-bridge.lua   bridge: load/serialize/JSON/save/preview/apply
 hypertile-json.lua     JSON encode/decode (pure Lua)
 hypertile-layouts.lua  loader: requires every ~/.config/hypr/layouts/*.lua

@@ -42,13 +42,26 @@ function M.snapshot()
       if not existing[id] then
         live.orders[id] = nil
         if live.boxes then live.boxes[id] = nil end
+        if live.box_inputs then live.box_inputs[id] = nil end
         if live.placements then live.placements[id] = nil end
         if live.drags then live.drags[id] = nil end
         if live.state.navigation_keep then live.state.navigation_keep[id] = nil end
       end
     end
   end
-  for _, win in ipairs(hl.get_windows()) do
+  local windows = hl.get_windows()
+  local addresses = {}
+  for _, win in ipairs(windows) do addresses[win.address] = true end
+  -- Pins survive moves between workspaces/layouts, but not closed windows.
+  -- Otherwise every pinned window leaves an entry for the whole login.
+  for _, live in pairs(engine.live) do
+    for _, pins in ipairs({ live.state.pins, live.state.exclusive_pins or {} }) do
+      for address in pairs(pins) do
+        if not addresses[address] then pins[address] = nil end
+      end
+    end
+  end
+  for _, win in ipairs(windows) do
     if win.mapped and win.workspace then
       local name = win.workspace.tiled_layout:match("^lua:(.+)$")
       local live = name and engine.live[name]

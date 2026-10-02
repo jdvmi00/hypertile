@@ -106,7 +106,8 @@ BarWidget {
 
   Process {
     id: queryProc
-    command: [root.ctl, "workspaces", "--json"]
+    // The label only needs compositor state, not saved display preferences.
+    command: [root.ctl, "workspaces", "--json", "--live"]
     onRunningChanged: {
       if (running) {
         root.stalled = false

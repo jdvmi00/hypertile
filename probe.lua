@@ -4,6 +4,7 @@
 -- Everything it learns goes to probe.log next to this file.
 
 local root = (debug.getinfo(1, "S").source:match("^@(.*)/[^/]*$")) or "."
+package.path = root .. "/?.lua;" .. package.path
 local hypertile = dofile(root .. "/hypertile.lua")
 
 local LOG = root .. "/probe.log"

@@ -1,5 +1,9 @@
 # Developing Hypertile live
 
+The [performance audit](PERFORMANCE.md) records runtime measurements, optimized
+paths, and remaining footguns. Run `lua test/performance.lua` for the repeatable
+layout CPU benchmark; it is separate from correctness tests.
+
 Use `~/Code/hypertile` as the authoritative checkout. Link Omarchy's plugin
 directory to it, then use the repository's `dev` helper to apply uncommitted
 changes to the running desktop. No push, pull, or second working tree is

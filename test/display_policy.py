@@ -153,6 +153,19 @@ class RuntimeTests(unittest.TestCase):
         self.assertEqual(len(self.initial), 1)
         self.assertEqual(self.policy.state["suppressed"], ["1"])
 
+    def test_reconcile_uses_one_fresh_display_snapshot(self):
+        with patch.object(self.adapter, 'displays', wraps=self.adapter.displays) as query:
+            self.policy.reconcile(self.doc, 'event')
+            self.assertEqual(query.call_count, 1)
+            self.adapter.outputs[1]['enabled'] = False
+            self.policy.reconcile(self.doc, 'event')
+            self.assertEqual(query.call_count, 2)
+        self.assertEqual(self.policy.state['available'], ['wide'])
+
+    def test_empty_policy_does_not_query_compositor(self):
+        with patch.object(self.adapter, 'displays', side_effect=AssertionError('unnecessary display query')):
+            self.assertEqual(self.policy.reconcile({'displays': [], 'workspaces': {}}), {'moves': [], 'layouts': []})
+
     def test_scene_conflict_rejected_before_placement(self):
         self.policy._scenes = lambda: {"1": "lua:quad"}
         self.doc["workspaces"]["1"]["layout"] = "master"

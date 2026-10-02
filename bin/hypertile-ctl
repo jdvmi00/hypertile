@@ -71,7 +71,9 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
                              instead (Enter keeps, Esc restores); --now bypasses it
   current [--json]           active workspace id, name, and layout; --json adds
                              monitor size, reserved edges, gaps, and layout area
-  workspaces [--json]        every workspace with its monitor and layout
+  workspaces [--json] [--live]
+                             every workspace with its monitor and layout;
+                             --live skips saved layout-source resolution
   windows [--json]           open windows (class, title, workspace)
   tile-move <request-json>   move/swap the captured window to its selected tile
   display <command> [...]   list, preview, keep, revert, use-display, remove-display, sleep, wake, restore
@@ -467,7 +469,7 @@ function commands.current(pos, flags)
 end
 
 function commands.workspaces(pos, flags)
-  local list, err = bridge.workspaces()
+  local list, err = bridge.workspaces(flags.live)
   if not list then
     die(err)
   end
