@@ -28,6 +28,8 @@ for connector, width, height, scale in [('DP-1',3840,2160,1.5),('HDMI-A-1',1920,
                          width=width,height=height,scale=scale,refresh=60,transform=0,x=0,y=0,
                          description='4K display' if connector=='DP-1' else '1080p display',
                          modes=[f'{width}x{height}@60.00Hz']))
+    displays[-1]['automatic_modes'] = [dict(width=width, height=height, refresh=60,
+        mode_policy='highres', label='Automatic (highest resolution)')]
 displays[1]['mirror_of']='DP-1'
 displays.append(dict(displays[0], id='old-display', connector='OLD-DP', connected=False, mirror_of=None))
 (root/'state.json').write_text(json.dumps(dict(version=1,displays=displays,workspaces=[],confirmed=dict(workspaces={}),pending=None)))
@@ -101,6 +103,22 @@ ShellRoot {
         function state(): string { return JSON.stringify({catalog:pane.catalog,draft:pane.draft,dirty:pane.dirty,pending:pane.pending,previous:pane.previousSource,error:pane.error,notice:pane.notice,busy:pane.busy}); }
         function use(): void { pane.useDisplay(pane.selectedDisplay.connector); }
         function back(): void { pane.useDisplay(pane.previousSource); }
+        function automatic(): string {
+            pane.selectedIndex = 0;
+            var items = [pane];
+            while (items.length) {
+                var item = items.pop();
+                if (item.accessibleLabel === "Resolution and refresh rate") {
+                    item.activated(0);
+                    item.forceActiveFocus();
+                    Qt.callLater(function() { pane.reveal(item); });
+                    return item.displayText;
+                }
+                for (var i = 0; item.children && i < item.children.length; i++)
+                    items.push(item.children[i]);
+            }
+            return "missing mode picker";
+        }
         function remove(): void {
             pane.selectedIndex = 0;
             pane.setDisplay("scale", 2);
@@ -165,6 +183,13 @@ try:
     assert state['dirty'] and state['draft']['displays'][0]['scale'] == 2, state
     assert state['catalog']['displays'][0]['scale'] == 1.5, 'Removal must not save unrelated edits'
     print('PASS: real QML removal saves immediately, refreshes the list and retains unrelated unsaved edits without Preview or Keep')
+    assert 'Automatic (highest resolution)' in ipc('automatic')
+    state = json.loads(ipc('state'))
+    assert state['draft']['displays'][0]['mode_policy'] == 'highres' and state['dirty'], state
+    time.sleep(.2)
+    ipc('snapshot', str(images / 'automatic-mode.png'))
+    time.sleep(.4)
+    print('PASS: automatic mode selection updates the real QML draft and rendered inspector')
     if args.screenshots: print('Panel images:', images)
 except Exception:
     print((root / 'preview.log').read_text()[-2400:])

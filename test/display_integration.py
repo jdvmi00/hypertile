@@ -4,6 +4,7 @@ Run from a Wayland session: python3 test/display_integration.py.
 Use --workspace-only for immediate workspace switching without mode changes.
 Use --removal-only for immediate disconnected-profile removal.
 Use --disable-only for workspace/window migration and rollback.
+Use --mode-safety-only for partial mode preservation and virtual-output guards.
 No physical output or user configuration is changed.
 """
 import copy
@@ -67,7 +68,7 @@ def main():
                 def display(*args, input=None):
                     result = subprocess.run([str(ROOT / 'bin/hypertile-displays'), *args], input=input,
                                             env=env, text=True, capture_output=True, timeout=25)
-                    assert result.returncode == 0, str(args) + ': ' + result.stdout + result.stderr
+                    assert result.returncode == 0, str(args) + ': ' + result.stdout + result.stderr + '\nMonitor config:\n' + monitors.read_text()
                     return json.loads(result.stdout)
 
                 names = {m['name'] for m in json.loads(ctl('-j', 'monitors', 'all'))}
@@ -89,6 +90,33 @@ def main():
                 assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays'] if d['enabled']), initial
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
+                if '--mode-safety-only' in sys.argv:
+                    # Wayland outputs advertise no modes. Exercise real partial
+                    # rules with a fixed mode, and reject unsupported selectors.
+                    outputs[0]['scale'] = 2
+                    document = dict(version=1, displays=outputs, workspaces={})
+                    pending = display('preview', '--json', json.dumps(document))
+                    display('keep', pending['token'])
+                    assert monitors.read_text().count('mode="1280x720@60"') == 2
+                    ctl('reload')
+                    after = display('list')['displays']
+                    assert after[0]['scale'] == 2, after
+                    after[0]['scale'] = 1
+                    pending = display('preview', '--json', json.dumps(dict(version=1, displays=after)))
+                    display('revert', pending['token'])
+                    assert display('list')['displays'][0]['scale'] == 2
+                    after = display('list')['displays']
+                    assert not after[0]['modes'], after
+                    after[0]['mode_policy'] = 'highres'
+                    source = monitors.read_text()
+                    result = subprocess.run([str(ROOT / 'bin/hypertile-displays'), 'preview', '--json',
+                                             json.dumps(dict(version=1, displays=after))],
+                                            env=env, text=True, capture_output=True, timeout=10)
+                    assert result.returncode != 0 and 'needs advertised modes' in result.stdout, result
+                    assert not display('status')['pending'] and monitors.read_text() == source
+                    assert not ctl('configerrors').strip()
+                    print('PASS: native geometry updates preserve mode through Keep/reload/Revert; unsupported automatic selectors are rejected without mutation')
+                    return
                 if '--disable-only' in sys.argv:
                     applications = []
                     source, target = outputs

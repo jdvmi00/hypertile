@@ -599,7 +599,7 @@ Run the tests from the repository root:
 shellcheck install.sh uninstall.sh
 python3 test/dev.py && python3 test/upgrade.py   # deployment helper: preservation, restarts, failures
 python3 test/install.py                          # installer and uninstaller
-python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_policy.py && node test/displays.js
+python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_safety.py && python3 test/display_policy.py && node test/displays.js
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions

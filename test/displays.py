@@ -39,7 +39,7 @@ class Fake:
     def displays(self): return copy.deepcopy(self.current)
     def workspaces(self): return copy.deepcopy(self.live)
     def conflicts(self): return []
-    def apply(self, d):
+    def apply(self, d, *, preserve_mode=False, mode=None):
         self.calls.append(('apply', d['connector'], d['enabled']))
         if self.fail:
             self.fail = False
@@ -468,7 +468,8 @@ class Tests(unittest.TestCase):
         self.assertFalse(self.service.confirmed_path.exists())
     def test_failed_application_rolls_back(self):
         self.adapter.fail = True
-        with self.assertRaises(DisplayError): self.service.preview(self.doc(), watchdog=False)
+        doc = self.doc(); doc['displays'][1]['x'] = 2100
+        with self.assertRaises(DisplayError): self.service.preview(doc, watchdog=False)
         self.assertFalse(self.service.pending_path.exists())
         self.assertTrue(self.adapter.current[0]['enabled'])
     def test_external_change_not_overwritten(self):
@@ -832,7 +833,7 @@ class Tests(unittest.TestCase):
         doc = self.doc()
         doc['displays'][0]['mirror_of'] = doc['displays'][1]['id']
         pending = self.service.preview(doc, watchdog=False)
-        self.assertEqual(self.adapter.calls[0][1], 'DP-2')
+        self.assertFalse(any(c[:2] == ('apply', 'DP-2') for c in self.adapter.calls))
         self.adapter.current = self.adapter.current[:1]
         result = self.service.revert(pending['token'])
         self.assertFalse(result['errors'])
@@ -940,7 +941,7 @@ class MirrorHandoffTests(unittest.TestCase):
             for item in self.live:
                 if Service._handoff_workspace(item) == workspace:
                     item['monitor'] = connector
-        def apply(self, d):
+        def apply(self, d, *, preserve_mode=False):
             if self.fail_on == d['connector']:
                 self.fail_on = None
                 raise DisplayError('Injected handoff failure')

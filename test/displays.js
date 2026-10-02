@@ -432,3 +432,21 @@ close.requestClose();
 assert(close.confirmingDiscard && !close.closed);
 close.discardAndClose();
 assert(!close.wallpaperEditor.dirty && close.closed);
+
+// Automatic mode intent survives geometry edits and is explicit in the picker.
+const autoDisplay = {id:'auto', identity:'panel', connector:'DP-1', connected:true, enabled:true,
+    width:6144,height:2560,refresh:120,scale:4/3,transform:0,x:0,y:0,
+    mode_policy:'highres', modes:['6144x2560@120.00Hz'], capability_signature:'old',
+    automatic_modes:[{mode_policy:'highres',width:6144,height:2560,refresh:120,label:'Automatic (highest resolution)'}]};
+const autoChoices = plain(D.modeChoices(autoDisplay));
+assert.deepStrictEqual(autoChoices.map(c => c.mode_policy), ['highres','fixed']);
+assert.strictEqual(D.currentModeLabel(autoDisplay),'Automatic (highest resolution)');
+let autoDraft = {version:1,displays:[autoDisplay]};
+assert.strictEqual(D.updateDisplay(autoDraft,0,{scale:2}).displays[0].mode_policy,'highres');
+const fixedChoice = autoChoices[1];
+assert.strictEqual(D.updateDisplay(autoDraft,0,fixedChoice).displays[0].mode_policy,'fixed');
+const reconnected = D.matchSavedDisplay({displays:[{...autoDisplay,connected:false},{...autoDisplay,id:'live',capability_signature:'new'}]},0,'DP-1');
+assert.strictEqual(reconnected.displays[0].capability_signature,'new');
+assert.strictEqual(reconnected.displays[0].mode_policy,'highres');
+assert.strictEqual(D.modeChoices({...autoDisplay,modes:[],automatic_modes:[]}).length,0);
+console.log('Automatic mode picker, geometry preservation and refreshed reconnect capabilities passed');

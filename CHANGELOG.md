@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Display previews leave unchanged screens alone and preserve automatic modes,
+  custom modelines, and refresh-rate caps during geometry edits. The resolution
+  picker offers Automatic (highest resolution). Changed connections or mode
+  lists stop stale previews and saves; rollback avoids replaying old modes after
+  docking, monitor replacement, or picture-by-picture changes.
+
 - Window drag and drop and numbered tile outlines work on displays positioned
   above, below, or beside the desktop origin.
 

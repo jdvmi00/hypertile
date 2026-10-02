@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 
 from adapter import DisplayError, lua_string
+from modes import AUTOMATIC, value as mode_value
 
 
 def tokens(source):
@@ -170,6 +171,32 @@ class Configuration:
         visit(self.root / 'hyprland.lua')
         return seen
 
+    def explicit_outputs(self):
+        try:
+            return set(declarations(self.path.read_text()))
+        except (OSError, DisplayError):
+            return set()
+
+    def mode_values(self, displays):
+        """Read literal modes without evaluating user Lua or changing its source."""
+        try:
+            source = self.path.read_text()
+            rules = declarations(source)
+        except (OSError, DisplayError):
+            return {}
+        modes = {}
+        for display in displays:
+            rule = rules.get(rule_for(rules, display) or '')
+            span = rule['fields'].get('mode') if rule else None
+            mode = source[span[0]:span[1]] if span else '"preferred"'
+            literal = re.fullmatch(r"([\"'])([^\"'\\]*)\1", mode)
+            modes[display['connector']] = literal[2] if literal else None
+        return modes
+
+    def mode_policies(self, displays):
+        return {name: value if value in AUTOMATIC else 'fixed'
+                for name, value in self.mode_values(displays).items() if value is not None}
+
     def plan(self, before, document):
         baseline = {d['connector']: d for d in before}
         removed = [d for d in before if d['id'] in document.get('removed_displays', [])]
@@ -178,12 +205,17 @@ class Configuration:
             old = baseline.get(d['connector'], {})
             groups = {'mode': ('width', 'height', 'refresh'), 'position': ('x', 'y'),
                       'scale': ('scale',), 'transform': ('transform',), 'disabled': ('enabled',)}
-            values = dict(mode=lua_string(f"{d['width']}x{d['height']}@{d['refresh']:.5f}"),
+            values = dict(mode=lua_string(mode_value(d)),
                           position=lua_string(f"{d['x']}x{d['y']}"), scale=str(d['scale']),
                           transform=str(d['transform']), disabled='false' if d['enabled'] else 'true')
             fields = {key: values[key] for key, names in groups.items()
                       if any(abs(float(d[n]) - float(old[n])) > (0.01 if n == 'refresh' else .0001 if n == 'scale' else 0)
                              if n in old else True for n in names)}
+            if d.get('mode_policy', 'fixed') in AUTOMATIC:
+                # Automatic geometry is readback, never a fixed-mode request.
+                fields.pop('mode', None)
+            if d.get('mode_policy', 'fixed') != old.get('mode_policy', 'fixed'):
+                fields['mode'] = values['mode']
             target = d.get('mirror_of')
             source = next((m for m in document['displays'] if m['id'] == target), None)
             mirror = source['connector'] if source else ''

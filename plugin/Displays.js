@@ -106,6 +106,25 @@ function modeLabel(mode) {
     return parsed.width + '×' + parsed.height + ' @ ' + parsed.refresh.toFixed(2) + ' Hz'
 }
 
+// Keep automatic intent distinct from its currently resolved pixel size.
+function modeChoices(display) {
+    if (!display) return []
+    var automatic = (display.automatic_modes || []).map(clone)
+    var fixed = (display.modes || []).map(function(raw) {
+        var mode = parseMode(raw)
+        return mode ? Object.assign(mode, {mode_policy: "fixed", label: modeLabel(raw)}) : null
+    }).filter(function(mode) { return mode !== null })
+    return automatic.concat(fixed)
+}
+
+function currentModeLabel(display) {
+    if (!display) return ""
+    var option = modeChoices(display).find(function(mode) {
+        return mode.mode_policy !== "fixed" && mode.mode_policy === display.mode_policy
+    })
+    return option ? option.label : modeLabel(display)
+}
+
 function parseMode(mode) {
     if (typeof mode !== 'string') {
         return {
@@ -143,6 +162,8 @@ function matchSavedDisplay(document, index, connector) {
         connector: live.connector,
         connected: true,
         modes: clone(live.modes || []),
+        capability_signature: live.capability_signature,
+        automatic_modes: clone(live.automatic_modes || []),
         awake: live.awake,
         ambiguous: live.ambiguous,
         explicit_match: true
@@ -337,6 +358,7 @@ function updateDisplay(document, index, fields) {
     })) return null
     var next = clone(document), d = next.displays[index], before = bounds(d)
     Object.keys(fields).forEach(function(key) { d[key] = fields[key] })
+    if ("mode_policy" in fields) d.mode_available = true
     if (["width", "height", "scale", "transform"].some(function(key) { return key in fields })) {
         d.scale = cleanScale(d.width, d.height, d.scale)
         reflow(next.displays, index, before)

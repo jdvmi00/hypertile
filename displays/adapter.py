@@ -7,6 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from modes import AUTOMATIC, signature, value as mode_value
+
 
 class DisplayError(ValueError):
     pass
@@ -128,6 +130,8 @@ def validate(document, current, known=()):
         if not isinstance(source, dict):
             raise DisplayError('Every display must be a settings object.')
         d = dict(source)
+        if d.get('mode_policy', 'fixed') not in ('fixed', *AUTOMATIC):
+            raise DisplayError('Choose an automatic mode or an advertised resolution and refresh rate.')
         if not isinstance(d.get('id'), str) or d['id'] in seen:
             raise DisplayError('Every display needs a unique stable id.')
         seen.add(d['id'])
@@ -156,6 +160,8 @@ def validate(document, current, known=()):
         d['scale'] = clean_scale(d['width'], d['height'], d['scale'])
         if not actual:
             continue  # Keep valid disconnected preferences without testing mode availability.
+        if d.get('capability_signature') and d['capability_signature'] != signature(actual):
+            raise DisplayError('Display connections or available modes changed. Refresh displays and preview again.')
         if actual['connector'] in connectors:
             raise DisplayError('More than one saved display matches ' + actual['connector'] + '; choose a single explicit match.')
         connectors.add(actual['connector'])
@@ -163,6 +169,9 @@ def validate(document, current, known=()):
             raise DisplayError('Identical displays require an explicit connector match: ' + actual['connector'])
         d['connector'] = actual['connector']
         if d['enabled']:
+            if (d.get('mode_policy') in AUTOMATIC and not actual['modes']
+                    and d.get('mode_policy') != actual.get('mode_policy')):
+                raise DisplayError('Automatic mode selection needs advertised modes for ' + d['connector'] + '; keep its current mode or choose a supported resolution.')
             if d['width'] <= 0 or d['height'] <= 0 or d['refresh'] <= 0:
                 raise DisplayError('Select a supported resolution and refresh rate before enabling ' + d['connector'] + '.')
             if not .25 <= d['scale'] <= 8 or any(abs(size / d['scale'] - round(size / d['scale'])) > 1e-6 for size in (d['width'], d['height'])):
@@ -217,11 +226,12 @@ class Adapter:
     def workspaces(self):
         return json.loads(self.run('-j', 'workspaces'))
 
-    def apply(self, d):
+    def apply(self, d, *, preserve_mode=False, mode=None):
         fields = ['output=' + lua_string(d['connector'])]
         if d['enabled']:
-            fields += ['mode=' + lua_string(f"{d['width']}x{d['height']}@{d['refresh']:.5f}"),
-                       'position=' + lua_string(f"{d['x']}x{d['y']}"), 'scale=' + str(d['scale']),
+            if not preserve_mode:
+                fields.append('mode=' + lua_string(mode if mode is not None else mode_value(d)))
+            fields += ['position=' + lua_string(f"{d['x']}x{d['y']}"), 'scale=' + str(d['scale']),
                        'transform=' + str(d['transform']), 'disabled=false',
                        'mirror=' + lua_string(d.get('mirror_connector') or '')]
         else:

@@ -166,6 +166,7 @@ node test/geometry.js   # overlay geometry
 node test/editor.js     # editor operations
 python3 test/session.py && lua test/session.lua       # session recovery
 python3 test/scenes.py && node test/content.js         # scenes
+python3 test/display_safety.py # mode intent, PBP/docking races, safe rollback
 ```
 
 `.github/workflows/test.yml` is the authoritative list; CI runs every suite.
@@ -177,6 +178,8 @@ handoff, save failures, and watchdog recovery. `python3 test/display_ui.py`
 opens a disposable QML panel with simulated outputs to check immediate switching,
 catalog refresh, and Switch back. Add `--screenshots /tmp/hypertile-display-ui`
 to save its panel images. Neither test changes physical monitor configuration.
+Use `python3 test/display_integration.py --mode-safety-only` to check partial
+monitor updates through preview, save, and reload, and virtual-output guards.
 
 For menu bar placement, run `python3 test/bar_settings.py` on a machine with
 Omarchy and Quickshell installed. It uses an offscreen shell and temporary

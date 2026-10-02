@@ -22,8 +22,14 @@ a connector. Closing with unsaved changes asks before discarding them; nothing i
 applied until you preview.
 
 Select a screen to change resolution and refresh rate, scale, rotation, or its
-enabled state. The mode picker lists the modes reported by Hyprland. Saved
-screens that are disconnected remain visible, with their preferences retained.
+enabled state. The mode picker lists the modes reported by Hyprland and
+**Automatic (highest resolution)**. Automatic lets Hyprland select from the
+display's current modes, including after docking or changing picture-by-picture
+inputs. Existing automatic choices, such as the display's preferred mode,
+remain available. Choose a specific resolution and refresh rate to keep a
+fixed mode or refresh-rate cap. Moving, scaling, or rotating a screen preserves
+its mode choice; saving an automatic mode never pins its current pixel size.
+Saved screens that are disconnected remain visible, with their preferences retained.
 If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a
 saved configuration.
@@ -60,6 +66,14 @@ restores the previous arrangement and workspace placement where possible. A sepa
 outside the overlay and display watcher. Confirmation is required even when
 only workspace or layout preferences change. Unsupported modes and overlapping
 independent screens produce an error before application.
+
+Unchanged displays are left alone during preview. If a display disconnects,
+is replaced, or reports different available modes during the operation,
+Hypertile stops and asks you to refresh before trying again. Revert restores
+settings only to displays whose identity and modes still match; it does not
+send an old full-screen mode to a display that has switched to picture-by-picture.
+These checks reduce unnecessary mode changes, but cannot recover a graphics
+driver that stops responding while a mode change is already in progress.
 
 ## Mirroring
 
