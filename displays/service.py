@@ -17,7 +17,7 @@ import uuid
 
 from adapter import Adapter, DisplayError, automatic_readback, match, same, validate, independent, apply_order, lua_string
 from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules, valid_workspace, selector
-from configuration import Configuration
+from configuration import Configuration, declared_position, normalize_placement_source
 from modes import AUTOMATIC, automatic_options, same_mode, signature
 import placement
 
@@ -96,9 +96,13 @@ class Service:
     def reflow(self, observed):
         """Reconcile saved edges after a settled, external geometry change.
 
-        Only positions are requested. Keep the reference and an in-flight
-        journal across process restarts; never save a transient PBP mode as the
-        user's new arrangement or rewrite their monitor configuration.
+        Only positions are requested, and only for outputs whose own connector
+        rule applies: Hyprland merges a partial request into that rule, but
+        resets every omitted setting of an output that has none. Other outputs
+        stay where their configuration puts them and anchor their neighbours.
+        Keep the reference and an in-flight journal across process restarts;
+        never save a transient PBP mode as the user's new arrangement or
+        rewrite their monitor configuration.
         """
         if not self.configuration:
             return True
@@ -107,7 +111,7 @@ class Service:
                 return False
             if read(self.directory.parent / 'sessions/status.json', {}).get('mode') == 'restoring':
                 return False
-            current = self.configured(self.adapter.displays())
+            current = self.adapter.displays()
             if placement.snapshot(current) != placement.snapshot(observed):
                 return False  # Changed while acquiring the transaction lock.
             if sorted(signature(d) for d in current) != sorted(signature(d) for d in observed):
@@ -117,30 +121,60 @@ class Service:
                 path = self.directory / 'placement.json'
                 previous = read(path, {})
                 state = copy.deepcopy(previous)
+                if state:
+                    state['source'] = normalize_placement_source(state.get('source'))
                 confirmed = read(self.confirmed_path, {})
                 transaction = confirmed.get('_transaction')
-                if not state or state.get('source') != source or state.get('transaction') != transaction:
+                fixed = {d['connector'] for d in current
+                         if placement.active(d) and not self.configuration.uses_connector_rule(d, source=source)}
+                if not state or state.get('transaction') != transaction:
                     saved = confirmed.get('displays', [])
-                    adopt = (not state or state.get('transaction') != transaction) and saved and (
-                        confirmed.get('placement_source') == source
-                        or 'placement_source' not in confirmed and self.configuration.positions_match(saved))
+                    adopt = bool(saved) and normalize_placement_source(confirmed.get('placement_source')) == source
+                    if saved and 'placement_source' not in confirmed:
+                        # Settings confirmed before the placement journal are
+                        # adopted while the configuration still declares them.
+                        # Outputs that take no part now cannot contradict that.
+                        present = [d for d in saved if placement.active(dict(d, connected=True))
+                                   and (actual := match(d, current)) and placement.active(actual)]
+                        declared = self.configuration.positions(present)
+                        adopt = bool(present) and all(declared[d['connector']] == (d['x'], d['y']) for d in present)
                     state = dict(source=source, transaction=transaction,
                                  reference=placement.snapshot(saved if adopt else current), last=[])
+                elif state.get('source') != source:
+                    # The configuration was edited by hand, and its reload put
+                    # every output back on its declared coordinates. That is a
+                    # new position only for an output whose own declaration
+                    # changed; the others keep their saved edges.
+                    def edited(display):
+                        return (declared_position(state.get('source') or {}, display)
+                                != declared_position(source, display))
+                    reference = [d for d in state['reference'] if not edited(d)]
+                    if len(reference) != len(state['reference']) or any(edited(d) for d in current):
+                        reference = placement.rebase(reference, current, fixed)
+                    state = dict(source=source, transaction=transaction, reference=reference, last=[])
                 last = state.get('last', [])
                 live = placement.snapshot(current)
                 def positions(displays):
-                    return {d['connector']: (d['x'], d['y']) for d in displays}
+                    # Disabled and mirrored outputs report no position of their own.
+                    return {d['connector']: (d['x'], d['y']) for d in displays if placement.active(d)}
                 old_positions, live_positions = positions(last), positions(live)
                 applying = positions(state.get('applying', []))
                 own_moves = applying and all(position in (old_positions.get(name), applying.get(name))
                                             for name, position in live_positions.items())
-                if (last and placement.shape(last) == placement.shape(live) and old_positions != live_positions
-                        and not own_moves and not self.configuration.positions_match(current)):
-                    # An external position-only edit is a new arrangement.
-                    # Keep absent outputs' last reference until they return.
-                    absent = [d for d in state['reference'] if not match(d, current)]
-                    state['reference'] = placement.snapshot(current + absent)
-                desired = placement.project(state['reference'], current)
+                moved = [d for d in current if placement.active(d)
+                         and live_positions[d['connector']] != old_positions.get(d['connector'])]
+                if last and placement.shape(last) == placement.shape(live) and moved and not own_moves:
+                    # A config reload returns outputs to their declared
+                    # coordinates; automatic ones may follow. Anything else is
+                    # an external position-only edit, and a new arrangement.
+                    declared = {name: position for name, position in self.configuration.positions(moved).items()
+                                if position is not None}
+                    if not declared or any(position != live_positions[name] for name, position in declared.items()):
+                        # Accept live positions while keeping absent, disabled
+                        # and mirrored outputs' references until they return.
+                        state['reference'] = placement.rebase(state['reference'], current,
+                                                              fixed={d['connector'] for d in current})
+                desired = placement.project(state['reference'], current, fixed)
             except (DisplayError, OSError):
                 # Custom Lua owns its placement. Do not override its decisions.
                 return True
@@ -154,13 +188,13 @@ class Service:
                     fresh = self.adapter.displays()
                     try:
                         self.check_capabilities(current, fresh)
-                    except DisplayError:
-                        return False  # Input switching resumed; settle again.
-                    if (placement.snapshot(fresh) != placement.snapshot(expected)
-                            or self.configuration.placement_source() != source):
+                        if self.configuration.placement_source() != source:
+                            return False
+                    except (DisplayError, OSError):
+                        return False  # Input switching or an edit resumed; settle again.
+                    if placement.snapshot(fresh) != placement.snapshot(expected):
                         return False
-                    old = next(d for d in current if d['connector'] == display['connector'])
-                    self.apply(display, old)
+                    self.adapter.reposition(display)
                     self.adapter.verify([display])
                     next(d for d in expected if d['connector'] == display['connector']).update(
                         x=display['x'], y=display['y'])
@@ -1043,7 +1077,8 @@ class Watcher:
     a workspace or change an output, on a slow safety poll, or while a sleeping
     output needs its wake options settled. An idle desktop then costs nothing:
     the earlier half-second poll spawned five processes and fsynced a file on
-    every tick."""
+    every tick. Saved edges are reconciled once an output's geometry changed
+    or the configuration reloaded, never on a tick that found neither."""
     RELEVANT = ('configreloaded', 'monitoradded', 'monitorremoved', 'createworkspace',
                 'destroyworkspace', 'moveworkspace', 'renameworkspace')
 
@@ -1054,18 +1089,22 @@ class Watcher:
         self.last = None
         self.geometry = None
         self.settle_since = None
+        self.retry_at = 0.0
+        self.retry_delay = 0.0
 
     def tick(self, lines, now):
         names = {line.split('>>', 1)[0] for line in lines}
         reloaded = 'configreloaded' in names
         due = self.last is None or now - self.last >= self.interval
-        if not (reloaded or due or self.settle_since is not None or self.service.power_path.exists()
+        settling = self.settle_since is not None and now >= self.retry_at
+        if not (reloaded or due or settling or self.service.power_path.exists()
                 or any(name.startswith(self.RELEVANT) for name in names)):
             return False
         self.last = now
         service = self.service
         current = service.adapter.displays()
         topology = tuple((d['id'], d['connector'], d['enabled'], d.get('mirror_connector')) for d in current)
+        failure = None
         if not service.pending_path.exists():
             if reloaded:
                 service.restore('configreload')
@@ -1076,18 +1115,31 @@ class Watcher:
             if service.configuration:
                 geometry = (placement.snapshot(current), sorted(signature(d) for d in current))
                 if geometry != self.geometry or reloaded:
+                    # Also the first tick after start-up or a finished preview.
                     self.geometry = geometry
                     self.settle_since = now
-                elif self.settle_since is None or now - self.settle_since >= 1.0:
+                    self.retry_at = self.retry_delay = 0.0
+                elif self.settle_since is not None and now - self.settle_since >= 1.0 and now >= self.retry_at:
                     # Two stable reads are not enough during rapid input/EDID
                     # switching. Require a quiet second before requesting moves.
-                    if service.reflow(current):
-                        self.settle_since = None
+                    try:
+                        if service.reflow(current):
+                            self.settle_since = None
+                            self.retry_at = self.retry_delay = 0.0
+                    except Exception as error:
+                        # Each attempt can hold the display lock for seconds
+                        # of readback. Retry ever less often, and still settle
+                        # power and topology below before reporting it.
+                        failure = error
+                        self.retry_delay = min(60.0, self.retry_delay * 2 or 2.0)
+                        self.retry_at = now + self.retry_delay
         elif service.configuration:
             self.geometry = None
             self.settle_since = None
         service.settle_power()
         self.previous = topology
+        if failure:
+            raise failure
         return True
 
 

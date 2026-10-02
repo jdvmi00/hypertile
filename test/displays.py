@@ -45,6 +45,14 @@ class Fake:
             self.fail = False
             raise DisplayError('Injected apply failure')
         self.current = [dict(d, awake=m['awake']) if m['connector'] == d['connector'] else m for m in self.current]
+    def reposition(self, d):
+        self.calls.append(('reposition', d['connector'], d['x'], d['y']))
+        if self.fail:
+            self.fail = False
+            raise DisplayError('Injected apply failure')
+        for m in self.current:
+            if m['connector'] == d['connector']:
+                m.update(x=d['x'], y=d['y'])
     def verify(self, desired, *, resolve_modes=False):
         from adapter import automatic_readback, same
         if not all(any(m['connector'] == d['connector'] and

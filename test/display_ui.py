@@ -1,8 +1,8 @@
 """Opt-in Displays QML smoke test with simulated outputs, on an Omarchy session.
 
 No physical display or user configuration is changed. A disposable preview
-window exercises immediate switching, saved-display removal, catalog refresh,
-and Switch back.
+window exercises the automatic refresh, immediate switching, saved-display
+removal, catalog refresh, and Switch back.
 Pass --screenshots DIRECTORY to retain before/after panel images.
 """
 import argparse
@@ -35,7 +35,7 @@ displays.append(dict(displays[0], id='old-display', connector='OLD-DP', connecte
 (root/'state.json').write_text(json.dumps(dict(version=1,displays=displays,workspaces=[],confirmed=dict(workspaces={}),pending=None)))
 ctl=root/'ctl'
 ctl.write_text('''#!/usr/bin/env python3
-import json, sys
+import json, sys, time
 from pathlib import Path
 path=Path(__file__).with_name('state.json')
 state=json.loads(path.read_text())
@@ -53,6 +53,15 @@ elif sys.argv[2]=='remove-display':
     path.write_text(json.dumps(state))
     result=dict(removed=identity,message='Saved display removed.')
 elif sys.argv[2] in ('preview','keep'): raise RuntimeError('Immediate removal must not request Preview or Keep')
+elif sys.argv[2]=='list':
+    hold = path.with_name('hold-list')
+    if hold.exists():
+        path.with_name('list-started').touch()
+        deadline = time.monotonic() + 10
+        while hold.exists() and time.monotonic() < deadline:
+            time.sleep(.02)
+        path.with_name('list-released').touch()
+    result=state
 else: result=state
 print(json.dumps(result))
 ''')
@@ -98,9 +107,44 @@ ShellRoot {
             selectedIndex: 1
         }
     }
+    QtObject {
+        id: probe
+        property int drafts: 0
+        function find(label) {
+            var items = [pane];
+            while (items.length) {
+                var item = items.pop();
+                if (item.accessibleLabel === label)
+                    return item;
+                for (var i = 0; item.children && i < item.children.length; i++)
+                    items.push(item.children[i]);
+            }
+            return null;
+        }
+    }
+    Connections {
+        target: pane
+        function onDraftChanged() { probe.drafts++; }
+    }
     IpcHandler {
         target: "preview"
-        function state(): string { return JSON.stringify({catalog:pane.catalog,draft:pane.draft,dirty:pane.dirty,pending:pane.pending,previous:pane.previousSource,error:pane.error,notice:pane.notice,busy:pane.busy}); }
+        function state(): string { return JSON.stringify({catalog:pane.catalog,draft:pane.draft,dirty:pane.dirty,pending:pane.pending,previous:pane.previousSource,error:pane.error,notice:pane.notice,busy:pane.busy,drafts:probe.drafts,engaged:!!pane.engaged}); }
+        // A half-typed coordinate: "-" is not yet a number, so nothing commits.
+        function select(index: int): void { pane.selectedIndex = index; }
+        function refresh(): void { pane.refresh(); }
+        function type(): string {
+            var field = probe.find("X position");
+            field.remove(0, field.length);
+            field.insert(0, "-");
+            field.textEdited();
+            return field.text;
+        }
+        function typed(): string { return probe.find("X position").text; }
+        function leave(): void { probe.find("X position").editingFinished(); }
+        function list(open: bool): void {
+            var popup = probe.find("Display rotation").popup;
+            if (open) popup.open(); else popup.close();
+        }
         function use(): void { pane.useDisplay(pane.selectedDisplay.connector); }
         function back(): void { pane.useDisplay(pane.previousSource); }
         function automatic(): string {
@@ -154,6 +198,73 @@ try:
     time.sleep(.3)
     ipc('snapshot',str(images / 'mirror-before.png'))
     time.sleep(.4)
+    def move(x):
+        external = json.loads((root/'state.json').read_text())
+        external['displays'][0]['x'] = x
+        (root/'state.json').write_text(json.dumps(external))
+    def settled(condition):
+        deadline = time.monotonic() + 6
+        while time.monotonic() < deadline:
+            state = json.loads(ipc('state'))
+            if condition(state): return state
+            time.sleep(.2)
+        raise AssertionError(state)
+    drafts = json.loads(ipc('state'))['drafts']
+    time.sleep(4.5)
+    assert json.loads(ipc('state'))['drafts'] == drafts, 'An unchanged catalog must not replace the draft'
+    move(640)
+    settled(lambda s: s['draft']['displays'][0]['x'] == 640 and not s['dirty'])
+    ipc('select', '0')
+    assert ipc('type').strip() == '-'
+    move(0)
+    time.sleep(4.5)
+    state = json.loads(ipc('state'))
+    assert state['engaged'] and state['draft']['displays'][0]['x'] == 640 and ipc('typed').strip() == '-', state
+    ipc('leave')
+    state = settled(lambda s: s['draft']['displays'][0]['x'] == 0)
+    assert not state['engaged'] and not state['dirty'] and ipc('typed').strip() == '0', state
+    ipc('list', 'true')
+    move(640)
+    time.sleep(4.5)
+    state = json.loads(ipc('state'))
+    assert state['engaged'] and state['draft']['displays'][0]['x'] == 0, state
+    ipc('list', 'false')
+    move(0)
+    time.sleep(.3)
+    state = settled(lambda s: not s['engaged'] and s['catalog']['displays'][0]['x'] == 0 and s['draft']['displays'][0]['x'] == 0)
+    for editing in ('field', 'list'):
+        # Start input only after the service has captured a changed catalog,
+        # then release its response while the control is still in use.
+        hold = root / 'hold-list'
+        started = root / 'list-started'
+        released = root / 'list-released'
+        started.unlink(missing_ok=True)
+        released.unlink(missing_ok=True)
+        hold.touch()
+        move(640)
+        ipc('refresh')
+        settled(lambda s: started.exists())
+        if editing == 'field':
+            assert ipc('type').strip() == '-'
+        else:
+            ipc('list', 'true')
+        hold.unlink()
+        settled(lambda s: released.exists())
+        # Allow the released response and another timer tick to be handled.
+        time.sleep(2.5)
+        state = json.loads(ipc('state'))
+        assert state['engaged'] and not state['dirty'], state
+        assert state['catalog']['displays'][0]['x'] == state['draft']['displays'][0]['x'] == 0, state
+        if editing == 'field':
+            assert ipc('typed').strip() == '-'
+            ipc('leave')
+        else:
+            ipc('list', 'false')
+        settled(lambda s: s['catalog']['displays'][0]['x'] == s['draft']['displays'][0]['x'] == 640)
+        move(0)
+        settled(lambda s: s['catalog']['displays'][0]['x'] == s['draft']['displays'][0]['x'] == 0)
+    ipc('select', '1')
+    print('PASS: the open pane follows external changes, keeps an unchanged draft, and defers new or in-flight refreshes during input')
     ipc('use')
     deadline=time.monotonic()+5
     while time.monotonic()<deadline:

@@ -109,6 +109,11 @@ def declarations(source):
     return rules
 
 
+def declares_monitors(source):
+    values = [t[0] for t in tokens(source)]
+    return any(values[i:i + 3] == ['hl', '.', 'monitor'] for i in range(len(values)))
+
+
 def rule_for(rules, display):
     """The specific declaration Hyprland applies to this output: the last one
     whose selector matches, by connector or by description prefix (Hyprland's
@@ -120,6 +125,35 @@ def rule_for(rules, display):
         if selector == display['connector'] or (selector.startswith('desc:') and description.startswith(selector[5:].strip())):
             chosen = selector
     return chosen
+
+
+def normalize_placement_source(source):
+    """Canonicalize string quotes, including journals written by older versions."""
+    if source is None:
+        return None
+    result = {}
+    for path, rules in source.items():
+        result[path] = []
+        for selector, fields in rules:
+            normalized = {}
+            for key, values in fields.items():
+                if (key in ('position', 'mirror') and len(values) == 1
+                        and re.fullmatch(r"([\"'])[^\"'\\]*\1", values[0])):
+                    values = [lua_string(values[0][1:-1])]
+                normalized[key] = values
+            result[path].append([selector, normalized])
+    return result
+
+
+def declared_position(source, display):
+    """What each file of a placement_source() says about this output's position."""
+    result = {}
+    for path, declared in source.items():
+        rules = dict(declared)
+        rule = rules.get(rule_for(rules, display) or '')
+        if rule and 'position' in rule:
+            result[path] = rule['position']
+    return result
 
 
 def replace(path, content):
@@ -171,10 +205,21 @@ class Configuration:
         visit(self.root / 'hyprland.lua')
         return seen
 
-    def uses_connector_rule(self, display):
-        """Only the winning rule can supply omitted fields in a partial update."""
+    def uses_connector_rule(self, display, *, source=None):
+        """Only an unopposed connector rule can supply a partial update's fields.
+
+        Imports can occur between declarations. If another module also names
+        this output, leave it to that owner rather than guessing rule order.
+        A placement snapshot can supply the already parsed selectors.
+        """
         try:
-            return rule_for(declarations(self.path.read_text()), display) == display['connector']
+            if source is None:
+                source = {path: declarations(body) for path, body in self.sources().items()
+                          if declares_monitors(body)}
+            if rule_for(dict(source.get(str(self.path), {})), display) != display['connector']:
+                return False
+            return not any(rule_for(dict(rules), display) is not None
+                           for path, rules in source.items() if path != str(self.path))
         except (OSError, DisplayError):
             return False
 
@@ -210,7 +255,7 @@ class Configuration:
             raise DisplayError('The monitor configuration is not loaded.')
         result = {}
         for path, source in sources.items():
-            if not any(t[0] == 'monitor' for t in tokens(source)):
+            if not declares_monitors(source):
                 continue
             rules = declarations(source)
             if rules:
@@ -227,23 +272,24 @@ class Configuration:
                                            for key, (a, b) in rule['fields'].items()
                                            if key in ('position', 'disabled', 'mirror')}]
                                 for selector, rule in rules.items()]
-        return result
+        return normalize_placement_source(result)
 
-    def positions_match(self, displays):
-        """Recognize saved coordinates restored by a config reload.
+    def positions(self, displays):
+        """Literal coordinates declared for each output, by connector.
 
-        Also permits adoption of pre-placement-journal confirmed settings,
-        but never guesses what an automatic/computed declaration resolves to.
+        Recognizes saved coordinates restored by a config reload and permits
+        adoption of pre-placement-journal confirmed settings. None marks an
+        automatic/computed declaration; never guess what it resolves to.
         """
         source = self.path.read_text()
         rules = declarations(source)
+        result = {}
         for display in displays:
             rule = rules.get(rule_for(rules, display) or '')
             span = rule['fields'].get('position') if rule else None
             literal = re.fullmatch(r"([\"'])(-?\d+)x(-?\d+)\1", source[span[0]:span[1]]) if span else None
-            if not literal or (int(literal[2]), int(literal[3])) != (display['x'], display['y']):
-                return False
-        return bool(displays)
+            result[display['connector']] = (int(literal[2]), int(literal[3])) if literal else None
+        return result
 
     def plan(self, before, document):
         baseline = {d['connector']: d for d in before}
@@ -283,10 +329,8 @@ class Configuration:
         if str(self.path) not in sources:
             raise DisplayError(f'{self.path} must be loaded with require("hypr.monitors") before display settings can be saved')
         for path, source in sources.items():
-            if path != str(self.path):
-                vs = [t[0] for t in tokens(source)]
-                if any(vs[i:i + 3] == ['hl', '.', 'monitor'] for i in range(len(vs))):
-                    raise DisplayError(f'Display rules in {path} also control monitors. Move those rules to {self.path} to edit them here.')
+            if path != str(self.path) and declares_monitors(source):
+                raise DisplayError(f'Display rules in {path} also control monitors. Move those rules to {self.path} to edit them here.')
         source = sources[str(self.path)]
         try:
             rules = declarations(source)
@@ -324,20 +368,26 @@ class Configuration:
             any(key in fields for key in ('position', 'scale', 'transform', 'disabled', 'mirror'))
             or any(d[n] != baseline.get(d['connector'], {}).get(n) for n in ('width', 'height'))
             for d, fields in changes)
-        if arrangement_changed:
-            changed = {d['connector']: fields for d, fields in changes}
-            for d in document['displays']:
-                if not d['enabled'] or d.get('mirror_of') or not d.get('connected', True):
+        changed = {d['connector']: fields for d, fields in changes}
+        for d in document['displays']:
+            if not d['enabled'] or d.get('mirror_of') or not d.get('connected', True):
+                continue
+            selector = rule_for(rules, d)
+            rule = rules.get(selector or '')
+            span = rule['fields'].get('position') if rule else None
+            literal = re.fullmatch(r"([\"'])(-?\d+)x(-?\d+)\1", source[span[0]:span[1]]) if span else None
+            if literal:
+                # Edge adjustment and runtime moves leave the declaration
+                # behind the live position. The reload after this save would
+                # otherwise snap the output back and fail its verification.
+                if (int(literal[2]), int(literal[3])) == (d['x'], d['y']) or (selector != d['connector'] and d.get('ambiguous')):
                     continue
-                rule = rules.get(rule_for(rules, d) or '')
-                span = rule['fields'].get('position') if rule else None
-                position = source[span[0]:span[1]] if span else ''
-                if re.fullmatch(r"([\"'])-?\d+x-?\d+\1", position):
-                    continue
-                if d['connector'] not in changed:
-                    changed[d['connector']] = {}
-                    changes.append((d, changed[d['connector']]))
-                changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
+            elif not arrangement_changed:
+                continue
+            if d['connector'] not in changed:
+                changed[d['connector']] = {}
+                changes.append((d, changed[d['connector']]))
+            changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
         edits = []
         additions = []
         removed_selectors = set()

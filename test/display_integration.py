@@ -146,6 +146,37 @@ hl.monitor({output="WAYLAND-2", mode="1280x720@60", position="1280x0", scale=1})
                         settled(1280, 1280)
                         assert not ctl('configerrors').strip(), ctl('configerrors')
                         print('PASS: full/split/full placement, external mode preservation, reload and watcher restart', flush=True)
+                        stop_watcher()
+                        daemon = None
+                        # A later imported description rule shadows the exact
+                        # connector rules. Updating either connector would
+                        # revive its old mode. Auto-left also moves the anchor
+                        # on resize, so an unsafe reflow would request a move.
+                        config.write_text(config.read_text() + 'require("hypr.override")\n')
+                        override = root / 'config/hypr/override.lua'
+                        for width in (640, 320):
+                            override.write_text('hl.monitor({output="desc:",mode="' + str(width) +
+                                                'x720@60",position="auto-left",scale=1})\n')
+                            ctl('reload')
+                            time.sleep(.2)
+                            def geometry(monitors):
+                                return {m.get('name', m.get('connector')): (m['width'], m['x'], m['y'])
+                                        for m in monitors}
+                            expected = geometry(json.loads(ctl('-j', 'monitors')))
+                            assert all(value[0] == width for value in expected.values()), expected
+                            if daemon is None:
+                                daemon = start_watcher()
+                            deadline = time.monotonic() + 12
+                            while time.monotonic() < deadline:
+                                state = json.loads(journal.read_text())
+                                if not state.get('applying') and geometry(state['last']) == expected:
+                                    break
+                                time.sleep(.2)
+                            else:
+                                raise AssertionError(('imported rule did not settle', state))
+                            assert geometry(json.loads(ctl('-j', 'monitors'))) == expected
+                        assert not ctl('configerrors').strip(), ctl('configerrors')
+                        print('PASS: imported description rules keep their modes and automatic positions', flush=True)
                     finally:
                         stop_watcher()
                     return

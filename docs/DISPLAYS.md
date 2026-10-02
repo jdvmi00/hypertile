@@ -44,8 +44,14 @@ bottom and center alignment are retained; a staggered edge keeps its offset.
 The display service waits for the outputs to settle before moving them. It
 keeps intentional gaps fixed, excludes disabled and mirrored outputs, and
 retains missing displays' relationships for reconnect. If resizing an uneven
-grid creates a conflict, it uses the closest free position. The diagram
-refreshes automatically while there are no unsaved edits.
+grid creates a conflict, it uses the closest free position. Only a display with
+its own connector rule in `monitors.lua` is moved: Hyprland can change a
+position alone only in such a rule. A display placed by a `desc:` or fallback
+rule stays where that rule puts it, and its neighbours follow it. An output
+with a matching rule in another loaded module also stays fixed, so a position
+adjustment cannot revive a shadowed mode or scale. The diagram refreshes
+automatically while there are no unsaved edits and no field or list
+is in use.
 
 Saved screens that are disconnected remain visible, with their preferences retained.
 If screens report the same identity, explicitly match each connector before
@@ -259,8 +265,10 @@ the save to stop and ask you to refresh, rather than overwrite them.
 Configuration reloads and reconnects use Hyprland's saved mode, scale, rotation,
 power and mirroring rules. Hypertile remembers the confirmed adjoining edges
 in a separate placement journal and adjusts positions using the current sizes;
-it never replays old resolutions during this adjustment. Manual position or
-topology edits in the configuration establish a new reference arrangement.
+it never replays old resolutions during this adjustment. A position you edit
+in the configuration moves that display in the remembered arrangement; the
+other displays keep their edges. Keep saves the positions shown in the preview,
+adjusted ones included, so its reload does not move a display back.
 Display previews suspend this adjustment until Keep or Revert finishes.
 Disabling or uninstalling Hypertile leaves the last saved monitor configuration
 usable, including on purge; automatic edge adjustment requires its service.

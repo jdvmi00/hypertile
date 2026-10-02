@@ -58,13 +58,15 @@ def aligned(start, size, old_start, old_size, other_start, other_size, new_size)
     return start + other_start - old_start
 
 
-def project(reference, current):
+def project(reference, current, fixed=()):
     """Resolve a deterministic forest of adjoining edges, without moving modes.
 
     Unattached/manual positions are fixed. Missing, disabled and mirrored
     outputs do not occupy space or become anchors. In an overconstrained layout
     (e.g. an uneven grid after rotation), keep the closest free edge position.
     Always solve from the reference so repeated size changes cannot drift.
+    Connectors in `fixed` cannot be moved: they stay where they are and anchor
+    their neighbours.
     """
     refs, live = {}, {}
     used = set()
@@ -82,26 +84,33 @@ def project(reference, current):
                    and (direction := edge(refs[key], refs[other]))] for key in refs}
     managed = {key for key in refs if links[key]}
     connectors = {live[key]['connector'] for key in managed}
+    movable = {key for key in managed if live[key]['connector'] not in fixed}
     obstacles = [d for d in current if active(d)
-                 and d['connector'] not in connectors]
-    order = sorted(managed, key=lambda key: (abs(refs[key]['x']) + abs(refs[key]['y']),
+                 and d['connector'] not in connectors] + [live[key] for key in managed - movable]
+    order = sorted(managed, key=lambda key: (key in movable, abs(refs[key]['x']) + abs(refs[key]['y']),
                                             refs[key]['x'], refs[key]['y'], refs[key]['connector']))
     seen = set()
     for root in order:
         if root in seen:
             continue
-        live[root].update(x=refs[root]['x'], y=refs[root]['y'])
+        if root in movable:
+            live[root].update(x=refs[root]['x'], y=refs[root]['y'])
         seen.add(root)
         queue = deque([root])
         while queue:
             key = queue.popleft()
             parent = live[key]
-            place(parent, obstacles)
-            obstacles.append(parent)
+            if key in movable:
+                place(parent, obstacles)
+                obstacles.append(parent)
             x, y, width, height = bounds(parent)
             ox, oy, ow, oh = bounds(refs[key])
             for child, direction in sorted(links[key]):
                 if child in seen:
+                    continue
+                seen.add(child)
+                queue.append(child)
+                if child not in movable:
                     continue
                 target = live[child]
                 cx, cy, cw, ch = bounds(refs[child])
@@ -112,7 +121,13 @@ def project(reference, current):
                 else:
                     target['y'] = y + height if direction == 'down' else y - nh
                     target['x'] = aligned(x, width, ox, ow, cx, cw, nw)
-                seen.add(child)
-                queue.append(child)
     resolved = {live[key]['connector']: live[key] for key in managed}
     return [resolved.get(d['connector'], dict(d)) for d in current]
+
+
+def rebase(reference, current, fixed=()):
+    """Restate the reference at the current sizes, so that outputs repositioned
+    in the configuration join it in one frame. Outputs that are absent,
+    disabled or mirrored now keep their entry until they return."""
+    held = [d for d in reference if not ((actual := match(d, current)) and active(actual))]
+    return snapshot([d for d in project(reference, current, fixed) if active(d)] + held)

@@ -52,6 +52,12 @@ Card {
     // The "scroll for more" strip at the foot of the inspector.
     readonly property int scrollHint: Math.round(overlay.uiCaption * 2.4)
     property bool dirty: false
+    // A control holding input the draft has not received yet: a half-typed
+    // field or an open list. The periodic refresh waits for it.
+    property var engaged: null
+    // The last catalog as text. An identical answer leaves the catalog and
+    // the draft alone, so lists keep their place between refreshes.
+    property string catalogText: ""
     property bool closeAfterRevert: false
     property bool confirmingDiscard: false
     property string identifyConnector: ""
@@ -400,7 +406,7 @@ Card {
         repeat: true
         onTriggered: {
             pane.clock = Date.now() / 1000;
-            if (pane.pending || !pane.dirty)
+            if (pane.pending || !(pane.dirty || pane.engaged))
                 pane.refresh();
         }
     }
@@ -422,7 +428,15 @@ Card {
             }
             try {
                 var value = JSON.parse(queryOutput.text);
-                pane.catalog = value;
+                // Input may have started after this query was launched. The
+                // next poll can refresh it after editing; previews still need
+                // their safety controls and countdown immediately.
+                if (pane.engaged && !pane.pending && !value.pending)
+                    return;
+                if (queryOutput.text !== pane.catalogText) {
+                    pane.catalogText = queryOutput.text;
+                    pane.catalog = value;
+                }
                 if (pane.pending && !value.pending) {
                     pane.dirty = false;
                     pane.notice = value.recovery && value.recovery.fallback ? "Preview ended. Recovered onto an available display because the previous arrangement is unavailable." : value.recovery && value.recovery.external && value.recovery.external.length ? "Preview ended. Newer external changes were preserved." : "Preview ended. Display settings refreshed.";
@@ -447,17 +461,20 @@ Card {
                 if (!pane.dirty && !pane.pending) {
                     var preferences = value.confirmed || {};
                     var selectedId = pane.selectedDisplay ? pane.selectedDisplay.id : null;
-                    pane.draft = {
+                    var fresh = {
                         version: 1,
                         displays: Displays.clone(value.displays || []),
                         workspaces: Displays.clone(preferences.workspaces || {})
                     };
-                    // Connected displays list first, so a reconnect can reorder
-                    // the catalog; the selection follows the display, not its slot.
-                    var kept = pane.draft.displays.findIndex(function (d) {
-                        return d.id === selectedId;
-                    });
-                    pane.selectedIndex = kept >= 0 ? kept : Math.min(pane.selectedIndex, Math.max(0, pane.draft.displays.length - 1));
+                    if (JSON.stringify(fresh) !== JSON.stringify(pane.draft)) {
+                        pane.draft = fresh;
+                        // Connected displays list first, so a reconnect can reorder
+                        // the catalog; the selection follows the display, not its slot.
+                        var kept = pane.draft.displays.findIndex(function (d) {
+                            return d.id === selectedId;
+                        });
+                        pane.selectedIndex = kept >= 0 ? kept : Math.min(pane.selectedIndex, Math.max(0, pane.draft.displays.length - 1));
+                    }
                 }
                 // An output that fell asleep, from here or elsewhere, must not keep the overlay.
                 pane.overlay.placeDisplayConfirmation();
@@ -570,8 +587,15 @@ Card {
     component Entry: Controls.TextField {
         property string accessibleLabel: placeholderText
         Accessible.name: accessibleLabel
-        onActiveFocusChanged: if (activeFocus)
-            pane.reveal(this)
+        onActiveFocusChanged: {
+            if (activeFocus)
+                pane.reveal(this);
+            else if (pane.engaged === this)
+                pane.engaged = null;
+        }
+        onTextEdited: pane.engaged = this
+        onEditingFinished: if (pane.engaged === this)
+            pane.engaged = null
         color: pane.fg
         placeholderTextColor: pane.muted
         selectByMouse: true
@@ -633,6 +657,9 @@ Card {
             width: choice.width
             padding: Style.spacing.xs
             implicitHeight: Math.min(pane.height * .55, choices.contentHeight + Style.spacing.xs * 2)
+            onOpened: pane.engaged = choice
+            onClosed: if (pane.engaged === choice)
+                pane.engaged = null
             contentItem: ListView {
                 id: choices
                 clip: true

@@ -257,6 +257,14 @@ class Adapter:
             fields += ['disabled=true']
         self.run('eval', 'hl.monitor({' + ','.join(fields) + '})')
 
+    def reposition(self, d):
+        # hl.monitor merges a partial request into the rule of the same name
+        # and keeps its other fields. Without such a rule the omitted settings
+        # fall back to defaults, so callers send this only to an output whose
+        # own connector rule is the one Hyprland applies.
+        self.run('eval', 'hl.monitor({output=' + lua_string(d['connector']) +
+                 ',position=' + lua_string(f"{d['x']}x{d['y']}") + '})')
+
     def verify(self, desired, *, resolve_modes=False):
         # A modeset or mirror can take a few seconds to show in the readback,
         # on real panels and on a loaded compositor alike; exact matches return

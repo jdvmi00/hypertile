@@ -11,7 +11,7 @@ from unittest.mock import Mock, patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
 from adapter import bounds, DisplayError
 from configuration import Configuration
-from placement import project, snapshot
+from placement import project, rebase, snapshot
 from service import Service, Watcher, atomic, read
 from displays import display, Fake
 
@@ -86,6 +86,24 @@ class GeometryTests(unittest.TestCase):
                 bx, by, bw, bh = bounds(b)
                 self.assertFalse(min(ax + aw, bx + bw) > max(ax, bx) and min(ay + ah, by + bh) > max(ay, by))
 
+    def test_fixed_outputs_stay_and_anchor_their_neighbours(self):
+        saved = [panel('HDMI-A-1'), panel('DP-1', 4608), panel('DP-2', 9216)]
+        current = [dict(d, width=3072) for d in saved]
+        self.assertEqual(positions(project(saved, current, fixed={'DP-1'})),
+                         {'HDMI-A-1': (2304, 0), 'DP-1': (4608, 0), 'DP-2': (6912, 0)})
+        self.assertEqual(positions(project(saved, current, fixed={'HDMI-A-1', 'DP-2'})),
+                         {'HDMI-A-1': (0, 0), 'DP-1': (2304, 0), 'DP-2': (9216, 0)})
+
+    def test_rebase_restates_live_outputs_and_holds_inactive_ones(self):
+        saved = [panel('HDMI-A-1'), panel('DP-1', 4608), panel('DP-2', 9216), panel('DP-3', 13824)]
+        current = [dict(d, width=3072) for d in saved[:3]] + [panel('DP-5', 20000)]
+        current[2].update(enabled=False)
+        result = rebase(saved, current)
+        self.assertEqual(positions(result), {'HDMI-A-1': (0, 0), 'DP-1': (2304, 0), 'DP-2': (9216, 0),
+                                             'DP-3': (13824, 0), 'DP-5': (20000, 0)})
+        self.assertEqual([(d['width'], d['enabled']) for d in result],
+                         [(3072, True), (6144, True), (6144, True), (6144, True), (3072, True)])
+
 
 class ServiceTests(unittest.TestCase):
     def setUp(self):
@@ -119,6 +137,19 @@ class ServiceTests(unittest.TestCase):
     def reflow(self):
         return self.service.reflow(self.adapter.displays())
 
+    def reload(self):
+        """Hyprland returns every output to its declared coordinates."""
+        declared = self.config.positions(self.adapter.current)
+        for d in self.adapter.current:
+            if declared[d['connector']]:
+                d['x'], d['y'] = declared[d['connector']]
+
+    def split(self):
+        self.reflow()
+        self.resize(3072)
+        self.reflow()
+        self.assertEqual(self.adapter.current[1]['x'], 2304)
+
     def test_restart_and_reload_keep_original_relationships(self):
         self.reflow()
         self.resize(3072)
@@ -145,6 +176,67 @@ class ServiceTests(unittest.TestCase):
         self.resize(6144)
         self.reflow()
         self.assertEqual(self.adapter.current[1]['x'], 4608)
+
+    def test_quote_only_config_edit_preserves_edges(self):
+        self.split()
+        reference = read(self.service.directory / 'placement.json')['reference']
+        self.config.path.write_text(self.source.replace('"', "'"))
+        self.reload()
+        self.reflow()
+        self.assertEqual(self.adapter.current[1]['x'], 2304)
+        self.assertEqual(read(self.service.directory / 'placement.json')['reference'], reference)
+        for width, right in ((6144, 4608), (3072, 2304)):
+            self.resize(width)
+            self.reflow()
+            self.assertEqual(self.adapter.current[1]['x'], right)
+
+    def test_old_single_quoted_snapshots_are_adopted(self):
+        source = self.config.placement_source()
+        for rules in source.values():
+            for _, fields in rules:
+                for key in ('position', 'mirror'):
+                    if key in fields:
+                        fields[key] = ["'" + fields[key][0][1:-1] + "'"]
+        self.saved['placement_source'] = source
+        atomic(self.service.confirmed_path, self.saved)
+        self.resize(3072)
+        self.reflow()  # No placement journal yet; adopt the confirmed reference.
+        self.assertEqual(self.adapter.current[1]['x'], 2304)
+        path = self.service.directory / 'placement.json'
+        state = read(path)
+        state['source'] = source
+        atomic(path, state)
+        self.reload()
+        self.reflow()  # A previous process wrote a journal with single quotes.
+        self.assertEqual(self.adapter.current[1]['x'], 2304)
+        self.assertEqual(read(path)['reference'], state['reference'])
+
+    def test_runtime_move_retains_inactive_neighbours_reference(self):
+        for inactive in ('disabled', 'mirrored', 'absent'):
+            with self.subTest(inactive=inactive):
+                self.adapter.current = copy.deepcopy(self.saved['displays'])
+                (self.service.directory / 'placement.json').unlink(missing_ok=True)
+                self.reflow()
+                right = copy.deepcopy(self.adapter.current[1])
+                if inactive == 'disabled':
+                    self.adapter.current[1].update(enabled=False, width=0, height=0)
+                elif inactive == 'mirrored':
+                    self.adapter.current[1].update(mirror_of=self.adapter.current[0]['id'],
+                                                   mirror_connector='HDMI-A-1', x=0)
+                else:
+                    self.adapter.current.pop()
+                self.reflow()
+                self.adapter.current[0]['y'] = 100
+                self.reflow()
+                reference = read(self.service.directory / 'placement.json')['reference']
+                self.assertEqual(next(d for d in reference if d['connector'] == right['connector']),
+                                 snapshot([right])[0])
+                self.adapter.current = [self.adapter.current[0], right]
+                self.reflow()
+                self.resize(3072)
+                self.reflow()
+                self.assertEqual(positions(self.adapter.current),
+                                 {'HDMI-A-1': (0, 100), 'DP-1': (2304, 0)})
 
     def test_manual_config_and_runtime_positions_win(self):
         for source_edit in (False, True):
@@ -185,18 +277,131 @@ class ServiceTests(unittest.TestCase):
         self.reflow()
         self.assertEqual(self.adapter.current[1]['x'], 2304)
 
-    def test_reposition_preserves_native_mode_and_other_live_settings(self):
+    def test_reposition_requests_only_a_position(self):
         self.reflow()
         self.resize(3072)
         self.adapter.current[1]['awake'] = False
-        original = self.adapter.apply
-        self.adapter.apply = Mock(wraps=original)
         self.reflow()
-        self.adapter.apply.assert_called_once()
-        args, kwargs = self.adapter.apply.call_args
-        self.assertEqual(kwargs, dict(preserve_mode=True))
-        self.assertEqual((args[0]['width'], args[0]['mode_policy']), (3072, 'highres'))
+        self.assertEqual(self.adapter.calls, [('reposition', 'DP-1', 2304, 0)])
         self.assertFalse(self.adapter.current[1]['awake'])
+
+    def test_output_without_its_own_rule_is_not_moved_and_anchors_its_neighbour(self):
+        # A partial request would reset the mode, scale and rotation that such
+        # an output inherits from a fallback or description rule.
+        fallback = 'hl.monitor({output="", mode="preferred", position="auto", scale=omarchy_monitor_scale})\n'
+        for own, moved in (('DP-1', ('DP-1', 2304, 0)), ('HDMI-A-1', ('HDMI-A-1', 2304, 0))):
+            with self.subTest(own=own):
+                self.adapter.calls.clear()
+                self.resize(6144)
+                self.adapter.current[0]['x'], self.adapter.current[1]['x'] = 0, 4608
+                (self.service.directory / 'placement.json').unlink(missing_ok=True)
+                self.config.path.write_text(fallback + next(
+                    line for line in self.source.splitlines() if own in line) + '\n')
+                self.reflow()
+                self.resize(3072)
+                self.reflow()
+                self.assertEqual(self.adapter.calls, [('reposition', *moved)])
+
+    def test_imported_matching_rule_keeps_output_fixed(self):
+        self.adapter.current[1]['description'] = 'Dell right'
+        (self.config.root / 'hyprland.lua').write_text('require("hypr.monitors")\nrequire("hypr.override")\n')
+        (self.config.root / 'override.lua').write_text(
+            'hl.monitor({output="desc:Dell right", mode="highres", position="4608x0", scale=4/3})\n')
+        self.assertFalse(self.config.uses_connector_rule(self.adapter.current[1]))
+        self.assertTrue(self.config.uses_connector_rule(self.adapter.current[0]))
+        self.reflow()
+        self.resize(3072)
+        self.reflow()
+        self.assertEqual(self.adapter.calls, [('reposition', 'HDMI-A-1', 2304, 0)])
+        self.assertEqual(positions(self.adapter.current),
+                         {'HDMI-A-1': (2304, 0), 'DP-1': (4608, 0)})
+        self.assertEqual([d['width'] for d in self.adapter.current], [3072, 3072])
+
+    def test_unrelated_imported_rule_does_not_disable_placement(self):
+        (self.config.root / 'hyprland.lua').write_text('require("hypr.monitors")\nrequire("hypr.extra")\n')
+        (self.config.root / 'extra.lua').write_text('hl.monitor({output="DP-7", position="30000x0"})\n')
+        self.assertTrue(self.config.uses_connector_rule(self.adapter.current[1]))
+        self.split()
+
+    def test_keep_after_an_edge_adjustment_saves_the_live_position(self):
+        self.adapter.reload = self.reload
+        self.split()
+        doc = dict(version=1, displays=self.adapter.displays(), workspaces={})
+        doc['displays'][1]['transform'] = 1
+        preview = self.service.preview(doc, watchdog=False)
+        self.service.keep(preview['token'])
+        self.assertIn('position="2304x0"', self.config.path.read_text())
+        self.assertEqual((self.adapter.current[1]['x'], self.adapter.current[1]['transform']), (2304, 1))
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_removal_after_an_edge_adjustment_survives_its_reload(self):
+        self.adapter.reload = self.reload
+        absent = panel('DP-9', 20000)
+        self.saved['displays'].append(absent)
+        atomic(self.service.confirmed_path, self.saved)
+        self.config.path.write_text(self.source + 'hl.monitor({output="DP-9", mode="preferred", position="20000x0", scale=1})\n')
+        self.split()
+        self.service.remove_display(absent['id'], watchdog=False)
+        self.assertNotIn('DP-9', self.config.path.read_text())
+        self.assertEqual(self.adapter.current[1]['x'], 2304)
+        self.assertEqual(len(read(self.service.confirmed_path)['displays']), 2)
+
+    def test_reload_is_not_a_manual_move_beside_disabled_or_automatic_outputs(self):
+        extra = dict(disabled=(panel('DP-2', 9216, enabled=False), 'hl.monitor({output="DP-2", disabled=true})\n'),
+                     automatic=(panel('DP-2', 12000), 'hl.monitor({output="", mode="preferred", position="auto", scale=1})\n'))
+        for name, (third, rule) in extra.items():
+            with self.subTest(third=name):
+                self.resize(6144)
+                self.adapter.current = self.adapter.current[:2] + [third]
+                self.adapter.current[1]['x'] = 4608
+                (self.service.directory / 'placement.json').unlink(missing_ok=True)
+                self.config.path.write_text(rule + self.source)
+                self.saved['displays'] = self.adapter.displays()
+                atomic(self.service.confirmed_path, self.saved)
+                self.split()
+                self.reload()
+                self.assertEqual(self.adapter.current[1]['x'], 4608)
+                self.reflow()
+                self.assertEqual(self.adapter.current[1]['x'], 2304)
+                self.resize(6144)
+                self.reflow()
+                self.assertEqual(self.adapter.current[1]['x'], 4608)
+
+    def test_upgrade_adopts_saved_edges_despite_an_absent_saved_display(self):
+        self.saved['displays'].append(panel('DP-9', 20000))
+        atomic(self.service.confirmed_path, self.saved)
+        self.resize(3072)  # The first pass finds a transient split with the declared gap.
+        self.reflow()
+        self.assertEqual(self.adapter.current[1]['x'], 2304)
+
+    def test_unrelated_lua_naming_a_monitor_does_not_disable_placement(self):
+        (self.config.root / 'hyprland.lua').write_text('require("hypr.monitors")\nrequire("hypr.bindings")\n')
+        (self.config.root / 'bindings.lua').write_text(
+            'hl.bind("SUPER+M", function() hl.dispatch(hl.dsp.focus({monitor="+1"})) end)\n')
+        self.split()
+
+    def test_unrelated_config_edit_keeps_edges_and_an_edited_position_joins_them(self):
+        self.adapter.current.append(panel('DP-2', 9216))
+        self.source += 'hl.monitor({output="DP-2", mode="highres", position="9216x0", scale=4/3})\n'
+        self.config.path.write_text(self.source)
+        self.saved['displays'] = self.adapter.displays()
+        atomic(self.service.confirmed_path, self.saved)
+        self.split()
+        self.assertEqual(self.adapter.current[2]['x'], 4608)
+        # A rule for another monitor: nothing here was repositioned.
+        self.source += 'hl.monitor({output="DP-7", mode="preferred", position="30000x0", scale=1})\n'
+        self.config.path.write_text(self.source)
+        self.reload()
+        self.reflow()
+        self.assertEqual(positions(self.adapter.current), {'HDMI-A-1': (0, 0), 'DP-1': (2304, 0), 'DP-2': (4608, 0)})
+        # A deliberate gap for one output leaves the other edge attached.
+        self.config.path.write_text(self.source.replace('9216x0', '8000x0'))
+        self.reload()
+        self.reflow()
+        self.assertEqual(positions(self.adapter.current), {'HDMI-A-1': (0, 0), 'DP-1': (2304, 0), 'DP-2': (8000, 0)})
+        self.resize(2048)
+        self.reflow()
+        self.assertEqual(positions(self.adapter.current), {'HDMI-A-1': (0, 0), 'DP-1': (1536, 0), 'DP-2': (8000, 0)})
 
     def test_manual_move_after_failed_reflow_is_not_overwritten(self):
         self.reflow()
@@ -276,6 +481,47 @@ class ServiceTests(unittest.TestCase):
         watcher.tick([], 13)
         watcher.tick([], 14)
         self.assertEqual(self.adapter.current[1]['x'], 4608)
+
+    def test_watcher_reconciles_only_after_a_change_or_reload(self):
+        watcher = Watcher(self.service)
+        self.service.reflow = Mock(wraps=self.service.reflow)
+        watcher.tick([], 0)
+        watcher.tick([], 1)
+        self.assertEqual(self.service.reflow.call_count, 1, 'one pass after start-up')
+        atomic(self.service.power_path, dict(original=self.adapter.wake_options(), apply={}))
+        self.adapter.current[1]['awake'] = False
+        for now in (1.5, 2, 6, 11):
+            watcher.tick(['createworkspace>>5'], now)
+        self.assertEqual(self.service.reflow.call_count, 1, 'a settled desktop is not reconciled again')
+        watcher.tick(['configreloaded>>'], 12)
+        watcher.tick([], 13)
+        self.assertEqual(self.service.reflow.call_count, 2)
+        self.adapter.current[1]['awake'] = True
+        self.resize(3072)
+        watcher.tick([], 18)
+        watcher.tick([], 19)
+        self.assertEqual((self.service.reflow.call_count, self.adapter.current[1]['x']), (3, 2304))
+
+    def test_watcher_survives_a_failing_reflow_and_backs_off(self):
+        watcher = Watcher(self.service)
+        watcher.tick([], 0)
+        self.service.reflow = Mock(side_effect=DisplayError('readback timed out'))
+        self.service.settle_power = Mock(wraps=self.service.settle_power)
+        attempts = []
+        for now in (1, 1.5, 2, 2.5, 3, 3.5, 6, 6.5, 7, 7.5, 14.5, 15):
+            try:
+                watcher.tick([], now)
+            except DisplayError:
+                attempts.append(now)
+                self.assertIsNotNone(watcher.previous)
+        self.assertEqual(attempts, [1, 3, 7, 15], 'retries double their distance')
+        self.assertEqual(self.service.settle_power.call_count, 5, 'power settles on every pass, failed or due')
+        self.service.reflow = Mock(return_value=True)
+        watcher.tick([], 30.5)
+        self.service.reflow.assert_not_called()
+        watcher.tick([], 31)
+        self.service.reflow.assert_called_once()
+        self.assertFalse(watcher.tick([], 31.5), 'settled again')
 
     def test_idle_has_no_writes_or_mode_requests_and_unplug_retains_reference(self):
         self.reflow()
