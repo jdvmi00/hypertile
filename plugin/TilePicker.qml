@@ -68,7 +68,7 @@ Item {
   function chooseNumber(number) {
     var result = Picker.match(root.request ? root.request.slots : [], number)
     if (result.exact) root.choose(result.exact)
-    else root.errorText = "No available tile numbered " + number
+    else root.errorText = "No zone numbered " + number
   }
 
   function handleKey(event) {
@@ -84,7 +84,7 @@ Item {
     var result = Picker.match(root.request.slots, digits)
     root.errorText = ""
     if (!result.found) {
-      root.errorText = "No available tile numbered " + digits
+      root.errorText = "No zone numbered " + digits
       root.digits = ""
       return
     }
@@ -98,7 +98,7 @@ Item {
     onExited: function(code, status) {
       root.busy = false
       if (code === 0 && status === 0) root.finished()
-      else root.errorText = moveErrors.text.trim() || "Could not move the window. Close and reopen the tile picker."
+      else root.errorText = moveErrors.text.trim() || "Could not move the window. Press Esc and try again."
     }
   }
 
@@ -108,7 +108,7 @@ Item {
     onTriggered: {
       if (root.busy && !moveProc.running) {
         root.busy = false
-        root.errorText = "Could not run Hypertile. Close and reopen the tile picker."
+        root.errorText = "Could not run Hypertile. Press Esc and try again."
       }
     }
   }
@@ -177,7 +177,7 @@ Item {
             }
             Text {
               anchors.horizontalCenter: parent.horizontalCenter
-              text: source ? "Current tile" : (modelData.occupied ? "Swap" : "Move here")
+              text: source ? "Current zone" : (modelData.occupied ? "Swap" : "Move here")
               font.family: Style.font.menuFamily
               font.pixelSize: root.uiFont
               color: "#dddddd"
@@ -201,8 +201,8 @@ Item {
         wrapMode: Text.Wrap
         horizontalAlignment: Text.AlignHCenter
         text: root.errorText || (root.busy ? "Moving window…" :
-          (root.dragging ? "Drag window to a tile · Release mouse to drop" : root.digits ? "Tile " + root.digits + " · Continue typing or press Enter · Backspace to correct · Esc to cancel" :
-            "Move window to tile · Release modifiers, then type a number or click · Esc to cancel"))
+          (root.dragging ? "Drag the window to a zone · Release to drop" : root.digits ? "Zone " + root.digits + " · Keep typing or press Enter · Backspace corrects · Esc cancels" :
+            "Move the window to a zone · Release the modifiers, then type its number or click it · Esc cancels"))
         font.family: Style.font.menuFamily
         font.pixelSize: root.uiFont
         color: "white"

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- A calmer overlay for first-time use. The Layouts tab keeps **Use** and
+  **Edit** in view and moves Rename, Duplicate, Export…, the `SUPER+L` cycle
+  switch, and Delete into a **⋯** menu; **+ New** on the LAYOUTS heading starts
+  a blank layout, a copy, or an import. The fill order joins the header, and
+  the workspace controls collapse into **Apply to**. A **Getting started** card
+  explains the basics until dismissed.
+
+- **Settings** behind the gear gathers the preferences that belong to no
+  layout: saving windows for startup, the rail's side, the key list, the menu
+  bar position, and the desktop text size (moved from Displays). The bar
+  widget's right-click opens it at the menu bar position.
+
+- Edit mode: what a zone **Holds** (Windows, One window, Nothing) replaces the
+  Spacer and Never split switches, as one undo step. Stack, capacity ("No
+  limit"), aspect and scale move into a collapsed **More options**; the layout's
+  settings split into collapsed **Appearance** and **Behaviour** sections whose
+  headings list what is not the default. **Save** is the primary action,
+  **Renumber** is **Fill order**, and **Leave** is **Done**. The rail offers
+  split and delete only for zones too small to show them on their card.
+
+- Displays: the inspector leads with the display's name (make and model) and
+  **Sleep**, then Use as, resolution, scale and rotation; **Position** and
+  **Workspaces** are collapsed and the help text is shorter. A **Display |
+  Wallpaper** switch replaces the Wallpaper groups button, and the wallpaper
+  checkboxes are now choices: This display or Span displays, Theme wallpaper
+  or Custom image, Fill or Fit. The pane opens from the rail's corner, so its
+  tabs stay where the rail's were. Footer verbs are Discard, Revert, Preview
+  changes and Keep changes; **Apply** is **Show**.
+
+- One button style everywhere in the overlay, with a primary style for each
+  surface's main action; the Displays and Wallpaper views use the same kit as
+  the rail, and the wallpaper image picker opens inside the overlay.
+
+- Scenes: **Any window** replaces "Local windows", and the app list starts
+  short with **Show all**; a search still covers every app.
+
+- Zone badges and card buttons step clear of the rail; the rail shows a
+  scroll indicator. "Zone" replaces "slot" and "tile" in the overlay and the
+  move picker. The bar and OSD icon uses a glyph every Nerd Font 3 release has.
+
 - Display previews leave unchanged screens alone and preserve automatic modes,
   custom modelines, and refresh-rate caps during geometry edits. The resolution
   picker offers Automatic (highest resolution). Changed connections or mode

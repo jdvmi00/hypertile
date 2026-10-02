@@ -298,6 +298,29 @@ function setZoneProp(input, name, key, value) {
   return spec
 }
 
+// What a zone holds, as the rail offers it: "windows" (any number, which
+// split the zone), "one" (one window; more overlap it at full size, the
+// never_split key) or "nothing" (a spacer).
+function zoneHolds(node) {
+  if (isSpacer(node)) return "nothing"
+  return node && node.never_split === true ? "one" : "windows"
+}
+
+// Change what a zone holds in one edit, so it is one undo step. Returns the
+// input unchanged when nothing changes, and when the zone is the last one
+// that takes windows and would become a spacer.
+function setZoneHolds(input, name, holds) {
+  var found = findLeaf(input, name)
+  if (!found || ["windows", "one", "nothing"].indexOf(holds) === -1) return input
+  if (zoneHolds(found.node) === holds) return input
+  if (holds === "nothing") {
+    var spaced = setZoneProp(input, name, "spacer", true)
+    return spaced === input ? input : setZoneProp(spaced, name, "never_split", null)
+  }
+  var spec = isSpacer(found.node) ? setZoneProp(input, name, "spacer", false) : input
+  return setZoneProp(spec, name, "never_split", holds === "one" ? true : null)
+}
+
 // Layout-level options: empty, single, stack, border, rounding, in_cycle.
 function setLayoutProp(input, key, value) {
   var spec = clone(input)

@@ -73,7 +73,7 @@ Column {
   readonly property var builtinMatches: {
     if (!searching) return []
     var out = []
-    if (Content.matches(query, ["Local windows", "fill order"])) out.push({ kind: "local", name: "Local windows", trait: "by fill order", icon: "" })
+    if (Content.matches(query, ["Any window", "Local windows", "fill order"])) out.push({ kind: "local", name: "Any window", trait: "by fill order", icon: "" })
     if (Content.matches(query, ["Empty", "nothing opens here"])) out.push({ kind: "empty", name: "Empty", trait: "nothing opens here", icon: "" })
     return out
   }
@@ -89,6 +89,10 @@ Column {
   }
   readonly property var remoteMatches: pane.appRows(pane.query, pane.apps, true)
   readonly property var appMatches: pane.appRows(pane.query, pane.apps, false)
+  // The APPS group lists a few until a search narrows it or Show all opens it.
+  readonly property int appPreview: 8
+  property bool showAllApps: false
+  readonly property var shownApps: (pane.searching || pane.showAllApps) ? pane.appMatches : pane.appMatches.slice(0, pane.appPreview)
   readonly property var matches: builtinMatches.concat(openMatches, remoteMatches, appMatches)
   readonly property int matchCount: matches.length
 
@@ -174,7 +178,7 @@ Column {
   }
   function ghostFor(m) {
     var key = m.kind + ":" + (m.desktop_id || m.app_class || m.kind)
-    return { key: key, kind: m.kind, name: m.name || (m.kind === "empty" ? "Empty" : "Local windows"), icon: m.icon || "" }
+    return { key: key, kind: m.kind, name: m.name || (m.kind === "empty" ? "Empty" : "Any window"), icon: m.icon || "" }
   }
   function isCurrent(m) {
     var s = pane.source
@@ -216,15 +220,12 @@ Column {
     font.pixelSize: pane.overlay.uiCaption
   }
 
-  component Action: Button {
-    bordered: true
-    radius: pane.overlay.radiusControl
+  component Action: KitButton {
+    overlay: pane.overlay
     foreground: pane.fg
     accent: pane.accent
     fontFamily: pane.family
-    fontSize: pane.overlay.uiFontSmall
     enabled: !pane.overlay.busy
-    opacity: enabled ? 1 : 0.45
   }
 
   component Section: Column {
@@ -412,7 +413,7 @@ Column {
       var bits = []
       if (applied) bits.push(modified ? "in use  ·  modified" : "in use")
       var names = Content.summary(Content.appNames(sources), 2)
-      bits.push(names !== "" ? names : "local windows")
+      bits.push(names !== "" ? names : "any window")
       bits.push(String(entry.layout || ""))
       return bits.join("  ·  ")
     }
@@ -693,9 +694,9 @@ Column {
       visible: !pane.searching
       spacing: Style.spacing.sm
       Action {
-        text: "Local windows"
+        text: "Any window"
         selected: pane.isCurrent({ kind: "local" })
-        tooltipText: "Windows open here in fill order"
+        tooltipText: "Whatever opens on the workspace lands here, in fill order"
         onClicked: pane.choose({ kind: "local" })
         onHotChanged: hot ? pane.overlay.ghost(pane.ghostFor({ kind: "local" })) : pane.overlay.unghost("local:local")
       }
@@ -741,8 +742,17 @@ Column {
       title: "APPS"
       caption: pane.searching ? "" : "Launches the app, or reuses its open window"
       Repeater {
-        model: pane.appMatches
+        model: pane.shownApps
         MatchRow { offset: pane.builtinMatches.length + pane.openMatches.length + pane.remoteMatches.length }
+      }
+      Action {
+        visible: !pane.searching && pane.appMatches.length > pane.appPreview
+        text: pane.showAllApps ? "Show fewer" : "Show all " + pane.appMatches.length + " apps"
+        bordered: false
+        fontSize: pane.overlay.uiCaption
+        tooltipText: "Or type to search every app"
+        enabled: true
+        onClicked: pane.showAllApps = !pane.showAllApps
       }
     }
 

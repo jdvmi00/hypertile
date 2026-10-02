@@ -38,6 +38,7 @@ def normalized(monitors):
         ambiguous = counts[key] > 1
         result.append(dict(id=key + ('@' + m['name'] if ambiguous else ''), identity=key,
                            connector=m['name'], description=m.get('description', m['name']),
+                           make=m.get('make', ''), model=m.get('model', ''),
                            connected=True, ambiguous=ambiguous, enabled=not m.get('disabled', False),
                            width=m['width'], height=m['height'], refresh=m['refreshRate'],
                            x=m['x'], y=m['y'], scale=m['scale'], transform=m.get('transform', 0),

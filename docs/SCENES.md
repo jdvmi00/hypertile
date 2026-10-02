@@ -14,13 +14,13 @@ for app scenes.
 ## Overlay
 
 Open **Super+Alt+L** and switch to **Scenes**. Each zone card on the screen
-shows what it holds: the app's icon and name with its state, or *Local
-windows · fill order*. Click a card (or a row under **Zones**, or press its
+shows what it holds: the app's icon and name with its state, or *Any
+window · fill order*. Click a card (or a row under **Zones**, or press its
 fill number) and the picker below takes the keys: type to search, ↑ ↓ pick a
 match, Enter assigns it, Esc clears the search. Hovering a match previews it
 in the selected card. Zones are listed by where they sit ("Top left"), with
-the layout's own name where positions would collide. **Local windows** and **Empty** are the two chips above the
-list. **Open here** lists the windows already on this workspace with their
+the layout's own name where positions would collide. **Any window** (whatever
+opens, in fill order) and **Empty** are the two chips above the list. **Open here** lists the windows already on this workspace with their
 titles; choosing one pins that window without launching anything. **Remote
 desktops** lists each computer's Remote Desktops launcher (install it there
 first; it uses that computer's default profile). **Apps** lists installed

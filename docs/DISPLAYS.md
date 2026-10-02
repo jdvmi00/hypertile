@@ -1,8 +1,9 @@
 # Displays and workspace placement
 
-Open Hypertile and choose **Displays**. The diagram uses logical desktop
+Open Hypertile and choose **Displays**; the pane opens from the rail's corner,
+with its tabs where the rail's were. The diagram uses logical desktop
 coordinates: resolution, rotation, and scale all affect a screen's size. Drag a
-screen to align its edges, or enter its X and Y position. Changing a screen's
+screen to align its edges, or open **Position** to enter its X and Y. Changing a screen's
 scale, rotation, or resolution moves the screens attached to its right and
 bottom edges by the same amount. In a staggered arrangement, remaining
 collisions move to the nearest free edge while the edited screen stays in place.
@@ -21,8 +22,11 @@ screen with its number for a few seconds, with the selected screen highlighted;
 a connector. Closing with unsaved changes asks before discarding them; nothing is
 applied until you preview.
 
-Select a screen to change resolution and refresh rate, scale, rotation, or its
-enabled state. The mode picker lists the modes reported by Hyprland and
+Select a screen to change it. The inspector leads with the display's name (make
+and model, with its number and connector under it) and **Sleep**, then **Use
+as**, resolution and refresh rate, scale, and rotation; **Position** and
+**Workspaces** are collapsed below. Longer explanations are in the buttons'
+tooltips. The mode picker lists the modes reported by Hyprland and
 **Automatic (highest resolution)**. Automatic lets Hyprland select from the
 display's current modes, including after docking or changing picture-by-picture
 inputs. Existing automatic choices, such as the display's preferred mode,
@@ -38,7 +42,7 @@ If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a
 saved configuration.
 
-To forget a disconnected screen, select it and choose **Remove saved display**.
+To forget a disconnected screen, select it and choose **Forget this display**.
 Removal saves immediately and refreshes the list; there is no preview or
 confirmation countdown. Unrelated unsaved edits remain in the pane.
 Connected screens, including disabled or sleeping outputs,
@@ -139,10 +143,10 @@ selected with this command.
 
 ## Sleep and disable
 
-**Sleep display** turns off the output using DPMS without changing its workspace
-placement. If the overlay is on that display it moves to another awake display
-first, so its Wake button stays visible. The same button reads **Wake display**
-while the output is asleep;
+**Sleep**, beside the display's name, turns off the output using DPMS without
+changing its workspace placement. If the overlay is on that display it moves to
+another awake display first, so its Wake button stays visible. The same button
+reads **Wake** while the output is asleep;
 it follows the compositor's power state, not unsaved edits, so it is only
 offered for a connected, enabled output. Sleeping displays are marked in the
 diagram and the display list, and **Wake all** appears in the header only while
@@ -166,30 +170,31 @@ Wake an already enabled sleeping destination before disabling the last awake
 extended display, so the preview controls remain accessible. If the awake
 output disappears while another sleeps, keyboard wake is enabled automatically.
 
-## Apply a workspace
+## Show a workspace
 
-Select an extended display, then choose **Workspace → Apply** below **Use as**.
+Select an extended display, open **Workspaces**, and choose a workspace under
+**Show a workspace here**, then **Show**.
 The picker lists workspaces 1–10 and existing or saved workspaces, with the current
 connector beside live workspaces. **Other workspace…** accepts a new number or a
-name such as `name:research`. Apply switches immediately, moving an existing
+name such as `name:research`. Show switches immediately, moving an existing
 workspace and its windows to this display if necessary. The previously visible
 workspace remains available. This does not change saved placement preferences.
-Apply is unavailable during a display preview or for sleeping, disabled,
+Show is unavailable during a display preview or for sleeping, disabled,
 disconnected, or mirrored outputs.
 
-Check **Use this workspace at startup**, then **Preview changes → Keep changes**
-to save the startup preference. Uncheck it while that workspace is selected to
+Turn on **Start on this workspace**, then **Preview changes → Keep changes**
+to save the startup preference. Turn it off while that workspace is selected to
 clear it. Startup workspaces must be unique across displays and cannot conflict
 with a saved workspace assignment.
 
-## Workspace preferences
+## Workspaces that live on a display
 
-Expand **Workspace preferences** in the selected display’s settings to adjust
-optional layout defaults and workspace assignments. This section starts collapsed.
+The same **Workspaces** group (collapsed until opened) sets the display's
+default layout and lists **Workspaces that live here**.
 
-Add a numbered workspace, or a named workspace using `name:research`, and choose
-its preferred screen. The Add button waits until the entry is a valid selector
-and says why otherwise. The workspace need not exist yet. Apply moves an existing
+Add a numbered workspace, or a named workspace using `name:research`, to place
+it on the selected screen. The Add button waits until the entry is a valid
+selector and says why otherwise. The workspace need not exist yet. Keep moves an existing
 workspace immediately; the preference also applies at startup and when the
 preferred output returns. Moving a workspace normally does not rewrite this
 preference or cause Hypertile to move it back continuously.
@@ -200,24 +205,27 @@ is explicitly reapplied or a new compositor session begins. Reconnect does not
 select the returning workspace or relaunch scene applications.
 
 Initial workspace preferences apply at startup and are coordinated with session
-restoration. Set them using the Workspace control above. Config reload and monitor reconnect preserve the user's focus.
+restoration. Set them with **Start on this workspace** above. Config reload and
+monitor reconnect preserve the user's focus.
 
 ## Layout inheritance
 
-The **Default layout for this monitor** applies to inheriting workspaces,
-including future ones. An explicit workspace layout takes precedence and follows
-that workspace when moved. **Monitor default** clears the explicit override; a
-monitor without a default uses the existing global layout fallback.
+The **Default layout on this display** applies to inheriting workspaces,
+including future ones; **The default layout** (the global one) is its own
+fallback. An explicit workspace layout takes precedence and follows that
+workspace when moved. **Display default** in a workspace's row clears the
+explicit override.
 
-The Layouts rail shows both the effective layout and its source. Cycling or
-choosing a layout makes the choice explicit. Existing saved workspace layouts
-remain explicit on upgrade. **Use on all of …** remains a one-time assignment to
-current workspaces; it does not set a persistent monitor default.
+The Layouts rail's **Apply to** section shows both the effective layout and
+its source, and does the same for open workspaces at once. Cycling or choosing
+a layout makes the choice explicit. Existing saved workspace layouts remain
+explicit on upgrade. **Every workspace on …** remains a one-time assignment to
+current workspaces; it does not set a persistent display default.
 
 An active scene retains its required layout. To replace it with a conflicting
 layout, use the Layouts view's existing replacement confirmation first. Moving
 a scene workspace does not replace its layout or launch its apps again.
-Renaming layouts updates display references. Deleting a monitor default is
+Renaming layouts updates display references. Deleting a display default is
 refused until another default is chosen.
 
 ## Configuration ownership and recovery
@@ -337,15 +345,17 @@ hardware, and remaining physical verification limits.
 
 ## Wallpaper groups
 
-Open **Displays → Wallpaper groups…** below the arrangement diagram. Select a
-screen, check **Span wallpaper across a group**, and check the other displays
-that should share that image. Group members are highlighted in the diagram.
-Select a third screen and leave spanning off for an independent wallpaper.
-Independent screens following the theme repeat the image on each screen.
+Choose **Wallpaper** in the **Display | Wallpaper** switch at the top of the
+inspector. Select a screen, choose **Span displays**, and pick the other
+displays that should share that image. Group members are highlighted in the
+diagram. Select a third screen and keep **This display** for an independent
+wallpaper. Independent screens following the theme repeat the image on each
+screen.
 
-Each group can use **the current theme wallpaper** or **Choose image…** for a
-fixed image that does not change with the theme. Crop fills the screen/group;
-**Fit entire image** preserves the entire image with black borders as needed.
+Each group can use **Theme wallpaper** or **Custom image** (type a path or
+**Choose…**) for a fixed image that does not change with the theme. **Fill**
+covers the screen or group, cropping the edges; **Fit** preserves the entire
+image with black borders as needed.
 **Apply wallpaper** saves all wallpaper edits immediately, once a spanning
 group has at least two displays and a custom image has a file. This is separate
 from display geometry's Preview/Keep. Unsaved wallpaper edits are retained while

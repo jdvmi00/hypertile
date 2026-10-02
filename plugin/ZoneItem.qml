@@ -35,7 +35,7 @@ Item {
   readonly property bool showCentre: content && roomy && (ghost !== null || (source !== null && source.type !== "empty"))
   readonly property bool isSpacer: modelData.spacer === true || (source !== null && source.type === "empty")
   readonly property bool fitted: modelData.fitted === true && !isSpacer
-  readonly property int inset: Style.space(6)
+  readonly property int inset: overlay.zoneInset
   readonly property int stackCount: modelData.neverSplit ? 1 : Math.max(1, modelData.numbers.length)
   readonly property int pad: Math.max(Style.spacing.lg, Math.round(overlay.uiFont * 0.5))
   readonly property real capacity: {
@@ -43,6 +43,33 @@ Item {
     return (spec && spec.capacity && spec.capacity[modelData.name]) ? spec.capacity[modelData.name] : 0
   }
   readonly property bool roomy: width > overlay.uiFont * 12 && height > overlay.uiFont * 6
+
+  // The rail floats over the zones on its side. The badge row and the
+  // card's buttons step clear of it where the zone has room; otherwise
+  // they stay put (and the rail's own ZONE section has the buttons).
+  readonly property var railRect: overlay.railRect
+  function hitsRail(x, y, w, h) {
+    var r = railRect
+    if (!r) return false
+    var gx = zone.x + x, gy = zone.y + y
+    return gx < r.x + r.width && gx + w > r.x && gy < r.y + r.height && gy + h > r.y
+  }
+  readonly property point badgeAt: {
+    var w = badgeRow.implicitWidth, h = badgeRow.implicitHeight * 2 + Style.spacing.sm
+    if (!hitsRail(pad, pad, w, h)) return Qt.point(pad, pad)
+    var r = railRect
+    var right = r.x + r.width + pad - zone.x
+    if (right + w <= width - pad && !hitsRail(right, pad, w, h)) return Qt.point(right, pad)
+    var below = r.y + r.height + pad - zone.y
+    if (below + h <= height - pad && !hitsRail(pad, below, w, h)) return Qt.point(pad, below)
+    return Qt.point(pad, pad)
+  }
+  function buttonsX(w, h) {
+    var x = width - pad - w, y = height - pad - h
+    if (!hitsRail(x, y, w, h)) return x
+    var left = railRect.x - pad - w - zone.x
+    return left >= pad && !hitsRail(left, y, w, h) ? left : x
+  }
   // Peeking: the card thins to a hairline so the windows underneath are the picture.
   readonly property bool peek: overlay.peeking
   readonly property string numeral: isSpacer ? "∅" : (modelData.numbers.length > 0 ? modelData.numbers.join(" · ") : (overlay.numbering ? "?" : "—"))
@@ -185,7 +212,7 @@ Item {
     text: !zone.content ? zone.modelData.w + " × " + zone.modelData.h + " px"
       : zone.modelData.spacer === true ? "Spacer  ·  never holds windows"
       : zone.isSpacer ? "Empty  ·  nothing opens here"
-      : "Local windows  ·  fill order"
+      : "Any window  ·  fill order"
     color: zone.overlay.mutedForeground
     font.family: zone.overlay.fontFamily
     font.pixelSize: zone.overlay.uiFontSmall
@@ -255,12 +282,13 @@ Item {
   // rail's exact size field.
   Column {
     visible: !zone.peek
-    x: zone.pad
-    y: zone.pad
-    width: parent.width - zone.pad * 2
+    x: zone.badgeAt.x
+    y: zone.badgeAt.y
+    width: parent.width - x - zone.pad
     spacing: Style.spacing.sm
 
     Row {
+      id: badgeRow
       spacing: Style.spacing.sm
 
       Chip {
@@ -287,7 +315,7 @@ Item {
         fontSize: zone.overlay.uiFontSmall
         anchors.verticalCenter: parent.verticalCenter
       }
-      // What the zone holds when it is not simply local windows: a remote
+      // What the zone holds when it is not simply any window: a remote
       // desktop (accent), an app, or nothing.
       Chip {
         visible: zone.source !== null && !zone.showCentre
@@ -350,22 +378,20 @@ Item {
   // Quick actions on a zone while scenes are edited.
   Row {
     visible: zone.content && (zone.isSelected || zone.isHovered || zone.urgent) && zone.roomy && !zone.peek && zone.modelData.spacer !== true
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-    anchors.margins: zone.pad
+    x: zone.buttonsX(width, height)
+    y: zone.height - zone.pad - height
     spacing: Style.spacing.sm
 
     ZoneButton { visible: zone.urgent; text: "Retry"; accent: Color.urgent; tooltipText: "Check the pending content again"; enabled: !zone.overlay.busy; onClicked: zone.overlay.sceneAction("retry") }
     ZoneButton { text: "Change…"; tooltipText: "Choose what opens here"; onClicked: { zone.overlay.selected = zone.modelData.name; zone.overlay.focusSearch() } }
-    ZoneButton { visible: zone.source !== null; text: "Clear"; tooltipText: "Back to local windows in fill order"; enabled: !zone.overlay.busy; onClicked: { zone.overlay.selected = zone.modelData.name; zone.overlay.assignContent("local") } }
+    ZoneButton { visible: zone.source !== null; text: "Clear"; tooltipText: "Back to any window, in fill order"; enabled: !zone.overlay.busy; onClicked: { zone.overlay.selected = zone.modelData.name; zone.overlay.assignContent("local") } }
   }
 
   // Quick actions on the selected zone.
   Row {
     visible: zone.isSelected && zone.editing && !zone.overlay.numbering && zone.roomy && !zone.peek
-    anchors.right: parent.right
-    anchors.bottom: parent.bottom
-    anchors.margins: zone.pad
+    x: zone.buttonsX(width, height)
+    y: zone.height - zone.pad - height
     spacing: Style.spacing.sm
 
     ZoneButton { text: "Columns"; tooltipText: "Split into columns (c)"; onClicked: zone.overlay.splitSelected("columns") }

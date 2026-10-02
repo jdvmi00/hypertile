@@ -17,7 +17,8 @@ BarWidget {
 
   readonly property string home: Quickshell.env("HOME")
   readonly property string ctl: home + "/.local/bin/hypertile-ctl"
-  readonly property string icon: "\u{F1CAC}"
+  // nf-md-view_quilt: in every Nerd Font 3 release (F1CAC is not).
+  readonly property string icon: "\u{F0575}"
   readonly property var setupService: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
 
   property string layout: ""         // as the compositor names it: lua:columns, dwindle
@@ -172,7 +173,7 @@ BarWidget {
       ? "Hypertile runtime is unavailable. Re-enable the plugin to retry setup."
       : (root.label !== "" ? root.label + " on workspace " + root.workspaceId + "\n" : "")
         + Session.summary(sessionReader.data, sessionReader.available, sessionReader.checked) + "\n"
-        + "Click: layouts overlay · Scroll or middle-click: next layout\nRight-click: menu bar position"
+        + "Click: layouts overlay · Scroll or middle-click: next layout\nRight-click: settings, at the menu bar position"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.MiddleButton) root.cycle(false)
       else if (mouseButton === Qt.RightButton) root.openBarSettings()

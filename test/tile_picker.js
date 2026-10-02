@@ -41,7 +41,7 @@ function fixture() {
   const f = fixture()
   f.key(57)
   assert.deepEqual(f.chosen, [])
-  assert.match(f.root.errorText, /No available tile/)
+  assert.match(f.root.errorText, /No zone numbered/)
   assert.equal(f.root.digits, '')
   f.key(50)
   assert.deepEqual(f.chosen, ['two'], 'invalid entry can be corrected immediately')

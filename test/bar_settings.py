@@ -1,4 +1,4 @@
-"""Exercise the real placement popup and Omarchy registry in an isolated shell.
+"""Exercise the real settings popup (menu bar placement) and Omarchy registry in an isolated shell.
 
 Requires an installed Omarchy shell and Quickshell. No desktop configuration
 is changed. Run with --screenshots DIRECTORY to retain rendered popup images.
@@ -93,17 +93,26 @@ ShellRoot {
     property int railWidth: 360
     property int radiusCard: 12
     property int radiusControl: 7
+    property bool busy: false
+    property bool dockLeft: true
+    property bool showKeys: false
+    property var sessionStatus: ({mode: "watching"})
+    property bool sessionAvailable: true
+    property bool sessionChecked: true
+    property var prefs: []
+    function setPref(key, value) { this[key] = value; prefs = prefs.concat([key]) }
+    function setSessionEnabled(enabled) { sessionStatus = {mode: enabled ? "watching" : "disabled"} }
     function focusKeys() { backdrop.forceActiveFocus() }
   }
   FloatingWindow {
     id: window
     visible: true
     implicitWidth: 440
-    implicitHeight: 340
+    implicitHeight: 900
     color: "#090c12"
     Item { id: backdrop; anchors.fill: parent }
     TestCase { id: input; when: false }
-    Hypertile.BarSettings { id: popup; overlay: overlay; x: 40; y: 40 }
+    Hypertile.SettingsPanel { id: popup; overlay: overlay; x: 40; y: 40 }
     BorderSurface {
       id: captureSurface
       visible: false
@@ -125,7 +134,8 @@ ShellRoot {
   }
   IpcHandler {
     target: "test"
-    function state(): string { return JSON.stringify({section:popup.section, busy:popup.busy, error:popup.error, config:harness.config, moves:harness.moves, visible:popup.visible, focus:harness.focused(popup.contentItem)}) }
+    function state(): string { return JSON.stringify({section:popup.section, busy:popup.busy, error:popup.error, config:harness.config, moves:harness.moves, visible:popup.visible, focus:harness.focused(popup.contentItem), dockLeft:overlay.dockLeft, showKeys:overlay.showKeys, session:overlay.sessionStatus.mode}) }
+    function openAt(where: string): void { popup.openAt(where) }
     function choose(section: string): void { popup.choose(section) }
     function key(key: int): void { input.keyClick(key) }
     function click(name: string): void {
@@ -258,7 +268,27 @@ ShellRoot {
             capture("unavailable")
             ipc("choose", "right")
             assert json.loads(ipc("state"))["moves"] == moves + 2
+            # The gear opens the panel at the top; the other settings act on the overlay.
+            ipc("configure", json.dumps(config))
+            wait_for(lambda s: s["section"] != "")
+            ipc("close")
+            ipc("openAt", "")
+            wait_for(lambda s: s["visible"] and s["focus"] == "Save windows for startup")
+            ipc("click", "Rail on the right")
+            wait_for(lambda s: s["dockLeft"] is False)
+            ipc("click", "Rail on the left")
+            wait_for(lambda s: s["dockLeft"] is True)
+            ipc("click", "Show the keys")
+            wait_for(lambda s: s["showKeys"] is True)
+            ipc("click", "Save windows for startup")
+            wait_for(lambda s: s["session"] == "disabled")
+            ipc("click", "Save windows for startup")
+            wait_for(lambda s: s["session"] == "watching")
+            capture("settings")
+            ipc("openAt", "bar")
+            wait_for(lambda s: s["visible"] and s["focus"] == {"left": "Left", "center": "Middle", "right": "Right"}[s["section"]])
             print("PASS: real popup and registry; all positions, persistence, neighbors, errors, retry, keyboard, mouse, focus, dismissal, external changes, missing widget")
+            print("PASS: settings panel; rail side, key hints and startup saving reach the overlay; gear and bar entry points focus their sections")
         except Exception:
             print((root / "log").read_text())
             raise

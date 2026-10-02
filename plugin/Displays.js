@@ -383,6 +383,35 @@ function scaleOptions(display) {
     return values
 }
 
+// A display's name for people: "Dell U5226KW" from the make and model, or
+// from the description when the catalog has no make (a display saved by an
+// older version). Company suffixes are dropped, and a model that repeats
+// the brand keeps it once ("LG Electronics" + "LG ULTRAGEAR" is "LG
+// ULTRAGEAR"). The connector stands in when there is nothing else, and is
+// always what tells two identical displays apart.
+var COMPANY_WORD = /^(inc|corp|corporation|co|company|ltd|limited|llc|gmbh|ag|bv|plc|unknown)\.?,?$/i
+function nameWords(text) {
+    var words = []
+    String(text || "").split(/\s+/).forEach(function(word) {
+        if (!word || COMPANY_WORD.test(word)) return
+        if (words.length && words[words.length - 1].toLowerCase() === word.toLowerCase()) return
+        words.push(word)
+    })
+    return words
+}
+function displayName(display) {
+    if (!display) return ""
+    var make = nameWords(display.make), model = nameWords(display.model), words
+    if (make.length || model.length) {
+        words = make.length && model.length && make[0].toLowerCase() === model[0].toLowerCase()
+            ? [make[0]].concat(model.slice(1)) : make.concat(model)
+    } else {
+        words = nameWords(display.description)
+    }
+    var name = words.join(" ")
+    return name !== "" ? name : String(display.connector || "")
+}
+
 function nearestStop(stops, value) {
     var best = 0
     for (var i = 1; i < stops.length; i++)

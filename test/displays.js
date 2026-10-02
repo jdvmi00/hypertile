@@ -16,6 +16,14 @@ for(const transform of [0,2,4,6]) assert.strictEqual(D.bounds({...b,transform}).
 assert.deepStrictEqual(plain(D.parseMode('3840x2160@59.94Hz')), {width:3840,height:2160,refresh:59.94})
 assert.strictEqual(D.parseMode('unavailable'),null)
 console.log('Display diagram geometry, snapping, scaling, rotation and modes passed')
+assert.strictEqual(D.displayName({make:'Dell Inc.', model:'DELL U5226KW', description:'Dell Inc. DELL U5226KW ABC1234', connector:'DP-1'}), 'Dell U5226KW')
+assert.strictEqual(D.displayName({description:'Dell Inc. DELL U5226KW ABC1234', connector:'DP-1'}), 'Dell U5226KW ABC1234', 'older catalogs fall back to the description')
+assert.strictEqual(D.displayName({make:'LG Electronics', model:'LG ULTRAGEAR', connector:'DP-2'}), 'LG ULTRAGEAR')
+assert.strictEqual(D.displayName({make:'Samsung Electric Company', model:'Odyssey G9', connector:'DP-3'}), 'Samsung Electric Odyssey G9')
+assert.strictEqual(D.displayName({make:'Unknown', model:'', description:'', connector:'HEADLESS-1'}), 'HEADLESS-1')
+assert.strictEqual(D.displayName({connector:'eDP-1'}), 'eDP-1')
+assert.strictEqual(D.displayName(null), '')
+console.log('Display names lead with make and model, never empty')
 const savedDisplay = {id:'saved', connector:'DP-2', connected:false, initial_workspace:'2', default_layout:'lua:quad'}
 const removalDraft = {version:1, displays:[{id:'live', connector:'DP-1', connected:true}, savedDisplay], workspaces:{
     '2':{monitor:'saved', layout:'lua:quad'}, '3':{monitor:'saved', layout:null}, '4':{monitor:'live', layout:'master'}
@@ -322,8 +330,13 @@ for (const [width,height] of [[6144,2560],[1920,1080],[3840,2160],[2560,1440],[1
     }
 }
 assert.deepStrictEqual(plain(D.scaleOptions(null)), [])
+// Desktop text size lives in Settings: one setting for every display,
+// applied at once, never part of a display preview.
+const settingsQml = fs.readFileSync('plugin/SettingsPanel.qml', 'utf8')
+const textSizeStart = settingsQml.indexOf('  function setTextSize(')
+assert(textSizeStart >= 0, 'setTextSize must remain extractable from SettingsPanel.qml')
 const textPane = {textSizeStops:[9,10,11,12,14,16,20], pendingTextSize:-1, textSizeProcess:{running:false}, draft:untouchedDraft, dirty:false}
-vm.runInNewContext(helper('setTextSize'), textPane)
+vm.runInNewContext(settingsQml.slice(textSizeStart, settingsQml.indexOf('\n  }', textSizeStart) + 4), textPane)
 assert.strictEqual(D.nearestStop(textPane.textSizeStops,13),3)
 textPane.setTextSize(4)
 assert.deepStrictEqual(plain(textPane.textSizeProcess.command), ['omarchy','display','text','size','14'])

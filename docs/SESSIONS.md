@@ -16,7 +16,8 @@ replayed.
 
 ## Turn saving on or off
 
-Open the Hypertile overlay and use **Startup → Save windows for startup**.
+Open the Hypertile overlay, choose the gear (**Settings**), and use **Save windows
+for startup**.
 The setting is on by default and takes effect immediately. Turning it off
 stops automatic checkpoints and recovery, including on subsequent logins or
 reboots. Turning it back on saves the current desktop for the next startup;

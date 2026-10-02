@@ -185,10 +185,12 @@ to save its panel images. Neither test changes physical monitor configuration.
 Use `python3 test/display_integration.py --mode-safety-only` to check partial
 monitor updates through preview, save, and reload, and virtual-output guards.
 
-For menu bar placement, run `python3 test/bar_settings.py` on a machine with
+For the Settings panel, run `python3 test/bar_settings.py` on a machine with
 Omarchy and Quickshell installed. It uses an offscreen shell and temporary
-configuration to exercise the real popup and shell registry: all positions,
-mouse and keyboard interaction, persistence, errors, and external changes.
+configuration to exercise the real popup and shell registry: all menu bar
+positions, mouse and keyboard interaction, persistence, errors, and external
+changes, plus the rail side, key list and startup switches and both entry
+points (the gear and the bar widget's right-click).
 Add `--screenshots /tmp/hypertile-bar-settings` to save rendered previews.
 It does not change your desktop or bar configuration.
 
