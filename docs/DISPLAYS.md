@@ -28,6 +28,21 @@ If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a
 saved configuration.
 
+To forget a disconnected screen, select it and choose **Remove saved display**,
+then **Preview changes → Keep changes**. **Reset**, **Revert**, or preview timeout
+cancels removal. Connected screens, including disabled or sleeping outputs,
+must be disconnected before their saved profile can be removed; use **Use as →
+Disabled** to turn off a connected screen.
+
+Removal clears the screen's saved settings, startup workspace, monitor layout
+default, and workspace placement preferences. Workspace layouts, windows, scenes,
+and separately saved wallpaper groups remain. Its specific declarations in
+`monitors.lua` are removed, preserving the fallback rule and unrelated settings.
+Shared description rules and remaining mirror dependencies block removal with an
+explanation. Choose another mirror source first. If the screen or another screen
+using its connector reconnects before saving, removal is rejected. Reconnecting
+after removal discovers the screen again using the remaining monitor rules.
+
 Choose **Preview changes**, then **Keep changes** within 15 seconds. The
 countdown starts once every display has settled on the new settings, not when
 the first one starts changing. Enter keeps; Escape reverts and leaves the pane
@@ -240,6 +255,12 @@ preview resolves connectors from `mirror_of` rather than trusting that field. Wo
 use selectors as keys and `{ "monitor": "saved-display-id", "layout": null }`
 as values; `null` inherits, while a layout string is explicit. Custom layouts
 use the `lua:` prefix. Display transforms use Hyprland's values 0–7.
+
+To remove saved disconnected displays through a settings document, add their
+IDs to `removed_displays` and omit them from `displays`. Clear their workspace
+`monitor` references to `null`, retaining each workspace's `layout`. Resolve any
+`mirror_of` references first. Removal uses the same preview/keep/revert transaction;
+omitting a display alone does not delete its Lua declarations.
 
 See [display validation](diagnostics/displays/README.md) for the tested software,
 hardware, and remaining physical verification limits.

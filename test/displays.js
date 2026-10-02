@@ -16,6 +16,24 @@ for(const transform of [0,2,4,6]) assert.strictEqual(D.bounds({...b,transform}).
 assert.deepStrictEqual(plain(D.parseMode('3840x2160@59.94Hz')), {width:3840,height:2160,refresh:59.94})
 assert.strictEqual(D.parseMode('unavailable'),null)
 console.log('Display diagram geometry, snapping, scaling, rotation and modes passed')
+const savedDisplay = {id:'saved', connector:'DP-2', connected:false, initial_workspace:'2', default_layout:'lua:quad'}
+const removalDraft = {version:1, displays:[{id:'live', connector:'DP-1', connected:true}, savedDisplay], workspaces:{
+    '2':{monitor:'saved', layout:'lua:quad'}, '3':{monitor:'saved', layout:null}, '4':{monitor:'live', layout:'master'}
+}}
+const removedDraft = D.removeDisplay(removalDraft, 1)
+assert.deepStrictEqual(plain(removedDraft.displays), [{id:'live', connector:'DP-1', connected:true}])
+assert.deepStrictEqual(plain(removedDraft.removed_displays), ['saved'])
+assert.deepStrictEqual(plain(removedDraft.workspaces), {
+    '2':{monitor:null, layout:'lua:quad'}, '3':{monitor:null, layout:null}, '4':{monitor:'live', layout:'master'}
+})
+assert.strictEqual(removalDraft.displays.length, 2, 'removal never mutates the original draft')
+assert.strictEqual(removalDraft.workspaces['2'].monitor, 'saved')
+assert.throws(() => D.removeDisplay(removalDraft, 0), /Connected displays/)
+assert.throws(() => D.removeDisplay(removalDraft, 99), /Select a saved display/)
+assert.throws(() => D.removeDisplay({...removalDraft, displays:[...removalDraft.displays, {id:'mirror', connected:false, mirror_of:'saved'}]}, 1), /another source/)
+const twoRemovals = D.removeDisplay({...plain(removedDraft), displays:[...plain(removedDraft.displays), {id:'other', connected:false}]}, 1)
+assert.deepStrictEqual(plain(twoRemovals.removed_displays), ['saved', 'other'])
+console.log('Saved display removal preserves workspace layouts and rejects connected screens and mirror sources')
 // Exercise the pane's pure action helpers without a graphical session.
 const qml = fs.readFileSync('plugin/DisplaysPane.qml', 'utf8')
 function helper(name) {
@@ -25,6 +43,29 @@ function helper(name) {
     assert(start >= 0 && end > start, 'helper must remain extractable: ' + name)
     return qml.slice(start, end)
 }
+function removing(state) {
+    const ctx = Object.assign({Displays:D, draft:plain(removalDraft), selectedIndex:1, busy:false, pending:null,
+        queryProcess:{running:false}, dirty:false, error:'', notice:'', matchingConnector:'old',
+        workspaceChoice:'2', customWorkspace:'work', confirmingDiscard:true}, state)
+    Object.defineProperty(ctx, 'selectedDisplay', {get() {return this.draft.displays[this.selectedIndex] || null}})
+    vm.runInNewContext(helper('removeSelectedDisplay'), ctx)
+    return ctx
+}
+let remove = removing({})
+remove.removeSelectedDisplay()
+assert.deepStrictEqual([remove.draft.displays.length, remove.selectedIndex, remove.dirty, remove.confirmingDiscard], [1,0,true,false])
+assert.deepStrictEqual([remove.matchingConnector, remove.workspaceChoice, remove.customWorkspace], ['',null,''])
+assert.match(remove.notice, /DP-2.*Preview changes.*Keep changes/)
+for (const state of [{busy:true}, {pending:{token:'t'}}, {queryProcess:{running:true}}]) {
+    remove = removing(state)
+    remove.removeSelectedDisplay()
+    assert.strictEqual(remove.draft.displays.length, 2, 'removal waits for pending queries and transactions')
+    assert.strictEqual(remove.dirty, false)
+}
+remove = removing({selectedIndex:0})
+remove.removeSelectedDisplay()
+assert.match(remove.error, /Connected displays/)
+assert.strictEqual(remove.draft.displays.length, 2)
 const pane = {
     Displays: D,
     selectedDisplay: {id: 'portrait'},

@@ -65,6 +65,82 @@ class Tests(unittest.TestCase):
     def doc(self): return dict(version=1, displays=self.adapter.displays(), workspaces={})
     def awake(self, connector):
         return next(m for m in self.adapter.current if m['connector'] == connector)['awake']
+
+    def removal(self):
+        saved = self.doc()
+        saved['workspaces'] = {'2': dict(monitor=saved['displays'][1]['id'], layout='lua:quad')}
+        atomic(self.service.confirmed_path, saved)
+        self.adapter.current.pop()
+        document = copy.deepcopy(saved)
+        document['removed_displays'] = [document['displays'].pop()['id']]
+        document['workspaces']['2']['monitor'] = None
+        return saved, document
+
+    def test_removal_is_staged_and_revert_preserves_saved_profile(self):
+        saved, document = self.removal()
+        result = self.service.preview(document, watchdog=False)
+        self.assertEqual(read(self.service.confirmed_path), saved)
+        self.service.revert(result['token'])
+        self.assertEqual(read(self.service.confirmed_path), saved)
+        self.assertEqual(len(self.service.catalog()['displays']), 2)
+
+    def test_keep_removal_preserves_layout_and_rediscovers_reconnected_display(self):
+        saved, document = self.removal()
+        result = self.service.preview(document, watchdog=False)
+        self.service.keep(result['token'])
+        confirmed = read(self.service.confirmed_path)
+        self.assertEqual(len(confirmed['displays']), 1)
+        self.assertNotIn('removed_displays', confirmed)
+        self.assertEqual(confirmed['workspaces']['2'], dict(monitor=None, layout='lua:quad'))
+        self.assertEqual(len(self.service.catalog()['displays']), 1)
+        self.adapter.current.append(saved['displays'][1])
+        self.assertEqual(len(self.service.catalog()['displays']), 2)
+        self.assertEqual(read(self.service.confirmed_path), confirmed)
+
+    def test_reconnect_before_preview_rejects_removal_without_mutations(self):
+        saved, document = self.removal()
+        self.adapter.current.append(saved['displays'][1])
+        with self.assertRaisesRegex(DisplayError, 'connected display'):
+            self.service.preview(document, watchdog=False)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertEqual(self.adapter.calls, [])
+        self.assertEqual(read(self.service.confirmed_path), saved)
+
+    def test_reconnect_during_preview_reverts_removal(self):
+        saved, document = self.removal()
+        result = self.service.preview(document, watchdog=False)
+        self.adapter.current.append(saved['displays'][1])
+        with self.assertRaisesRegex(DisplayError, 'connected display'):
+            self.service.keep(result['token'])
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertEqual(read(self.service.confirmed_path), saved)
+
+    def test_reused_connector_cannot_be_removed_even_with_different_identity(self):
+        saved, document = self.removal()
+        self.adapter.current.append(dict(saved['displays'][1], id='new-panel', identity='new-panel'))
+        with self.assertRaisesRegex(DisplayError, 'connector now in use'):
+            self.service.preview(document, watchdog=False)
+        self.assertEqual(self.adapter.calls, [])
+
+    def test_removal_rejects_dangling_workspace_and_disconnected_mirror_references(self):
+        saved, document = self.removal()
+        document['workspaces'] = saved['workspaces']
+        with self.assertRaisesRegex(DisplayError, 'workspace placement'):
+            self.service.preview(document, watchdog=False)
+        document['workspaces'] = {}
+        mirror = dict(saved['displays'][1], id='absent-mirror', connector='DP-3', mirror_of=document['removed_displays'][0])
+        document['displays'].append(mirror)
+        with self.assertRaisesRegex(DisplayError, 'mirror source'):
+            self.service.preview(document, watchdog=False)
+        self.assertEqual(self.adapter.calls, [])
+
+    def test_removal_ids_must_be_known_unique_and_absent_from_draft(self):
+        saved, document = self.removal()
+        for ids in ('DP-2', [1], ['missing'], document['removed_displays'] * 2, [saved['displays'][0]['id']]):
+            with self.subTest(ids=ids), self.assertRaises(DisplayError):
+                self.service.preview(dict(document, removed_displays=ids), watchdog=False)
+        self.assertEqual(self.adapter.calls, [])
+
     def test_show_workspace_moves_existing_then_focuses_without_saving(self):
         self.adapter.workspaces = lambda: [dict(id=5, name='5', monitor='DP-1')]
         self.adapter.dispatch = Mock()

@@ -217,6 +217,24 @@ Card {
         draft = next;
         dirty = true;
     }
+    function removeSelectedDisplay() {
+        if (!selectedDisplay || busy || pending || queryProcess.running)
+            return;
+        try {
+            var connector = selectedDisplay.connector;
+            draft = Displays.removeDisplay(draft, selectedIndex);
+            selectedIndex = Math.min(selectedIndex, Math.max(0, draft.displays.length - 1));
+            matchingConnector = "";
+            workspaceChoice = null;
+            customWorkspace = "";
+            confirmingDiscard = false;
+            dirty = true;
+            error = "";
+            notice = connector + " will be removed with Preview changes → Keep changes. Reset restores it.";
+        } catch (e) {
+            error = e.message;
+        }
+    }
     function setTextSize(index) {
         if (textSizeProcess.running || index < 0 || index >= textSizeStops.length)
             return;
@@ -960,6 +978,23 @@ Card {
                         visible: pane.selectedAsleep
                         text: "Asleep · the display is off until you wake it."
                         color: pane.overlay.accent
+                    }
+                    Column {
+                        width: parent.width
+                        spacing: 8
+                        visible: !!pane.selectedDisplay && !pane.selectedDisplay.connected
+                        Action {
+                            text: "Remove saved display"
+                            enabled: !queryProcess.running && Displays.removalError(pane.draft, pane.selectedDisplay) === ""
+                            Accessible.description: "Remove this disconnected display's saved settings after Preview and Keep changes"
+                            onClicked: pane.removeSelectedDisplay()
+                        }
+                        Label {
+                            width: parent.width
+                            text: Displays.removalError(pane.draft, pane.selectedDisplay) || "Removes saved display settings, its specific monitor rules, startup workspace and placement preferences after Preview → Keep. Workspace layouts and windows are kept. Wallpaper groups are kept separately. A reconnected display is discovered again. Reset cancels removal."
+                            color: pane.muted
+                            font.pixelSize: pane.overlay.uiCaption
+                        }
                     }
                     Column {
                         width: parent.width
