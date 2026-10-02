@@ -84,12 +84,17 @@ class Service:
             return True
 
     def catalog(self):
+        # Layout helpers inherit the caller's display lock. Their identity
+        # lookup must remain read-only and must not reacquire that same lock.
+        if os.environ.get('HYPERTILE_DISPLAY_APPLY') == '1' or os.environ.get('HYPERTILE_DISPLAY_LOCKED') == '1':
+            return self._catalog(settle_power=False)
         with self.lock():
             return self._catalog()
 
-    def _catalog(self):
+    def _catalog(self, settle_power=True):
         """Read the catalog and settle power while the caller holds the lock."""
-        self._settle_power()
+        if settle_power:
+            self._settle_power()
         current = self.adapter.displays()
         confirmed = read(self.confirmed_path, dict(version=1, displays=[], workspaces={}))
         if self.policy:
@@ -201,6 +206,7 @@ class Service:
                 if not independent(d) and not pending.get('placed'):
                     if handoff:
                         self._move_handoff(pending)
+                    self._evacuate_disabled(remaining)
                     self.reconcile(document, 'handoff' if handoff else 'preview')
                     pending['placed'] = True
                 pending['touched'].append(d['connector'])
@@ -291,6 +297,29 @@ class Service:
     def _handoff_workspace(workspace):
         name = workspace.get('name', '')
         return name if name.startswith('special:') else selector(workspace)
+
+    def _evacuate_disabled(self, remaining):
+        """Carry whole workspaces to an awake destination before disabling outputs."""
+        disabled = {name for name, d in remaining.items() if not d['enabled']}
+        workspaces = [w for w in self.adapter.workspaces() if w.get('monitor') in disabled]
+        if not workspaces:
+            return
+        destinations = [d['connector'] for d in self.adapter.displays()
+                        if independent(d) and d.get('awake', True)
+                        and d['connector'] in remaining and independent(remaining[d['connector']])]
+        if not destinations:
+            raise DisplayError('Wake an extended display before moving workspaces off a disabled display.')
+        target = destinations[0]
+        for workspace in workspaces:
+            self.adapter.move(self._handoff_workspace(workspace), target)
+        actual = {self._handoff_workspace(w): w.get('monitor') for w in self.adapter.workspaces()}
+        for workspace in workspaces:
+            key = self._handoff_workspace(workspace)
+            # Empty workspaces can disappear during a move; occupied ones must survive.
+            if key not in actual and workspace.get('windows') == 0:
+                continue
+            if actual.get(key) != target:
+                raise DisplayError('Hyprland did not move workspace ' + key + '. Restoring the previous display.')
 
     def _move_handoff(self, pending):
         handoff = pending['handoff']
@@ -408,7 +437,7 @@ class Service:
             self.adapter.verify([rescue])
             report['fallback'] = True
         enabled = {d['connector'] for d in self.adapter.displays() if independent(d)}
-        key_for = self._handoff_workspace if pending.get('handoff') else selector
+        key_for = self._handoff_workspace
         existing = {key_for(w) for w in self.adapter.workspaces()}
         for w in pending['workspaces']:
             key = key_for(w)
@@ -571,7 +600,11 @@ class Service:
             before_workspaces = self.policy.capture_workspaces() if self.policy else self.adapter.workspaces()
             applied = []
             try:
+                remaining = {d['connector']: d for d in current}
+                remaining.update({d['connector']: d for d in desired})
                 for d in sorted(desired, key=apply_order):
+                    if not d['enabled']:
+                        self._evacuate_disabled(remaining)
                     applied.append(d)
                     self.adapter.apply(d)
                     self.adapter.verify([d])

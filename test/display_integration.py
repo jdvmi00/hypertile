@@ -3,6 +3,7 @@
 Run from a Wayland session: python3 test/display_integration.py.
 Use --workspace-only for immediate workspace switching without mode changes.
 Use --removal-only for immediate disconnected-profile removal.
+Use --disable-only for workspace/window migration and rollback.
 No physical output or user configuration is changed.
 """
 import copy
@@ -88,6 +89,64 @@ def main():
                 assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays'] if d['enabled']), initial
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
+                if '--disable-only' in sys.argv:
+                    applications = []
+                    source, target = outputs
+                    try:
+                        for workspace in ('81', 'name:research', 'special:scratchpad'):
+                            if workspace.startswith('special:'):
+                                ctl('eval', 'hl.dispatch(hl.dsp.workspace.toggle_special("scratchpad"))')
+                            else:
+                                display('show-workspace', source['connector'], workspace)
+                            applications.append(subprocess.Popen(
+                                ['foot', '--app-id=hypertile-disable-test', 'sh', '-c', 'sleep 120'],
+                                env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+                            deadline = time.monotonic() + 5
+                            while time.monotonic() < deadline:
+                                if len(json.loads(ctl('-j', 'clients'))) == len(applications):
+                                    break
+                                time.sleep(.1)
+                            else:
+                                raise AssertionError('Disposable test windows did not appear')
+                        ctl('eval', 'hl.dispatch(hl.dsp.workspace.toggle_special("scratchpad"))')
+                        original = json.loads(ctl('-j', 'clients'))
+
+                        def check_desktop(connector):
+                            workspaces = json.loads(ctl('-j', 'workspaces'))
+                            expected = {'81', 'research', 'special:scratchpad'}
+                            assert {w['name'] for w in workspaces if w['name'] in expected and w['monitor'] == connector} == expected, workspaces
+                            windows = json.loads(ctl('-j', 'clients'))
+                            assert {(w['address'], w['workspace']['name']) for w in windows} == {
+                                (w['address'], w['workspace']['name']) for w in original}, windows
+                            monitor_id = next(m['id'] for m in json.loads(ctl('-j', 'monitors')) if m['name'] == connector)
+                            assert all(w['monitor'] == monitor_id for w in windows), windows
+
+                        check_desktop(source['connector'])
+                        disabled = dict(version=1, displays=outputs,
+                                        workspaces={'81': {'monitor': source['id'], 'layout': None}})
+                        source['enabled'] = False
+                        pending = display('preview', '--json', json.dumps(disabled))
+                        check_desktop(target['connector'])
+                        result = display('revert', pending['token'])
+                        assert not result['errors'], result
+                        check_desktop(source['connector'])
+                        pending = display('preview', '--json', json.dumps(disabled))
+                        display('keep', pending['token'])
+                        check_desktop(target['connector'])
+                        ctl('reload')
+                        check_desktop(target['connector'])
+                        assert not display('status')['pending']
+                        assert display('list')['confirmed']['workspaces'] == disabled['workspaces']
+                        print('PASS: disabling moves numbered, named and scratchpad workspaces with all windows; Revert restores them, Keep/reload preserves migration')
+                        return
+                    finally:
+                        for app in applications:
+                            app.terminate()
+                            try:
+                                app.wait(timeout=3)
+                            except subprocess.TimeoutExpired:
+                                app.kill()
+                                app.wait()
                 if '--removal-only' in sys.argv:
                     document = dict(version=1, displays=outputs, workspaces={})
                     pending = display('preview', '--json', json.dumps(document))

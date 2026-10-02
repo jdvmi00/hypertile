@@ -70,11 +70,11 @@ local live = engine.live.quad
 local app = window("app", 0, 0, 1, 1, {workspace=ws, mapped=true, stable_id=1, pid=11})
 local apps = {app}
 local function recalculate()
-  local ctx = {area={x=10, y=30, w=1000, h=600}, targets={}}
+  local ctx = {area={x=2010, y=-770, w=1000, h=600}, targets={}}
   for _, w in ipairs(apps) do
     ctx.targets[#ctx.targets+1] = {window=w, place=function(self, box)
       self.box = box
-      w.at = {x=box.x+2000, y=box.y-800} -- Offset monitor, not the origin.
+      w.at = {x=box.x, y=box.y} -- Layout geometry is in global coordinates.
       w.size = {x=box.w, y=box.h}
     end}
   end
@@ -183,7 +183,9 @@ session.move_to_empty = move_to_empty
 
 -- Numbered selection captures identity before focus leaves the window.
 package.loaded["hypr.hypertile-json"] = require("hypertile-json")
-hl.get_active_monitor = function() return {name="DP-2"} end
+local picker_monitor = {name="DP-2", position={x=2000,y=-800}}
+hl.get_active_monitor = function() return picker_monitor end
+app.monitor, other.monitor = picker_monitor, picker_monitor
 hl.get_active_workspace = function() return ws end
 hl.get_active_window = function() return app end
 provider = engine.provider("numbered", {columns={{name="a"}, {name="gap", spacer=true},
