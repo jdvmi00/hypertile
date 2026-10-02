@@ -97,6 +97,45 @@ class Tests(unittest.TestCase):
         self.assertEqual(len(self.service.catalog()['displays']), 2)
         self.assertEqual(read(self.service.confirmed_path), confirmed)
 
+    def test_immediate_removal_saves_without_geometry_changes_or_pending_preview(self):
+        saved, _ = self.removal()
+        result = self.service.remove_display(saved['displays'][1]['id'], watchdog=False)
+        self.assertEqual(result['removed'], saved['displays'][1]['id'])
+        self.assertNotIn('token', result)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertEqual(self.adapter.calls, [])
+        self.assertEqual(read(self.service.confirmed_path)['workspaces']['2'], dict(monitor=None, layout='lua:quad'))
+        self.assertEqual(len(self.service.catalog()['displays']), 1)
+
+    def test_immediate_removal_rejects_connected_unknown_and_mirror_sources(self):
+        saved, _ = self.removal()
+        with self.assertRaisesRegex(DisplayError, 'connected display'):
+            self.service.remove_display(saved['displays'][0]['id'], watchdog=False)
+        with self.assertRaisesRegex(DisplayError, 'no longer available'):
+            self.service.remove_display('missing', watchdog=False)
+        mirror = dict(saved['displays'][1], id='absent-mirror', connector='DP-3', mirror_of=saved['displays'][1]['id'])
+        saved['displays'].append(mirror)
+        atomic(self.service.confirmed_path, saved)
+        with self.assertRaisesRegex(DisplayError, 'mirror source'):
+            self.service.remove_display(saved['displays'][1]['id'], watchdog=False)
+        self.assertEqual(self.adapter.calls, [])
+        self.assertEqual(read(self.service.confirmed_path), saved)
+
+    def test_immediate_removal_does_not_require_waking_remaining_display(self):
+        saved, _ = self.removal()
+        self.adapter.current[0]['awake'] = False
+        self.service.remove_display(saved['displays'][1]['id'], watchdog=False)
+        self.assertFalse(self.awake('DP-1'))
+        self.assertEqual(self.adapter.calls, [])
+
+    def test_immediate_removal_rejects_existing_preview(self):
+        saved, document = self.removal()
+        pending = self.service.preview(document, watchdog=False)
+        with self.assertRaisesRegex(DisplayError, 'Keep or revert'):
+            self.service.remove_display(saved['displays'][1]['id'], watchdog=False)
+        self.assertEqual(read(self.service.pending_path)['token'], pending['token'])
+        self.assertEqual(read(self.service.confirmed_path), saved)
+
     def test_reconnect_before_preview_rejects_removal_without_mutations(self):
         saved, document = self.removal()
         self.adapter.current.append(saved['displays'][1])
@@ -759,5 +798,129 @@ class Tests(unittest.TestCase):
         polling = Watcher(self.service, polling=True)
         self.assertTrue(polling.tick([], 0.0))
         self.assertTrue(polling.tick([], .5), 'without the event socket the old cadence remains')
+
+class MirrorHandoffTests(unittest.TestCase):
+    class Desktop(Fake):
+        def __init__(self):
+            super().__init__()
+            self.current[0]['active_workspace'] = dict(id=1, name='1')
+            self.current[1].update(width=3840, height=2160, scale=2, refresh=120,
+                                   modes=['3840x2160@120.00Hz'], mirror_of=self.current[0]['id'],
+                                   mirror_connector='DP-1', extended_position=dict(x=1920, y=0))
+            self.current.append(display('DP-3', 6000))
+            self.live = [dict(id=1, name='1', monitor='DP-1'), dict(id=2, name='2', monitor='DP-1'),
+                         dict(id=-10, name='research', monitor='DP-1'),
+                         dict(id=-99, name='special:scratchpad', monitor='DP-1'),
+                         dict(id=3, name='3', monitor='DP-3')]
+            self.active = copy.deepcopy(self.live[0])
+            self.fail_on = None
+        def workspaces(self): return copy.deepcopy(self.live)
+        def run(self, *args):
+            return json.dumps(self.active if args == ('-j', 'activeworkspace') else dict(address='0xbeef'))
+        def dispatch(self, operation, arguments): self.calls.append((operation, arguments))
+        def move(self, workspace, connector):
+            super().move(workspace, connector)
+            for item in self.live:
+                if Service._handoff_workspace(item) == workspace:
+                    item['monitor'] = connector
+        def apply(self, d):
+            if self.fail_on == d['connector']:
+                self.fail_on = None
+                raise DisplayError('Injected handoff failure')
+            super().apply(d)
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        environment = patch.dict(os.environ, XDG_STATE_HOME=self.temp.name)
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.adapter = self.Desktop()
+        self.service = Service(self.adapter, self.temp.name)
+        self.service.policy = None
+        self.saved = dict(version=1, displays=self.adapter.displays(),
+                          workspaces={'3': dict(monitor='connector:DP-1', layout=None)})
+        atomic(self.service.confirmed_path, self.saved)
+
+    def test_switch_carries_all_workspaces_preserves_modes_and_unrelated_output(self):
+        original_modes = [(d['width'], d['height'], d['refresh'], d['scale'], d['transform']) for d in self.adapter.current]
+        result = self.service.use_display('DP-2', watchdog=False)
+        self.assertEqual(result['previous_source'], 'DP-1')
+        self.assertEqual([w['monitor'] for w in self.adapter.live], ['DP-2'] * 4 + ['DP-3'])
+        self.assertEqual(original_modes, [(d['width'], d['height'], d['refresh'], d['scale'], d['transform']) for d in self.adapter.current])
+        self.assertFalse(any(c[:2] == ('apply', 'DP-3') for c in self.adapter.calls))
+        self.assertEqual(self.adapter.current[0]['mirror_connector'], 'DP-2')
+        self.assertFalse(self.adapter.current[1].get('mirror_of'))
+        self.assertIn(('focus', '{window="address:0xbeef"}'), self.adapter.calls)
+        self.assertEqual(read(self.service.confirmed_path)['workspaces'], self.saved['workspaces'])
+        self.assertFalse(self.service.pending_path.exists())
+        self.service.use_display('DP-1', watchdog=False)
+        self.assertEqual([w['monitor'] for w in self.adapter.live], ['DP-1'] * 4 + ['DP-3'])
+        self.assertEqual(read(self.service.confirmed_path)['displays'][1]['extended_position'], dict(x=1920, y=0))
+
+    def test_next_cycles_only_the_focused_group_and_source_is_an_inert_noop(self):
+        self.service.use_display('DP-1', watchdog=False)
+        self.assertEqual(self.adapter.calls, [])
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertEqual(self.service.use_display('next', watchdog=False)['connector'], 'DP-2')
+        self.adapter.active['monitor'] = 'DP-2'
+        self.assertEqual(self.service.use_display('next', watchdog=False)['connector'], 'DP-1')
+        self.adapter.active['monitor'] = 'DP-3'
+        with self.assertRaisesRegex(DisplayError, 'mirror group'):
+            self.service.use_display('next', watchdog=False)
+
+    def test_failures_restore_the_desktop_focus_and_saved_configuration(self):
+        original = self.adapter.displays()
+        self.adapter.fail_on = 'DP-1'  # Destination is ready and windows have moved.
+        with self.assertRaisesRegex(DisplayError, 'Injected handoff'):
+            self.service.use_display('DP-2', watchdog=False)
+        from adapter import same
+        self.assertTrue(all(same(a, b) for a, b in zip(original, self.adapter.current)))
+        self.assertEqual([w['monitor'] for w in self.adapter.live], ['DP-1'] * 4 + ['DP-3'])
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertFalse(read(self.service.directory / 'recovery.json')['errors'])
+
+    def test_commit_failure_rolls_back_after_successful_handoff(self):
+        policy = Mock(state={})
+        policy.capture_workspaces.side_effect = self.adapter.workspaces
+        policy.commit.side_effect = DisplayError('Injected commit failure')
+        self.service.policy = policy
+        with self.assertRaisesRegex(DisplayError, 'commit failure'):
+            self.service.use_display('DP-2', watchdog=False)
+        self.assertEqual([w['monitor'] for w in self.adapter.live], ['DP-1'] * 4 + ['DP-3'])
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_refuses_sleeping_disconnected_disabled_independent_targets_and_pending_edits(self):
+        for connector in ('DP-3', 'missing'):
+            with self.assertRaises(DisplayError):
+                self.service.use_display(connector, watchdog=False)
+        for fields in (dict(awake=False), dict(enabled=False), dict(connected=False)):
+            old = copy.deepcopy(self.adapter.current[1])
+            self.adapter.current[1].update(fields)
+            with self.assertRaises(DisplayError):
+                self.service.use_display('DP-2', watchdog=False)
+            self.adapter.current[1] = old
+        atomic(self.service.pending_path, dict(token='other'))
+        with self.assertRaisesRegex(DisplayError, 'preview'):
+            self.service.use_display('DP-2', watchdog=False)
+        self.assertEqual(self.adapter.calls, [])
+
+    def test_larger_source_finds_free_space_and_retargets_multiple_saved_mirrors(self):
+        from handoff import plan
+        original = copy.deepcopy(self.saved)
+        original['displays'][1]['scale'] = 1
+        original['displays'][2]['x'] = 1920
+        original['displays'].append(dict(display('DP-4'), mirror_of='connector:DP-1', connected=False))
+        changed, previous = plan(original, 'DP-2')
+        self.assertEqual(previous, 'DP-1')
+        self.assertEqual(changed['displays'][3]['mirror_of'], 'connector:DP-2')
+        self.assertEqual(changed['displays'][2], original['displays'][2])
+        ax, ay, aw, ah = bounds(changed['displays'][1])
+        bx, by, bw, bh = bounds(changed['displays'][2])
+        self.assertFalse(min(ax + aw, bx + bw) > max(ax, bx) and min(ay + ah, by + bh) > max(ay, by))
+        self.assertEqual(original['displays'][0].get('mirror_of'), None)
+
 
 if __name__ == '__main__': unittest.main()

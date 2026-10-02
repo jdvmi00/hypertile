@@ -326,7 +326,7 @@ class WorkspacePolicy:
                 raise ValueError("Layout " + qualified[4:] + " is unavailable; choose a saved layout before applying display preferences")
 
     def reconcile(self, document, reason="event"):
-        if reason not in ("preview", "apply"):
+        if reason not in ("preview", "apply", "handoff"):
             from adapter import runtime_mirrors
             document = runtime_mirrors(document, self.adapter.displays())
         validate(document)
@@ -346,6 +346,10 @@ class WorkspacePolicy:
         prior_locations = dict(self.state.get("locations", {}))
         prior_targets = self.state.get("layout_targets", {})
         moves = self.plan(document, workspaces, available, event)
+        if reason == "handoff":
+            # Source switching carries its own live desktop. Retained placement
+            # preferences must not pull workspaces back from unrelated outputs.
+            moves = []
         for move in moves:
             self.adapter.move(move["workspace"], move["monitor"])
         if moves:

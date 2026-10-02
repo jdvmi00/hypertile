@@ -57,6 +57,7 @@ Card {
     property string identifyConnector: ""
     property string error: ""
     property string notice: ""
+    property string previousSource: ""
     property var pending: null
     property string focusedPreviewToken: ""
     onConfirmingDiscardChanged: if (confirmingDiscard)
@@ -80,6 +81,7 @@ Card {
     readonly property bool selectedAsleep: isAsleep(selectedDisplay)
     // A disabled display may keep a dormant mirror target; only an enabled one mirrors.
     readonly property bool selectedMirrors: !!selectedDisplay && !!selectedDisplay.enabled && !!selectedDisplay.mirror_of
+    readonly property var selectedMirrorSource: catalog ? Displays.mirrorSource(catalog.displays, liveDisplay) : null
     readonly property int asleepCount: catalog ? (catalog.displays || []).filter(function (d) {
         return d.connected && d.enabled && d.awake === false;
     }).length : 0
@@ -220,20 +222,19 @@ Card {
     function removeSelectedDisplay() {
         if (!selectedDisplay || busy || pending || queryProcess.running)
             return;
-        try {
-            var connector = selectedDisplay.connector;
-            draft = Displays.removeDisplay(draft, selectedIndex);
-            selectedIndex = Math.min(selectedIndex, Math.max(0, draft.displays.length - 1));
-            matchingConnector = "";
-            workspaceChoice = null;
-            customWorkspace = "";
-            confirmingDiscard = false;
-            dirty = true;
-            error = "";
-            notice = connector + " will be removed with Preview changes → Keep changes. Reset restores it.";
-        } catch (e) {
-            error = e.message;
-        }
+        var reason = Displays.removalError(draft, selectedDisplay);
+        if (reason) { error = reason; return; }
+        confirmingDiscard = false;
+        run(["remove-display", selectedDisplay.id]);
+    }
+    function removedDisplay(identity) {
+        var selectedId = selectedDisplay ? selectedDisplay.id : null;
+        draft = Displays.forgetDisplay(draft, identity);
+        var kept = draft.displays.findIndex(function(d) { return d.id === selectedId; });
+        selectedIndex = kept >= 0 ? kept : Math.min(selectedIndex, Math.max(0, draft.displays.length - 1));
+        matchingConnector = "";
+        workspaceChoice = null;
+        customWorkspace = "";
     }
     function setTextSize(index) {
         if (textSizeProcess.running || index < 0 || index >= textSizeStops.length)
@@ -268,6 +269,15 @@ Card {
         overlay.placeDisplayConfirmation(draft);
         var args = ["preview", "--json", JSON.stringify(draft)];
         run(args);
+    }
+    function useDisplay(connector) {
+        if (busy || pending || dirty || wallpaperEditor.dirty || queryProcess.running || !catalog)
+            return;
+        var display = catalog.displays.find(function(d) { return d.connector === connector; });
+        if (!Displays.canUseDisplay(catalog.displays, display))
+            return;
+        confirmingDiscard = false;
+        run(["use-display", connector]);
     }
     function revert() {
         confirmingDiscard = false;
@@ -493,6 +503,10 @@ Card {
                     else if (result.token)
                         pane.pending = result;
                     pane.notice = result.message || "";
+                    if (result.previous_source)
+                        pane.previousSource = result.previous_source;
+                    if (result.removed)
+                        pane.removedDisplay(result.removed);
                 } catch (e) {}
                 if (command[2] === "sleep")
                     pane.notice = "Display asleep. Wake it from here, or press a key if no other display is awake.";
@@ -506,7 +520,9 @@ Card {
                         pane.error = "Some settings could not be restored: " + result.errors.join("; ");
                 }
             }
-            pane.refresh();
+            // Process.running settles after the exit signal; refresh on the
+            // next turn so immediate actions do not leave a stale catalog.
+            Qt.callLater(function () { pane.refresh(); });
             if (pane.closeAfterRevert && code === 0 && command[2] === "revert") {
                 pane.closeAfterRevert = false;
                 pane.closeRequested();
@@ -826,7 +842,7 @@ Card {
                             readonly property var entry: pane.draft.displays[index]
                             text: pane.numberOf(index) + " · " + entry.connector + (!entry.connected ? " · disconnected" : !entry.enabled ? " · disabled" : entry.mirror_of ? " · mirrors " + pane.numberOf(pane.draft.displays.findIndex(function (d) {
                                             return d.id === entry.mirror_of;
-                                        })) : pane.isAsleep(entry) ? " · asleep" : "")
+                                        })) : Displays.mirrorSource(pane.draft.displays, entry) ? " · in use" : pane.isAsleep(entry) ? " · asleep" : "")
                             selected: index === pane.selectedIndex
                             onClicked: pane.selectedIndex = index
                         }
@@ -986,12 +1002,12 @@ Card {
                         Action {
                             text: "Remove saved display"
                             enabled: !queryProcess.running && Displays.removalError(pane.draft, pane.selectedDisplay) === ""
-                            Accessible.description: "Remove this disconnected display's saved settings after Preview and Keep changes"
+                            Accessible.description: "Remove this disconnected display's saved settings immediately"
                             onClicked: pane.removeSelectedDisplay()
                         }
                         Label {
                             width: parent.width
-                            text: Displays.removalError(pane.draft, pane.selectedDisplay) || "Removes saved display settings, its specific monitor rules, startup workspace and placement preferences after Preview → Keep. Workspace layouts and windows are kept. Wallpaper groups are kept separately. A reconnected display is discovered again. Reset cancels removal."
+                            text: Displays.removalError(pane.draft, pane.selectedDisplay) || "Removes saved settings immediately, including specific monitor rules, startup workspace and placement preferences. Workspace layouts, windows and wallpaper groups are kept. A reconnected display is discovered again."
                             color: pane.muted
                             font.pixelSize: pane.overlay.uiCaption
                         }
@@ -1048,6 +1064,35 @@ Card {
                         onActivated: function (index) {
                             pane.draft = Displays.setUsage(pane.draft, pane.selectedIndex, model[index].value);
                             pane.dirty = true;
+                        }
+                    }
+                    Column {
+                        width: parent.width
+                        spacing: 8
+                        visible: !!pane.selectedMirrorSource
+                        Label {
+                            width: parent.width
+                            text: pane.catalog ? Displays.mirrorStatus(pane.catalog.displays, pane.liveDisplay, pane.numbering) : ""
+                            color: pane.overlay.accent
+                        }
+                        Action {
+                            text: pane.liveDisplay && pane.selectedMirrorSource && pane.liveDisplay.id === pane.selectedMirrorSource.id ? "This display is in use" : "Use this display"
+                            primary: enabled
+                            enabled: !pane.dirty && !wallpaperEditor.dirty && !queryProcess.running && !!pane.catalog && Displays.canUseDisplay(pane.catalog.displays, pane.liveDisplay)
+                            Accessible.description: "Size the shared desktop for this display and save immediately"
+                            onClicked: pane.useDisplay(pane.liveDisplay.connector)
+                        }
+                        Action {
+                            text: "Switch back to " + pane.previousSource
+                            visible: pane.previousSource !== "" && !!pane.catalog && !!pane.selectedMirrorSource && Displays.mirrorSource(pane.catalog.displays, pane.catalog.displays.find(function(d) { return d.connector === pane.previousSource; })) === pane.selectedMirrorSource
+                            enabled: !pane.dirty && !wallpaperEditor.dirty && !queryProcess.running && !!pane.catalog && Displays.canUseDisplay(pane.catalog.displays, pane.catalog.displays.find(function(d) { return d.connector === pane.previousSource; }))
+                            onClicked: pane.useDisplay(pane.previousSource)
+                        }
+                        Label {
+                            width: parent.width
+                            text: pane.dirty || wallpaperEditor.dirty ? "Save or reset your pending edits before switching displays." : "Windows fit the active display; the others show a scaled copy. Switching saves immediately. Each display keeps its resolution, refresh rate, scale and rotation."
+                            color: pane.muted
+                            font.pixelSize: pane.overlay.uiCaption
                         }
                     }
                     Column {
@@ -1427,7 +1472,7 @@ Card {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 color: pane.error !== "" ? Color.urgent : pane.fg
-                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Enter keeps, Escape reverts. Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Display settings are saved with Keep changes. Apply switches workspaces immediately."))
+                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Enter keeps, Escape reverts. Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Arrangement edits use Preview → Keep. Workspace and active display switches apply immediately."))
             }
         }
     }

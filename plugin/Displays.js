@@ -14,8 +14,7 @@ function removalError(document, display) {
     return ""
 }
 
-// Removal is a draft edit. Keep explicit removal intent so a stale draft or a
-// partial CLI document cannot silently delete configuration declarations.
+// Explicit removal intent also supports scripted settings transactions.
 function removeDisplay(document, index) {
     var display = document.displays[index]
     var error = removalError(document, display)
@@ -26,6 +25,18 @@ function removeDisplay(document, index) {
     Object.keys(next.workspaces || {}).forEach(function(key) {
         if (next.workspaces[key].monitor === display.id)
             next.workspaces[key].monitor = null
+    })
+    return next
+}
+
+// Reflect a completed immediate removal without committing unrelated edits.
+function forgetDisplay(document, identity) {
+    var next = clone(document)
+    next.displays = next.displays.filter(function(d) { return d.id !== identity })
+    next.removed_displays = (next.removed_displays || []).filter(function(id) { return id !== identity })
+    if (!next.removed_displays.length) delete next.removed_displays
+    Object.keys(next.workspaces || {}).forEach(function(key) {
+        if (next.workspaces[key].monitor === identity) next.workspaces[key].monitor = null
     })
     return next
 }
@@ -176,7 +187,7 @@ function numbering(displays) {
         if (!p.shown) return p.index - q.index
         if (p.x !== q.x) return p.x - q.x
         if (p.y !== q.y) return p.y - q.y
-        if (p.mirror !== q.mirror) return p.mirror - q.mirror
+        // Physical numbers within a group stay put when its source changes.
         return p.index - q.index
     })
     var out = []
@@ -199,8 +210,29 @@ function groupLabel(displays, index, numbers) {
     }).filter(function(x) { return x !== null }).sort(function(p, q) { return p - q }).join(" + ")
 }
 
+function mirrorSource(displays, selected) {
+    if (!selected || !selected.connected || !selected.enabled) return null
+    var source = selected.mirror_of ? displays.find(function(d) { return d.id === selected.mirror_of }) : selected
+    if (!source || !source.connected || !source.enabled || source.mirror_of) return null
+    return displays.some(function(d) { return d.connected && d.enabled && d.mirror_of === source.id }) ? source : null
+}
+
+function canUseDisplay(displays, selected) {
+    var source = mirrorSource(displays, selected)
+    return !!source && source.id !== selected.id && selected.awake !== false
+}
+
+function mirrorStatus(displays, selected, numbers) {
+    var source = mirrorSource(displays, selected)
+    if (!source) return ""
+    var index = displays.findIndex(function(d) { return d.id === source.id })
+    return "Desktop sized for display " + (numbers || numbering(displays))[index] + " · " + source.connector
+        + " · " + source.width + "×" + source.height
+}
+
 function usageOptions(displays, selected) {
-    var options = [{label: "Extended display", value: "extended"}, {label: "Disabled", value: "disabled"}]
+    var source = mirrorSource(displays, selected)
+    var options = [{label: source && source.id === selected.id ? "Shared desktop source" : "Extended display", value: "extended"}, {label: "Disabled", value: "disabled"}]
     var numbers = numbering(displays)
     displays.forEach(function(d, i) {
         if (d.id !== selected.id && d.connected && d.enabled && !d.mirror_of)

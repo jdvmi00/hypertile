@@ -13,7 +13,7 @@ when free, or finds free space if another display now occupies that position.
 
 Screens are numbered by
 position, left to right and then top to bottom, so the number on a screen says
-where it stands; a mirror counts right after its source, and disconnected or
+where it stands; members of a mirror group keep their relative numbers, and disconnected or
 disabled displays come last. Tab to a diagram screen and use arrows to move one
 logical pixel, or Shift+arrows for ten. **Identify displays** labels every
 screen with its number for a few seconds, with the selected screen highlighted;
@@ -28,9 +28,10 @@ If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a
 saved configuration.
 
-To forget a disconnected screen, select it and choose **Remove saved display**,
-then **Preview changes → Keep changes**. **Reset**, **Revert**, or preview timeout
-cancels removal. Connected screens, including disabled or sleeping outputs,
+To forget a disconnected screen, select it and choose **Remove saved display**.
+Removal saves immediately and refreshes the list; there is no preview or
+confirmation countdown. Unrelated unsaved edits remain in the pane.
+Connected screens, including disabled or sleeping outputs,
 must be disconnected before their saved profile can be removed; use **Use as →
 Disabled** to turn off a connected screen.
 
@@ -39,8 +40,11 @@ default, and workspace placement preferences. Workspace layouts, windows, scenes
 and separately saved wallpaper groups remain. Its specific declarations in
 `monitors.lua` are removed, preserving the fallback rule and unrelated settings.
 Shared description rules and remaining mirror dependencies block removal with an
-explanation. Choose another mirror source first. If the screen or another screen
-using its connector reconnects before saving, removal is rejected. Reconnecting
+explanation. Choose another mirror source first. When a connected display is
+being saved as Extended but its connector rule still mirrors the absent screen,
+removal clears that stale reference and keeps its current position in the same
+save. If the screen or another screen using its connector reconnects before
+saving, removal is rejected. Reconnecting
 after removal discovers the screen again using the remaining monitor rules.
 
 Choose **Preview changes**, then **Keep changes** within 15 seconds. The
@@ -74,6 +78,41 @@ Mirroring uses the same preview countdown, Keep, and rollback as other display
 changes. Keep writes the `mirror` field into the existing Lua declaration.
 Returning to Extended explicitly clears that field. Recovery establishes source
 displays first and keeps a remaining output usable if a source disappears.
+
+### Size the shared desktop for another display
+
+Once a mirror group is set up, select one of its physical displays in the list
+and choose **Use this display**. The same windows and workspaces move to that
+display and fit its configured resolution and scale. Each output keeps its own
+resolution, refresh rate, scale, and rotation. The other group members receive
+a scaled copy; they do not render an independent desktop at their own resolution.
+Different aspect ratios may stretch the mirrored image.
+
+**Desktop sized for display …** and **in use** identify the active source.
+Selecting a display in the diagram or list only opens its settings. Group
+members keep their relative numbering when switching its source.
+
+Switching applies and saves immediately, without another Keep prompt.
+**Switch back to …** returns to the previous source. The same recoverable
+transaction and independent watchdog protect application and saving; a failure
+restores the previous arrangement where possible. Complete or reset pending
+display and wallpaper edits first. Sleeping outputs must be woken before using
+them as the active display.
+
+All workspaces currently on the old source follow it, including workspaces
+without saved placement preferences. The visible workspace and focused window
+are retained. Explicit layouts and scene assignments travel with their workspace;
+inheriting workspaces use the active monitor's layout default. Other extended
+displays keep their content and positions. If the larger desktop would overlap
+one, the mirror group moves to the nearest free position. Saved placement and
+Extended-position preferences are retained.
+
+For keyboard use, `hypertile-ctl display use-display next` cycles the focused
+mirror group through its awake members. Bind this command to a shortcut if
+desired. `hypertile-ctl display use-display DP-2` selects a specific connector.
+Both commands save immediately; run the command again with the previous
+connector to switch back. An extended display outside a mirror group cannot be
+selected with this command.
 
 ## Sleep and disable
 
@@ -227,6 +266,9 @@ hypertile-ctl display preview --json - < settings.json
 hypertile-ctl display keep TOKEN
 hypertile-ctl display revert TOKEN
 hypertile-ctl display show-workspace HDMI-A-1 1
+hypertile-ctl display use-display DP-2
+hypertile-ctl display use-display next
+hypertile-ctl display remove-display SAVED_DISPLAY_ID
 hypertile-ctl display sleep DP-1
 hypertile-ctl display wake DP-1
 hypertile-ctl display wake
@@ -256,7 +298,12 @@ use selectors as keys and `{ "monitor": "saved-display-id", "layout": null }`
 as values; `null` inherits, while a layout string is explicit. Custom layouts
 use the `lua:` prefix. Display transforms use Hyprland's values 0–7.
 
-To remove saved disconnected displays through a settings document, add their
+Use `display remove-display SAVED_DISPLAY_ID` to forget a disconnected profile
+immediately. The service reads current settings, clears its workspace placement
+references, and saves without previewing geometry. Save failures restore the
+profile and its configuration; reconnecting before the save rejects removal.
+
+For scripted settings transactions, add disconnected display
 IDs to `removed_displays` and omit them from `displays`. Clear their workspace
 `monitor` references to `null`, retaining each workspace's `layout`. Resolve any
 `mirror_of` references first. Removal uses the same preview/keep/revert transaction;

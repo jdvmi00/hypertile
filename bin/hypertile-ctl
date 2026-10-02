@@ -68,7 +68,7 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
   workspaces [--json]        every workspace with its monitor and layout
   windows [--json]           open windows (class, title, workspace)
   tile-move <request-json>   move/swap the captured window to its selected tile
-  display <command> [...]   list, preview, keep, revert, sleep, wake, restore
+  display <command> [...]   list, preview, keep, revert, use-display, remove-display, sleep, wake, restore
   scene <command> [...]     list, save, apply, current, restore, retry, content;
                              see docs/SCENES.md
   session <command> [name]   status, enable, disable, save <name>, restore [name], freeze, resume,

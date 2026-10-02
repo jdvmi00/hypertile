@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Remove saved display** saves immediately without Preview or Keep, preserving
+  unrelated unsaved edits. Removing a disconnected display clears obsolete
+  mirror references in explicit connector rules when the remaining display is
+  Extended. Failed saves restore the profile and its configuration.
+
+- Mirror groups: **Use this display** fits the shared desktop to the chosen
+  monitor while each output retains its own mode, scale, and rotation. Switching
+  saves immediately with **Switch back** and recovery on failure. Workspaces,
+  windows and focus follow the source; other extended displays keep their content.
+  Relative numbering stays stable within a group. `display use-display next` cycles
+  its awake members for shortcut use.
+
 - Displays disabled at startup retain usable saved settings or an advertised
   mode. Returning to Extended finds free space when the old position is occupied;
   staggered arrangements remain separate after resizing or rotation. Logical

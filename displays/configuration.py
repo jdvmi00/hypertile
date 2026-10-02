@@ -188,6 +188,11 @@ class Configuration:
             source = next((m for m in document['displays'] if m['id'] == target), None)
             mirror = source['connector'] if source else ''
             old_mirror = old.get('mirror_connector') or ''
+            if old_mirror and not mirror and d['enabled']:
+                # Mirror readback reports the source's desktop position. The
+                # declaration can still hold a different Extended position.
+                # Pin the new source's anchor even if its readback did not move.
+                fields['position'] = values['position']
             if mirror != old_mirror or ('disabled' in fields and ('mirror_of' in d or old.get('mirror_of'))):
                 fields['mirror'] = lua_string(mirror)
             if fields:
@@ -207,6 +212,29 @@ class Configuration:
             rules = declarations(source)
         except DisplayError as error:
             raise DisplayError(f'{self.path}: {error}') from error
+        if removed:
+            removed_connectors = {d['connector'] for d in removed}
+            changed = {d['connector']: fields for d, fields in changes}
+            for d in document['displays']:
+                old = baseline.get(d['connector'], {})
+                if (not old.get('connected') or not d['enabled']
+                        or 'mirror_of' not in d or d['mirror_of'] is not None):
+                    continue
+                # An absent source can make Hyprland report an independent
+                # output while its saved rule still requests mirroring. Clear
+                # that stale dependency only in an explicit connector rule;
+                # shared, computed and unknown rules still block removal.
+                if rule_for(rules, d) != d['connector']:
+                    continue
+                span = rules[d['connector']]['fields'].get('mirror')
+                literal = re.fullmatch(r"([\"'])([^\"'\\]*)\1", source[span[0]:span[1]]) if span else None
+                if not literal or literal[2] not in removed_connectors:
+                    continue
+                if d['connector'] not in changed:
+                    changed[d['connector']] = {}
+                    changes.append((d, changed[d['connector']]))
+                changed[d['connector']]['mirror'] = lua_string('')
+                changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
         # Preview uses explicit coordinates. A geometry/topology change can move
         # another automatically placed output even when its draft did not move.
         # Pin those dependencies, leaving explicit positions and the fallback
