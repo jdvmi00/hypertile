@@ -17,6 +17,7 @@ function M.capture(active)
   local source, slots = require("hypr.hypertile-session").navigation_slots(active)
   assert(source and slots, "Waiting for the layout; try again")
   local json = require("hypr.hypertile-json")
+  local monitor = active.monitor or hl.get_active_monitor()
   local destinations = json.array()
   for _, slot in ipairs(slots) do
     local numbers = json.array()
@@ -26,13 +27,16 @@ function M.capture(active)
     local box = engine.fit_box({ x = slot.at.x, y = slot.at.y,
       w = slot.size.x, h = slot.size.y }, live.compiled.leaf_opts[slot.zone])
     destinations[#destinations + 1] = { zone = slot.zone, numbers = numbers,
-      x = box.x, y = box.y, w = box.w, h = box.h,
+      -- The layout receives global geometry. The overlay and drag hit test
+      -- use coordinates within this monitor, including negative origins.
+      x = box.x - monitor.position.x, y = box.y - monitor.position.y,
+      w = box.w, h = box.h,
       occupied = #slot.windows > 0 }
   end
   return { address = active.address, stable_id = active.stable_id, pid = active.pid,
     workspace = active.workspace.id, layout = active.workspace.tiled_layout,
     spec = json.encode(live.spec), source = source.zone,
-    monitor = (active.monitor or hl.get_active_monitor()).name, slots = destinations }
+    monitor = monitor.name, slots = destinations }
 end
 
 function M.move(request, after_drag)

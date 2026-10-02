@@ -33,23 +33,28 @@ def display(name='DP-1', x=0):
 class Fake:
     def __init__(self):
         self.current = [display(), display('DP-2', 1920)]
+        self.live = [dict(id=1, name='1', monitor='DP-1'), dict(id=-2, name='work', monitor='DP-2')]
         self.calls = []
         self.fail = False
     def displays(self): return copy.deepcopy(self.current)
-    def workspaces(self): return [dict(name='1', monitor='DP-1'), dict(name='work', monitor='DP-2')]
+    def workspaces(self): return copy.deepcopy(self.live)
     def conflicts(self): return []
     def apply(self, d):
         self.calls.append(('apply', d['connector'], d['enabled']))
         if self.fail:
             self.fail = False
             raise DisplayError('Injected apply failure')
-        self.current = [dict(d) if m['connector'] == d['connector'] else m for m in self.current]
+        self.current = [dict(d, awake=m['awake']) if m['connector'] == d['connector'] else m for m in self.current]
     def verify(self, desired):
         from adapter import same
         if not all(any(m['connector'] == d['connector'] and same(m, d) for m in self.current) for d in desired):
             raise DisplayError('readback mismatch')
         return self.displays()
-    def move(self, workspace, connector): self.calls.append(('move', workspace, connector))
+    def move(self, workspace, connector):
+        self.calls.append(('move', workspace, connector))
+        for item in self.live:
+            if Service._handoff_workspace(item) == workspace:
+                item['monitor'] = connector
     WAKE_OPTIONS = ('key_press_enables_dpms', 'mouse_move_enables_dpms')
     options = dict(key_press_enables_dpms=True, mouse_move_enables_dpms=True)
     def wake_options(self): return dict(self.options)
@@ -74,6 +79,13 @@ class Tests(unittest.TestCase):
     def doc(self): return dict(version=1, displays=self.adapter.displays(), workspaces={})
     def awake(self, connector):
         return next(m for m in self.adapter.current if m['connector'] == connector)['awake']
+
+    def test_layout_helper_reads_catalog_without_reacquiring_parent_lock_or_mutating_power(self):
+        for variable in ('HYPERTILE_DISPLAY_APPLY', 'HYPERTILE_DISPLAY_LOCKED'):
+            with self.subTest(variable=variable), nonblocking_locks(), self.service.lock():
+                with patch.dict(os.environ, {variable: '1'}), patch.object(self.service, '_settle_power') as settle:
+                    self.assertEqual(len(self.service.catalog()['displays']), 2)
+                    settle.assert_not_called()
 
     def removal(self):
         saved = self.doc()
@@ -498,6 +510,83 @@ class Tests(unittest.TestCase):
         self.service.preview(doc, watchdog=False)
         applies = [call for call in self.adapter.calls if call[0] == 'apply']
         self.assertEqual(applies[0], ('apply', 'DP-2', True))
+        self.assertLess(self.adapter.calls.index(('apply', 'DP-2', True)),
+                        self.adapter.calls.index(('move', '1', 'DP-2')))
+        self.assertLess(self.adapter.calls.index(('move', '1', 'DP-2')),
+                        self.adapter.calls.index(('apply', 'DP-1', False)))
+
+    def test_disable_carries_numbered_named_and_special_workspaces_and_revert_restores(self):
+        self.adapter.live += [dict(id=8, name='8', monitor='DP-2', windows=2),
+                              dict(id=-99, name='special:scratchpad', monitor='DP-2', windows=1)]
+        original = self.adapter.workspaces()
+        doc = self.doc()
+        doc['displays'][1]['enabled'] = False
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertTrue(all(w['monitor'] == 'DP-1' for w in self.adapter.workspaces()))
+        for key in ('name:work', '8', 'special:scratchpad'):
+            self.assertLess(self.adapter.calls.index(('move', key, 'DP-1')),
+                            self.adapter.calls.index(('apply', 'DP-2', False)))
+        result = self.service.revert(pending['token'])
+        self.assertFalse(result['errors'])
+        self.assertEqual(self.adapter.workspaces(), original)
+
+    def test_disable_avoids_sleeping_mirrored_and_other_disabled_destinations(self):
+        self.adapter.current[0]['awake'] = False
+        self.adapter.current += [dict(display('DP-3', 3840), mirror_of='connector:DP-1', mirror_connector='DP-1'),
+                                 display('DP-4', 5760), display('DP-5', 7680)]
+        self.adapter.live.append(dict(name='9', monitor='DP-4'))
+        doc = self.doc()
+        doc['displays'][1]['enabled'] = False
+        doc['displays'][3]['enabled'] = False
+        pending = self.service.preview(doc, watchdog=False)
+        locations = {w['name']: w['monitor'] for w in self.adapter.workspaces()}
+        self.assertEqual(locations, {'1': 'DP-1', 'work': 'DP-5', '9': 'DP-5'})
+        self.service.keep(pending['token'])
+        self.assertEqual(self.adapter.workspaces()[1]['monitor'], 'DP-5')
+
+    def test_failed_evacuation_does_not_disable_source(self):
+        self.adapter.move = lambda *args: None
+        doc = self.doc()
+        doc['displays'][1]['enabled'] = False
+        with self.assertRaisesRegex(DisplayError, 'did not move workspace'):
+            self.service.preview(doc, watchdog=False)
+        self.assertNotIn(('apply', 'DP-2', False), self.adapter.calls)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_evacuation_failure_restores_workspaces_already_moved(self):
+        self.adapter.live.append(dict(id=-99, name='special:scratchpad', monitor='DP-2', windows=1))
+        original = self.adapter.workspaces()
+        move = self.adapter.move
+        def fail_second(workspace, connector):
+            if workspace == 'special:scratchpad' and connector == 'DP-1':
+                raise DisplayError('Injected move failure')
+            move(workspace, connector)
+        self.adapter.move = fail_second
+        doc = self.doc()
+        doc['displays'][1]['enabled'] = False
+        with self.assertRaisesRegex(DisplayError, 'Injected move failure'):
+            self.service.preview(doc, watchdog=False)
+        self.assertEqual(self.adapter.workspaces(), original)
+        self.assertNotIn(('apply', 'DP-2', False), self.adapter.calls)
+
+    def test_evacuation_allows_empty_workspace_to_disappear(self):
+        self.adapter.live[1]['windows'] = 0
+        self.adapter.move = lambda *args: self.adapter.live.pop()
+        doc = self.doc()
+        doc['displays'][1]['enabled'] = False
+        pending = self.service.preview(doc, watchdog=False)
+        self.service.keep(pending['token'])
+        self.assertFalse(self.adapter.current[1]['enabled'])
+
+    def test_restore_evacuates_workspaces_before_disabling(self):
+        doc = self.doc()
+        doc['displays'][1]['enabled'] = False
+        atomic(self.service.confirmed_path, doc)
+        self.service.restore()
+        self.assertEqual(self.adapter.workspaces()[1]['monitor'], 'DP-1')
+        self.assertLess(self.adapter.calls.index(('move', 'name:work', 'DP-1')),
+                        self.adapter.calls.index(('apply', 'DP-2', False)))
+
     def test_explicit_duplicate_identity_follows_connector(self):
         saved = dict(display(), id='edid:abc@DP-1', identity='edid:abc', explicit_match=True)
         current = [dict(display(), id='edid:abc', identity='edid:abc')]

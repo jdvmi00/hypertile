@@ -35,6 +35,11 @@ Connected screens, including disabled or sleeping outputs,
 must be disconnected before their saved profile can be removed; use **Use as →
 Disabled** to turn off a connected screen.
 
+Disabling a display moves all its workspaces and their windows to an awake
+extended display before turning it off, including named workspaces and
+scratchpads. Saved workspace preferences remain intact. Revert returns the
+workspaces to their previous displays; Keep leaves them on the enabled display.
+
 Removal clears the screen's saved settings, startup workspace, monitor layout
 default, and workspace placement preferences. Workspace layouts, windows, scenes,
 and separately saved wallpaper groups remain. Its specific declarations in

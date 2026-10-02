@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Window drag and drop and numbered tile outlines work on displays positioned
+  above, below, or beside the desktop origin.
+
+- Disabling a display moves all its workspaces and windows, including named
+  workspaces and scratchpads, to an awake extended display. Revert restores
+  their previous placement; failed moves leave the source enabled.
+
 - Change Hypertile’s menu bar position at any time: right-click the widget or
   use the overlay’s gear, then choose **Left**, **Middle**, or **Right**. Visual
   position cards follow the current placement and apply immediately across
