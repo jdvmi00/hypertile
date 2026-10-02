@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Display validation, transactional persistence, and failure-injection tests."""
+import contextlib
 import copy
 import fcntl
 import json
@@ -13,6 +14,14 @@ from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
 from adapter import DisplayError, bounds, clean_scale, match, normalized, validate
 from service import Service, atomic, read
+
+
+@contextlib.contextmanager
+def nonblocking_locks():
+    """Exercise real locks, but fail instead of hanging on recursive acquisition."""
+    flock = fcntl.flock
+    with patch('service.fcntl.flock', side_effect=lambda fd, operation: flock(fd, operation | fcntl.LOCK_NB)):
+        yield
 
 
 def display(name='DP-1', x=0):
@@ -127,6 +136,25 @@ class Tests(unittest.TestCase):
         self.service.remove_display(saved['displays'][1]['id'], watchdog=False)
         self.assertFalse(self.awake('DP-1'))
         self.assertEqual(self.adapter.calls, [])
+
+    def test_immediate_removal_with_sleep_guard_preserves_power_and_allows_wake(self):
+        saved, _ = self.removal()
+        original_options = self.adapter.wake_options()
+        self.service.power('DP-1', False)
+        self.assertTrue(self.service.power_path.exists())
+        self.adapter.calls.clear()
+        with nonblocking_locks():
+            result = self.service.remove_display(saved['displays'][1]['id'], watchdog=False)
+            self.assertEqual(result['removed'], saved['displays'][1]['id'])
+            self.assertEqual(len(read(self.service.confirmed_path)['displays']), 1)
+            self.assertFalse(self.service.pending_path.exists())
+            self.assertFalse(self.awake('DP-1'))
+            self.assertEqual(self.adapter.calls, [])
+            self.assertTrue(self.adapter.options['key_press_enables_dpms'])
+            self.service.power('DP-1', True)
+        self.assertTrue(self.awake('DP-1'))
+        self.assertFalse(self.service.power_path.exists())
+        self.assertEqual(self.adapter.wake_options(), original_options)
 
     def test_immediate_removal_rejects_existing_preview(self):
         saved, document = self.removal()
@@ -868,6 +896,25 @@ class MirrorHandoffTests(unittest.TestCase):
         self.adapter.active['monitor'] = 'DP-3'
         with self.assertRaisesRegex(DisplayError, 'mirror group'):
             self.service.use_display('next', watchdog=False)
+
+    def test_switch_with_sleep_guard_settles_power_and_allows_wake(self):
+        original_options = self.adapter.wake_options()
+        self.service.power('DP-3', False)
+        self.assertTrue(self.service.power_path.exists())
+        # A config reload can reset the options while the output stays asleep.
+        self.adapter.options = dict(original_options)
+        with nonblocking_locks():
+            result = self.service.use_display('DP-2', watchdog=False)
+            self.assertEqual(result['previous_source'], 'DP-1')
+            self.assertEqual([w['monitor'] for w in self.adapter.live], ['DP-2'] * 4 + ['DP-3'])
+            self.assertFalse(self.service.pending_path.exists())
+            self.assertEqual(read(self.service.confirmed_path)['displays'][0]['mirror_of'], 'connector:DP-2')
+            self.assertFalse(self.adapter.current[2]['awake'])
+            self.assertEqual(self.adapter.wake_options(), dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False))
+            self.service.power('DP-3', True)
+        self.assertTrue(self.adapter.current[2]['awake'])
+        self.assertFalse(self.service.power_path.exists())
+        self.assertEqual(self.adapter.wake_options(), original_options)
 
     def test_failures_restore_the_desktop_focus_and_saved_configuration(self):
         original = self.adapter.displays()
