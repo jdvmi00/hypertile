@@ -82,6 +82,7 @@ without `--enable`, then run its `install.sh` with `--no-menu` and/or
 | `SUPER+Arrow` / `SUPER+SHIFT+Arrow` | focus a window / move or swap it into the next slot |
 | `SUPER` + left mouse drag | drag a tiled window to a numbered destination |
 | bar widget | the layout on this monitor's workspace; scroll or middle-click cycles |
+| right-click bar widget | choose Hypertile’s menu bar position: Left, Middle, or Right |
 | `hypertile-ctl list` | the layouts on disk, the one in use starred |
 
 Layouts live one per file in `~/.config/hypr/layouts/<name>.lua`. A layout
@@ -96,6 +97,18 @@ default layout, falling back to `general.layout` in `looknfeel.lua`. Choose
 **Follow monitor default** in the Layouts rail, or run
 `hypertile-ctl apply monitor-default`, to clear a workspace override. An active
 scene keeps its required layout until you confirm a replacement.
+
+### Menu bar position
+
+Right-click Hypertile’s bar widget, or choose the gear in the overlay header,
+to open **Menu bar**. Choose **Left**, **Middle**, or **Right** using the visual
+position cards. The checked card shows the current position; changes apply
+immediately on every screen and survive restarts and updates. On a vertical
+bar, the choices become **Top**, **Middle**, and **Bottom**.
+
+Use arrow keys to focus a card and Enter or Space to select it. Escape or a
+click outside closes the popover. Placement is saved by Omarchy independently
+of your layouts and scenes.
 
 ### Moving and swapping windows
 
@@ -160,6 +173,15 @@ the global or a monitor default cannot be deleted until another default is
 chosen. Workspaces whose explicit layout is deleted return to inheritance. The rail's **Workspaces** section uses the viewed
 layout on any workspace, on every workspace of a monitor, or as the
 default, and keeps the overlay open.
+
+### Sharing layouts
+
+Use **Export…** in the Layouts tab to save the selected layout as a JSON file.
+On another installation, **Import…** adds it to the layout list. Imports are
+independent copies: if the name already exists, Hypertile adds `-2`, `-3`, and
+so on. Choose **Use** to apply the imported layout. Layout files include zone
+geometry, fill order, app rules, and layout settings; scenes, open windows,
+display settings, and workspace assignments are separate.
 
 ### Edit mode
 
@@ -336,6 +358,10 @@ from this checkout with `HYPERTILE_SRC=$PWD bin/hypertile-ctl help`.
 ```text
 hypertile-ctl list [--json]            layouts on disk, the one in use starred; --json includes each spec
 hypertile-ctl dump <name>              layout as JSON  {"name":..., "spec":{...}}
+hypertile-ctl export <name> [file|-] [--force]
+                                       export JSON to a file or stdout; --force allows overwrite
+hypertile-ctl import [file|-] [--name NAME] [--no-reload] [--json]
+                                       import as a new layout; duplicate names gain -2, -3, ...
 hypertile-ctl validate [file|-]        check JSON, silent on success
 hypertile-ctl save [file|-] [--no-reload]
                                        write layouts/<name>.lua, reload
@@ -371,6 +397,19 @@ hypertile-ctl path [name]              layouts dir or a layout's file
 Reading a layout back executes its file with a recording stub in place of
 the engine, so hand-edited files round-trip as long as they are valid Lua.
 
+Share layouts without copying executable Lua:
+
+```bash
+hypertile-ctl export quad ~/quad.json
+hypertile-ctl import ~/quad.json
+hypertile-ctl import ~/quad.json --name work
+```
+
+Import validates the JSON before saving a new layout and reloading Hyprland;
+it does not apply the layout. It clears scene identities so copies can be used
+independently. Export refuses an existing destination unless `--force` is
+provided. The overlay's Save dialog asks before replacing an export file.
+
 ### Scenes, displays, and sessions
 
 | Command | Purpose | Reference |
@@ -395,6 +434,7 @@ it:
 | `next`, `prev`, `view <name>` | browse |
 | `use`, `apply`, `applyTo <ws>`, `applyMonitor <mon>`, `setDefault` | use the viewed layout (`use` closes) |
 | `inCycle <bool>`, `rename <name>`, `deleteLayout` | layout housekeeping |
+| `importLayout <path>`, `exportLayout <path>` | import a JSON layout, or export the viewed layout (existing export files are refused) |
 | `edit`, `newLayout`, `newBlank` | enter edit mode (copy or blank) |
 | `select <zone>`, `move <dir>`, `split <zone> <columns\|rows>`, `remove <zone>` | zones |
 | `nudge <w\|h> <delta>`, `size <zone> <w\|h> <fraction>`, `resize <path> <index> <ratio>` | sizes |

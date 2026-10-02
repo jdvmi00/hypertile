@@ -510,7 +510,18 @@ Card {
             anchors.verticalCenter: parent.verticalCenter
             spacing: Style.spacing.sm
             Action {
+              text: "⚙"
+              bordered: false
+              horizontalPadding: 4
+              focusable: true
+              Accessible.name: "Menu bar settings"
+              tooltipText: "Menu bar position"
+              onClicked: overlay.showBarSettings()
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Action {
               text: "?"
+              horizontalPadding: 4
               selected: overlay.showKeys
               bordered: false
               fontSize: overlay.uiFontSmall
@@ -520,6 +531,7 @@ Card {
             }
             Action {
               text: overlay.dockLeft ? "⇥" : "⇤"
+              horizontalPadding: 4
               bordered: false
               fontSize: overlay.uiFontSmall
               tooltipText: overlay.dockLeft ? "Dock the rail on the right" : "Dock the rail on the left"
@@ -738,8 +750,16 @@ Card {
 
       // ---- View mode: every layout on disk, with a picture of each.
       Section {
-        visible: !overlay.editing && !overlay.contentMode && overlay.layouts.length > 1
+        visible: !overlay.editing && !overlay.contentMode
         title: "LAYOUTS"
+
+        Flow {
+          visible: !overlay.renaming
+          width: parent.width
+          spacing: Style.spacing.sm
+          Action { text: "Export…"; tooltipText: "Export this layout to a JSON file"; enabled: overlay.viewed !== null && !overlay.viewedIsBuiltin && !overlay.busy && !overlay.transferDialogOpen; onClicked: overlay.chooseExport() }
+          Action { text: "Import…"; tooltipText: "Import a JSON layout as a new copy"; enabled: !overlay.busy && !overlay.transferDialogOpen; onClicked: overlay.chooseImport() }
+        }
 
         Column {
           width: column.width

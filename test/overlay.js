@@ -27,7 +27,7 @@ function fixture() {
   const context = {
     root, Editor: editor, Content: (() => {const c = {}; vm.runInNewContext(fs.readFileSync("plugin/Content.js", "utf8"), c); return c})(), Qt: {callLater(fn) {later.push(fn)}},
     Quickshell: {execDetached(args) {calls.push(clone(args))}},
-    browseProc: {running: false}, currentProc: {running: false}, listProc: {running: false},
+    browseProc: {running: false}, currentProc: {running: false}, listProc: {running: false}, importProc: {running: false},
     catalogProc: {running: false}, ctlProc: {running: false}, previewProc: {running: false},
     workspacesProc: {}, windowsProc: {}, defaultProc: {},
     displaysPane: {wallpaperEditor: {dirty: false, busy: false}, requestClose() { calls.push(["wallpaper-close"]) }},
@@ -71,12 +71,67 @@ for (const changes of [{opened: false}, {dismissing: true}, {editing: true}, {co
   assert.equal(root.viewIndex, 0)
   assert.equal(context.browseTimer.running, false)
 }
-for (const changes of [{busy: true}, {pendingSwitch: {}}, {naming: true}, {renaming: true}, {choosingNew: true}, {confirmingDelete: true}]) {
+for (const changes of [{busy: true}, {transferDialogOpen: true}, {barSettingsOpen: true}, {pendingSwitch: {}}, {naming: true}, {renaming: true}, {choosingNew: true}, {confirmingDelete: true}]) {
   const {root, context} = fixture()
   Object.assign(root, changes)
   assert.equal(root.cycleFromShortcut("1", 1), "handled", "a dialog must not fall through to a compositor-only cycle")
   assert.equal(root.viewIndex, 0)
   assert.equal(context.browseTimer.running, false)
+}
+
+// Opening menu bar settings preserves any layout preview or unsaved edit.
+{
+  const {root, context} = fixture()
+  let opened = 0
+  context.barSettings = {open() { opened++ }}
+  root.liveLayout = 'lua:wide'
+  root.editing = true
+  root.dirty = true
+  root.open('{"settings":"bar"}')
+  assert.equal(opened, 1)
+  assert.equal(root.committedLayout, 'lua:quad')
+  assert.equal(root.liveLayout, 'lua:wide')
+  assert.equal(root.editing, true)
+  assert.equal(root.dirty, true)
+}
+
+// File transfers are serialized with other actions, and imports are selected
+// without applying them or replacing the workspace's committed layout.
+{
+  const {root, context} = fixture()
+  context.importProc = {running: false}
+  assert.equal(root.importLayout('/tmp/shared layout.json'), true)
+  assert.deepEqual(clone(context.importProc.command), ['ctl', 'import', '/tmp/shared layout.json', '--json'])
+  assert.equal(root.busy, true)
+  assert.equal(root.importLayout('/tmp/another.json'), false)
+  let refreshed = 0
+  root.refresh = () => refreshed++
+  root.finishImport('{"name":"quad-2","path":"/layouts/quad-2.lua"}', 0, 0)
+  assert.equal(root.busy, false)
+  assert.equal(root.pendingView, 'quad-2')
+  assert.equal(root.statusText, 'Imported quad-2')
+  assert.equal(refreshed, 1)
+  assert.equal(root.committedLayout, 'lua:quad')
+  assert.equal(context.browseProc.running, false)
+  root.pendingView = ''
+  root.errorText = 'Invalid JSON'
+  root.finishImport('', 1, 0)
+  assert.equal(root.pendingView, '')
+  assert.equal(root.errorText, 'Invalid JSON')
+  assert.equal(refreshed, 1)
+  root.errorText = 'Reload failed'
+  root.finishImport('{"name":"quad-3"}', 1, 0)
+  assert.match(root.errorText, /Imported quad-3.*could not reload/)
+  assert.equal(refreshed, 2)
+  assert.equal(root.exportLayout('quad', '/tmp/export.json', false), true)
+  assert.deepEqual(clone(context.ctlProc.command), ['ctl', 'export', 'quad', '/tmp/export.json'])
+  root.busy = false
+  assert.equal(root.exportLayout('quad', '/tmp/export.json', true), true)
+  assert.deepEqual(clone(context.ctlProc.command), ['ctl', 'export', 'quad', '/tmp/export.json', '--force'])
+  root.busy = false
+  root.editing = true
+  assert.equal(root.importLayout('/tmp/shared.json'), false)
+  assert.equal(root.exportLayout('quad', '/tmp/export.json'), false)
 }
 
 // A copied layout cannot use its source's name; an edit of the original can.

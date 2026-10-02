@@ -220,6 +220,56 @@ end
 -- 6. Compositor calls use a fake hyprctl so the protocol is exercised
 ---------------------------------------------------------------------------
 do
+  local original_dir = bridge.paths.layouts_dir
+  bridge.paths.layouts_dir = tmp .. "/transfer-layouts"
+  local spec = bridge.plain(quad_spec)
+  spec.layout_id = "original-layout"
+  spec.columns[1].id = "original-zone"
+  spec.rounding, spec.in_cycle = 12, false
+  spec.gaps = { inner = 4, outer = 8 }
+  assert(bridge.save("shared", spec))
+  local original = slurp(bridge.layout_path("shared"))
+  local text = assert(bridge.export_layout("shared"))
+  local name, decoded = bridge.from_json(text)
+  check(name == "shared" and deep_equal(decoded, spec), "export preserves every spec field")
+  local export_path = tmp .. "/Jim's exported layout.json"
+  check(bridge.export_layout("shared", export_path) == export_path, "export supports spaces and quotes in paths")
+  check(slurp(export_path) == text, "file and stdout exports match")
+  check(not bridge.export_layout("shared", export_path), "export refuses to overwrite by default")
+  check(bridge.export_layout("shared", export_path, true), "explicit export overwrite succeeds")
+  check(not bridge.export_layout("missing", export_path, true) and slurp(export_path) == text,
+    "missing layout export leaves the destination untouched")
+  check(not bridge.export_layout("shared", tmp .. "/missing/dir/out.json"), "export reports unwritable destinations")
+  local imported, path = bridge.import_layout(text)
+  check(imported == "shared-2" and path == bridge.layout_path("shared-2"), "import adds a suffix on collision")
+  local back = assert(bridge.load(imported))
+  spec.layout_id, spec.columns[1].id = nil, nil
+  check(deep_equal(back, spec), "import preserves geometry and settings but clears scene identities")
+  check(slurp(bridge.layout_path("shared")) == original, "import does not change the original")
+  check(bridge.import_layout(text) == "shared-3", "repeated import picks another unused suffix")
+  check(bridge.import_layout(text, "custom") == "custom", "import supports a chosen name")
+  check(not bridge.import_layout(text, "../escape"), "import refuses path traversal in a chosen name")
+  local broken = assert(io.open(bridge.layout_path("broken"), "w")); broken:write("not Lua"); broken:close()
+  check(bridge.import_layout(text, "broken") == "broken-2", "import preserves broken existing files")
+  -- A registered name can differ from the filename; both must be reserved.
+  local alias = assert(io.open(bridge.layout_path("alias"), "w")); alias:write(bridge.serialize("registered", spec)); alias:close()
+  check(bridge.import_layout(text, "registered") == "registered-2", "import reserves registered names as well as filenames")
+  local before = #bridge.list()
+  for _, bad in ipairs({"not JSON", "[]", '{"name":"../escape","spec":{"name":"a"}}',
+      '{"name":"invalid","spec":{"columns":[{"name":"a"}],"fill":["missing"]}}',
+      '{"name":"overflow","spec":{"name":"a","w":1e999}}',
+      '{"name":"keyword","spec":{"name":"a","end":true}}',
+      'os.execute("touch ' .. tmp .. '/executed")'}) do
+    check(not bridge.import_layout(bad), "invalid import is rejected")
+  end
+  check(#bridge.list() == before and not exists(tmp .. "/executed"), "invalid imports neither persist nor execute input")
+  -- Exclusive writes also refuse symlinks, including ones with missing targets.
+  os.execute("ln -s '" .. tmp .. "/missing-target' '" .. bridge.layout_path("linked") .. "'")
+  check(not bridge.import_layout(text, "linked") and not exists(tmp .. "/missing-target"), "import cannot clobber a dangling symlink")
+  bridge.paths.layouts_dir = original_dir
+end
+
+do
   -- A fake hyprctl that runs `eval dofile(...)` chunks under plain lua with
   -- a stub `hl`, so query()/preview()/apply() are tested end to end.
   local fake = tmp .. "/fake-hyprctl"
@@ -548,6 +598,27 @@ do
   local demo = '{"name": "demo", "spec": {"columns": [{"name": "a", "w": 1}, {"name": "b", "w": 2}], "fill": ["b", "a"]}}'
   local sout, scode = run("save - --no-reload", demo)
   check(scode == 0 and sout:find("layouts/demo.lua"), "cli save writes the file: " .. sout)
+  local exported, export_code = run("export demo -")
+  check(export_code == 0 and bridge.from_json(exported) == "demo", "cli export produces a reusable JSON document")
+  local imported, import_code = run("import - --name from-cli --no-reload --json", exported)
+  local result = import_code == 0 and json.decode(imported)
+  check(result and result.name == "from-cli" and exists(result.path), "cli import from stdin reports the saved name and path")
+  local bad_import, bad_import_code = run("import - --no-reload", "invalid")
+  check(bad_import_code ~= 0 and bad_import:find("json:"), "cli import reports invalid files")
+  local export_path = tmp .. "/layout export.json"
+  local _, file_export_code = run("export demo '" .. export_path .. "'")
+  local _, conflict_code = run("export demo '" .. export_path .. "'")
+  local file_import, file_import_code = run("import '" .. export_path .. "' --no-reload --json")
+  check(file_export_code == 0 and conflict_code ~= 0, "cli file export protects existing files")
+  check(file_import_code == 0 and json.decode(file_import).name == "demo-2", "cli file import resolves duplicate names")
+  local failed_reload, failed_reload_code = run("import - --name reload-failed --json", exported,
+    "HYPERTILE_HYPRCTL_BIN=/bin/false")
+  check(failed_reload_code ~= 0 and failed_reload:find('"name": "reload-failed"', 1, true)
+    and failed_reload:find("reload reported errors") and exists(bridge.layout_path("reload-failed")),
+    "cli reports persistence separately from a failed reload")
+  os.remove(bridge.layout_path("from-cli"))
+  os.remove(bridge.layout_path("demo-2"))
+  os.remove(bridge.layout_path("reload-failed"))
   local lout = run("list")
   check(lout:find("demo") and lout:find("quad"), "cli list shows saved layouts")
   local jout = run("list --json")

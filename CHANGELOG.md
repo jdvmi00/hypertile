@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Change Hypertile’s menu bar position at any time: right-click the widget or
+  use the overlay’s gear, then choose **Left**, **Middle**, or **Right**. Visual
+  position cards follow the current placement and apply immediately across
+  screens, preserving widget settings and the rest of the bar.
+
+- **Export…** and **Import…** share layouts as JSON from the Layouts tab.
+  Matching `hypertile-ctl export` and `import` commands support files and stdin/stdout.
+  Imports validate before saving, preserve existing layouts by choosing an unused
+  name, and keep scene identities independent from the original.
+
 - **Remove saved display** saves immediately without Preview or Keep, preserving
   unrelated unsaved edits. Removing a disconnected display clears obsolete
   mirror references in explicit connector rules when the remaining display is

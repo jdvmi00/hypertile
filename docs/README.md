@@ -178,5 +178,12 @@ opens a disposable QML panel with simulated outputs to check immediate switching
 catalog refresh, and Switch back. Add `--screenshots /tmp/hypertile-display-ui`
 to save its panel images. Neither test changes physical monitor configuration.
 
+For menu bar placement, run `python3 test/bar_settings.py` on a machine with
+Omarchy and Quickshell installed. It uses an offscreen shell and temporary
+configuration to exercise the real popup and shell registry: all positions,
+mouse and keyboard interaction, persistence, errors, and external changes.
+Add `--screenshots /tmp/hypertile-bar-settings` to save rendered previews.
+It does not change your desktop or bar configuration.
+
 See also [session recovery](SESSIONS.md), [engine internals](INTERNALS.md), and
 the [Hyprland sizing bug](HYPRLAND-SIZING-BUG.md).
