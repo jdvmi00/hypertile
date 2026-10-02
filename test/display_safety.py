@@ -1,4 +1,5 @@
 """Capability changes and mode intent across previews, PBP, docking and recovery."""
+import copy
 import os
 from pathlib import Path
 import sys
@@ -7,7 +8,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
-from adapter import Adapter, DisplayError
+from adapter import Adapter, DisplayError, clean_scale, same
 from configuration import Configuration
 from modes import AUTOMATIC, automatic_options
 from service import Service, read
@@ -66,6 +67,221 @@ class SafetyTests(unittest.TestCase):
         self.service.keep(pending['token'])
         self.assertIn('mode="highres"', self.config.path.read_text())
         self.assertEqual(self.service.catalog()['displays'][0]['mode_policy'], 'highres')
+
+    def test_shadowed_connector_mode_does_not_replace_winning_description_mode(self):
+        self.configuration('1920x1080@60')
+        self.config.path.write_text(self.config.path.read_text() +
+            'hl.monitor({output="desc:Panel",mode="1920x1080@75",position="0x0",scale=1})\n')
+        self.adapter.current[0].update(description='Panel ABC', refresh=75,
+                                      modes=['1920x1080@60.00Hz', '1920x1080@75.00Hz'])
+        native = Adapter()
+        native.run = Mock(return_value='ok')
+        apply = self.adapter.apply
+        def partial_rule(d, **kwargs):
+            native.apply(d, **kwargs)
+            # Native partial updates inherit the exact connector's old mode,
+            # even when a later description rule was previously authoritative.
+            actual = dict(d, refresh=60) if kwargs.get('preserve_mode') else d
+            apply(actual, **kwargs)
+        self.adapter.apply = partial_rule
+        document = self.document()
+        document['displays'][0]['y'] = 100
+        pending = self.service.preview(document, watchdog=False)
+        self.assertEqual(self.adapter.current[0]['refresh'], 75)
+        self.service.revert(pending['token'])
+        self.assertEqual(self.adapter.current[0]['refresh'], 75)
+        self.assertEqual(self.adapter.current[0]['y'], 0)
+        self.assertTrue(all('mode="1920x1080@75"' in call.args[-1] for call in native.run.call_args_list))
+
+    def test_computed_description_mode_cannot_inherit_a_shadowed_connector(self):
+        self.configuration('1920x1080@60')
+        self.config.path.write_text(self.config.path.read_text() +
+            'hl.monitor({output="desc:Panel",mode=selected_mode,position="0x0",scale=1})\n')
+        self.adapter.current[0]['description'] = 'Panel ABC'
+        document = self.document()
+        document['displays'][0]['y'] = 100
+        with self.assertRaisesRegex(DisplayError, 'computed mode'):
+            self.service.preview(document, watchdog=False)
+        self.assertFalse(any(call[0] == 'apply' for call in self.adapter.calls))
+
+    def automatic_fallback(self, **resolved):
+        self.configuration('1920x1080@60')
+        self.adapter.current[0]['modes'] += [
+            '1920x1080@120.00Hz', '1920x1080@144.00Hz',
+            '3840x2160@60.00Hz', '1366x768@60.00Hz']
+        apply = self.adapter.apply
+        fallback = dict(width=1920, height=1080, refresh=120)
+        fallback.update(resolved)
+        def choose(d, **kwargs):
+            actual = dict(d)
+            if d.get('mode_policy') in AUTOMATIC:
+                actual.update(fallback)
+                actual['scale'] = clean_scale(actual['width'], actual['height'], d['scale'])
+            apply(actual, **kwargs)
+        self.adapter.apply = choose
+        # Exercise production polling/verification, with only hardware and the
+        # passage of time replaced. The normal fake assumes exact application.
+        self.adapter.verify = lambda desired, **kwargs: Adapter.verify(self.adapter, desired, **kwargs)
+        sleeping = patch('adapter.time.sleep')
+        sleeping.start()
+        self.addCleanup(sleeping.stop)
+        document = self.document()
+        document['displays'][0].update(width=3840, height=2160, refresh=60, mode_policy='highres')
+        document['displays'][1]['x'] = 3840
+        return document
+
+    def test_automatic_fallback_is_saved_as_resolved_geometry_and_native_policy(self):
+        document = self.automatic_fallback()
+        pending = self.service.preview(document, watchdog=False)
+        journal = read(self.service.pending_path)
+        for resolved in (journal['document']['displays'][0], journal['expected']['DP-1']):
+            self.assertEqual((resolved['width'], resolved['height'], resolved['refresh']), (1920, 1080, 120))
+            self.assertEqual(resolved['mode_policy'], 'highres')
+        self.service.keep(pending['token'])
+        self.assertIn('mode="highres"', self.config.path.read_text())
+        self.assertEqual(read(self.service.confirmed_path)['displays'][0]['refresh'], 120)
+
+    def test_fallback_scale_is_replanned_before_keep(self):
+        document = self.automatic_fallback(width=1366, height=768, refresh=60)
+        document['displays'][0]['scale'] = 1.5
+        pending = self.service.preview(document, watchdog=False)
+        journal = read(self.service.pending_path)
+        self.assertEqual(journal['document']['displays'][0]['scale'], 2)
+        self.assertNotIn('scale=1.5', journal['config_plan']['after'])
+        self.service.keep(pending['token'])
+        self.assertEqual(read(self.service.confirmed_path)['displays'][0]['width'], 1366)
+        self.assertIn('scale=2', self.config.path.read_text())
+
+    def test_revert_restores_previous_mode_after_automatic_fallback(self):
+        document = self.automatic_fallback()
+        before = self.adapter.displays()
+        pending = self.service.preview(document, watchdog=False)
+        report = self.service.revert(pending['token'])
+        self.assertEqual(report['errors'], [])
+        self.assertEqual(report['external'], [])
+        self.assertTrue(all(same(a, b) for a, b in zip(before, self.adapter.current)))
+
+    def test_crash_before_automatic_readback_can_restore_previous_mode(self):
+        document = self.automatic_fallback()
+        before = self.adapter.displays()
+        apply = self.adapter.apply
+        class PowerLoss(BaseException):
+            pass
+        def crash(d, **kwargs):
+            apply(d, **kwargs)
+            raise PowerLoss()
+        self.adapter.apply = crash
+        with self.assertRaises(PowerLoss):
+            self.service.preview(document, watchdog=False)
+        self.assertEqual(read(self.service.pending_path)['resolving'], 'DP-1')
+        self.adapter.apply = apply
+        restarted = Service(self.adapter, self.service.directory)
+        restarted.configuration, restarted.policy = self.config, None
+        report = restarted.revert()
+        self.assertEqual(report['errors'], [])
+        self.assertEqual(report['external'], [])
+        self.assertTrue(all(same(a, b) for a, b in zip(before, self.adapter.current)))
+
+    def test_later_apply_failure_restores_resolved_automatic_output(self):
+        document = self.automatic_fallback()
+        before = self.adapter.displays()
+        apply = self.adapter.apply
+        failed = False
+        def fail_second(d, **kwargs):
+            nonlocal failed
+            if d['connector'] == 'DP-2' and not failed:
+                failed = True
+                raise DisplayError('Injected second output failure')
+            apply(d, **kwargs)
+        self.adapter.apply = fail_second
+        with self.assertRaisesRegex(DisplayError, 'second output failure'):
+            self.service.preview(document, watchdog=False)
+        self.assertEqual(read(self.service.directory / 'recovery.json')['external'], [])
+        self.assertTrue(all(same(a, b) for a, b in zip(before, self.adapter.current)))
+
+    def test_fallback_overlap_reverts_before_disabling_another_output(self):
+        document = self.automatic_fallback(width=3840, height=2160, refresh=60)
+        # An existing automatic policy's estimate can be smaller than the
+        # mode eventually selected by the compositor.
+        document['displays'][0].update(width=1920, height=1080)
+        document['displays'][1]['x'] = 1920
+        self.adapter.current.append(display('DP-3', 3840))
+        document['displays'].append(dict(self.adapter.current[-1], enabled=False))
+        before = self.adapter.displays()
+        with self.assertRaisesRegex(DisplayError, 'overlap'):
+            self.service.preview(document, watchdog=False)
+        self.assertTrue(all(same(a, b) for a, b in zip(before, self.adapter.current)))
+        self.assertEqual(read(self.service.directory / 'recovery.json')['external'], [])
+        self.assertNotIn(('apply', 'DP-3', False), self.adapter.calls)
+
+    def test_keep_does_not_accept_another_automatic_mode_after_preview(self):
+        document = self.automatic_fallback()
+        pending = self.service.preview(document, watchdog=False)
+        self.adapter.current[0]['refresh'] = 144
+        with self.assertRaisesRegex(DisplayError, 'did not apply'):
+            self.service.keep(pending['token'])
+        self.assertFalse(self.service.confirmed_path.exists())
+        self.assertEqual(self.adapter.current[0]['refresh'], 144)
+        self.assertIn('DP-1', read(self.service.directory / 'recovery.json')['external'])
+
+    def test_replanning_does_not_adopt_external_configuration_edits(self):
+        document = self.automatic_fallback()
+        apply = self.adapter.apply
+        source = self.config.path.read_text() + '-- external edit\n'
+        def edited(d, **kwargs):
+            apply(d, **kwargs)
+            self.config.path.write_text(source)
+        self.adapter.apply = edited
+        with self.assertRaisesRegex(DisplayError, 'configuration changed during preview'):
+            self.service.preview(document, watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertFalse(self.service.confirmed_path.exists())
+
+    def test_failed_keep_restores_config_and_mode_after_automatic_fallback(self):
+        document = self.automatic_fallback()
+        before, source = self.adapter.displays(), self.config.path.read_text()
+        pending = self.service.preview(document, watchdog=False)
+        self.adapter.reload.side_effect = [DisplayError('Injected reload failure'), None]
+        with self.assertRaisesRegex(DisplayError, 'reload failure'):
+            self.service.keep(pending['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertFalse(self.service.confirmed_path.exists())
+        self.assertTrue(all(same(a, b) for a, b in zip(before, self.adapter.current)))
+        self.assertEqual(read(self.service.directory / 'recovery.json')['external'], [])
+
+    def test_automatic_readback_still_checks_mode_availability_and_other_fields(self):
+        requested = dict(display(), mode_policy='highres', width=3840, height=2160)
+        actual = dict(display(), refresh=120, modes=['1920x1080@120.00Hz'])
+        adapter = Adapter()
+        with patch('adapter.time.sleep'):
+            adapter.displays = lambda: [copy.deepcopy(actual)]
+            self.assertEqual(adapter.verify([requested], resolve_modes=True)[0]['refresh'], 120)
+            with self.assertRaises(DisplayError):
+                adapter.verify([dict(requested, mode_policy='fixed')], resolve_modes=True)
+            for change in (dict(x=100), dict(scale=2), dict(transform=1), dict(enabled=False),
+                           dict(modes=[]), dict(mirror_of='other', mirror_connector='DP-2'),
+                           dict(width=0, modes=['0x1080@120.00Hz'])):
+                with self.subTest(change=change), self.assertRaises(DisplayError):
+                    adapter.displays = lambda: [dict(actual, **change)]
+                    adapter.verify([requested], resolve_modes=True)
+
+    def test_automatic_readback_waits_for_requested_mode_before_accepting_fallback(self):
+        requested = dict(display(), mode_policy='highres', width=3840, height=2160)
+        old = dict(display(), modes=['1920x1080@60.00Hz', '3840x2160@60.00Hz'])
+        adapter = Adapter()
+        adapter.displays = Mock(side_effect=[[old], [old], [dict(old, width=3840, height=2160)]])
+        with patch('adapter.time.sleep'):
+            self.assertEqual(adapter.verify([requested], resolve_modes=True)[0]['width'], 3840)
+        self.assertEqual(adapter.displays.call_count, 3)
+
+    def test_automatic_readback_rejects_an_unsettled_fallback(self):
+        requested = dict(display(), mode_policy='highres', width=3840, height=2160)
+        first = dict(display(), refresh=120, modes=['1920x1080@120.00Hz', '1920x1080@144.00Hz'])
+        second = dict(first, refresh=144)
+        adapter = Adapter()
+        adapter.displays = Mock(side_effect=[[first], [second]] * 25)
+        with patch('adapter.time.sleep'), self.assertRaises(DisplayError):
+            adapter.verify([requested], resolve_modes=True)
 
     def test_auto_fullscreen_pbp_save_and_return_does_not_pin_pbp_size(self):
         self.configuration()

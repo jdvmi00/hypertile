@@ -45,9 +45,10 @@ class Fake:
             self.fail = False
             raise DisplayError('Injected apply failure')
         self.current = [dict(d, awake=m['awake']) if m['connector'] == d['connector'] else m for m in self.current]
-    def verify(self, desired):
-        from adapter import same
-        if not all(any(m['connector'] == d['connector'] and same(m, d) for m in self.current) for d in desired):
+    def verify(self, desired, *, resolve_modes=False):
+        from adapter import automatic_readback, same
+        if not all(any(m['connector'] == d['connector'] and
+                (same(m, d) or resolve_modes and automatic_readback(d, m)) for m in self.current) for d in desired):
             raise DisplayError('readback mismatch')
         return self.displays()
     def move(self, workspace, connector):

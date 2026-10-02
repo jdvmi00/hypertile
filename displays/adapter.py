@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from modes import AUTOMATIC, signature, value as mode_value
+from modes import AUTOMATIC, parse as parse_mode, same_mode, signature, value as mode_value
 
 
 class DisplayError(ValueError):
@@ -87,6 +87,24 @@ def clean_scale(width, height, scale):
             if clean(candidate):
                 return candidate
     return scale
+
+
+def automatic_readback(requested, actual):
+    """Recognize a native automatic choice without relaxing other settings."""
+    if (requested.get('mode_policy') not in AUTOMATIC or not requested['enabled']
+            or not actual['enabled'] or requested['connector'] != actual['connector']
+            or any(actual[key] <= 0 for key in ('width', 'height', 'refresh'))):
+        return False
+    if not any(same_mode(actual, mode) for raw in actual.get('modes', [])
+               if (mode := parse_mode(raw))):
+        return False
+    scale = clean_scale(actual['width'], actual['height'], requested['scale'])
+    if not .25 <= scale <= 8 or any(abs(size / scale - round(size / scale)) > 1e-6
+                                  for size in (actual['width'], actual['height'])):
+        return False
+    resolved = dict(requested, width=actual['width'], height=actual['height'],
+                    refresh=actual['refresh'], scale=scale)
+    return same(resolved, actual)
 
 
 def bounds(d):
@@ -238,14 +256,27 @@ class Adapter:
             fields += ['disabled=true']
         self.run('eval', 'hl.monitor({' + ','.join(fields) + '})')
 
-    def verify(self, desired):
+    def verify(self, desired, *, resolve_modes=False):
         # A modeset or mirror can take a few seconds to show in the readback,
-        # on real panels and on a loaded compositor alike; only failure waits.
+        # on real panels and on a loaded compositor alike; exact matches return
+        # immediately, while automatic fallbacks get the full settling window.
+        previous, stable = {}, 0
         for _ in range(50):
             current = {d['connector']: d for d in self.displays()}
             if all(d['connector'] in current and same(d, current[d['connector']]) for d in desired):
                 return list(current.values())
+            if resolve_modes and all(d['connector'] in current and
+                    (same(d, current[d['connector']]) or automatic_readback(d, current[d['connector']])) for d in desired):
+                stable = stable + 1 if all(d['connector'] in previous and
+                    same(previous[d['connector']], current[d['connector']]) for d in desired) else 1
+            else:
+                stable = 0
+            previous = current
             time.sleep(.1)
+        # Give the estimate the usual settling interval before accepting an
+        # advertised fallback. An early read can still describe the old mode.
+        if resolve_modes and stable >= 3:
+            return list(current.values())
         fields = ('enabled', 'width', 'height', 'refresh', 'x', 'y', 'scale', 'transform', 'mirror_of', 'mirror_connector')
         detail = '; '.join(d['connector'] + ': requested ' + str({k: d.get(k) for k in fields}) +
                            ', received ' + str({k: current.get(d['connector'], {}).get(k) for k in fields})
