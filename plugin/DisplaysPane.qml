@@ -7,6 +7,7 @@ import qs.Commons
 import qs.Ui
 import "Displays.js" as Displays
 import "Wallpaper.js" as Wallpaper
+import "Readability.js" as Readability
 
 Card {
     id: pane
@@ -40,17 +41,16 @@ Card {
             value: display.connector
         };
     }))
-    readonly property var textSizeStops: [9, 10, 11, 12, 14, 16, 20]
-    property int pendingTextSize: -1
-    readonly property real textSize: pendingTextSize >= 0 ? pendingTextSize : Style.font.baseSize
-    readonly property QtObject sliderPalette: QtObject {
-        readonly property color foreground: pane.fg
-        readonly property color background: pane.overlay.surfaceColor
-    }
     property alias wallpaperEditor: wallpaperEditor
     property bool wallpaperMode: false
     onWallpaperModeChanged: inspector.contentY = 0
+    // The pane opens from the rail's corner; docked right, the tabs keep
+    // the rail's place and the window actions move to the other end.
+    property bool dockLeft: true
     property bool workspacePreferencesExpanded: false
+    property bool positionExpanded: false
+    // The "scroll for more" strip at the foot of the inspector.
+    readonly property int scrollHint: Math.round(overlay.uiCaption * 2.4)
     property bool dirty: false
     property bool closeAfterRevert: false
     property bool confirmingDiscard: false
@@ -108,7 +108,7 @@ Card {
     function numberOf(index) { return numbering[index] || index + 1 }
     readonly property var layoutOptions: [
         {
-            label: "Global fallback",
+            label: "The default layout" + (overlay.defaultLayout ? " · " + String(overlay.defaultLayout).replace(/^lua:/, "") : ""),
             value: null
         },
         {
@@ -186,8 +186,8 @@ Card {
         var y = item.mapToItem(settings, 0, 0).y;
         if (y < inspector.contentY)
             inspector.contentY = Math.max(0, y);
-        else if (y + item.height > inspector.contentY + inspector.height - 36)
-            inspector.contentY = Math.min(Math.max(0, inspector.contentHeight - inspector.height), y + item.height - inspector.height + 36);
+        else if (y + item.height > inspector.contentY + inspector.height - scrollHint)
+            inspector.contentY = Math.min(Math.max(0, inspector.contentHeight - inspector.height), y + item.height - inspector.height + scrollHint);
     }
     // Labels every screen with its diagram number (the selected one stands
     // out) so the numbers can be matched to the desk at a glance. A
@@ -235,13 +235,6 @@ Card {
         matchingConnector = "";
         workspaceChoice = null;
         customWorkspace = "";
-    }
-    function setTextSize(index) {
-        if (textSizeProcess.running || index < 0 || index >= textSizeStops.length)
-            return;
-        pendingTextSize = textSizeStops[index];
-        textSizeProcess.command = ["omarchy", "display", "text", "size", String(pendingTextSize)];
-        textSizeProcess.running = true;
     }
     function setPosition(index, x, y) {
         var display = draft.displays[index];
@@ -474,15 +467,6 @@ Card {
         }
     }
     Process {
-        id: textSizeProcess
-        stderr: StdioCollector { id: textSizeError; waitForEnd: true }
-        onExited: function(code) {
-            pane.pendingTextSize = -1;
-            if (code !== 0)
-                pane.error = textSizeError.text.trim() || "Could not change text size.";
-        }
-    }
-    Process {
         id: commandProcess
         stdout: StdioCollector {
             id: commandOutput
@@ -537,30 +521,51 @@ Card {
         textFormat: Text.PlainText
         wrapMode: Text.Wrap
     }
-    // primary marks the one call to action; selected marks the current tab or
-    // display. A disabled button drops both so it never reads as a live choice.
-    component Action: Controls.Button {
-        id: action
-        property bool primary: false
-        property bool selected: false
-        property bool bordered: true
+    // One line of explanation under a control.
+    component Note: Label {
+        width: parent ? parent.width : implicitWidth
+        color: pane.muted
+        font.pixelSize: pane.overlay.uiCaption
+    }
+    // A small bold caption over a control.
+    component Caption: Label {
+        font.bold: true
+    }
+    // The overlay's button (KitButton): `primary` marks the one call to
+    // action; `selected` marks the current tab or display. Focusable, so
+    // Tab reaches it and Enter or Space presses it.
+    component Action: KitButton {
+        overlay: pane.overlay
+        foreground: pane.fg
+        focusable: true
         onActiveFocusChanged: if (activeFocus)
             pane.revealInspectorControl(this)
-        font.family: pane.overlay.fontFamily
-        font.pixelSize: pane.overlay.uiFontSmall
-        padding: 10
-        contentItem: Label {
-            text: action.text
-            color: action.enabled ? pane.fg : pane.muted
-            horizontalAlignment: Text.AlignHCenter
-            verticalAlignment: Text.AlignVCenter
-        }
-        background: Rectangle {
-            radius: pane.overlay.radiusControl
-            color: !action.enabled ? Util.alpha(pane.fg, action.bordered ? .02 : 0) : Util.alpha(pane.overlay.accent, action.primary ? (action.hovered ? .3 : .23) : action.selected ? (action.hovered ? .19 : .14) : action.hovered ? .1 : action.bordered ? .05 : 0)
-            border.width: action.activeFocus ? 2 : (action.bordered || action.selected ? 1 : 0)
-            border.color: !action.enabled ? Util.alpha(pane.fg, .12) : action.activeFocus || action.primary || action.selected ? pane.overlay.accent : Util.alpha(pane.fg, .25)
-        }
+    }
+    // A labelled switch row from the same kit.
+    component Switch: Toggle {
+        width: parent ? parent.width : implicitWidth
+        radius: pane.overlay.radiusControl
+        rounded: true
+        foreground: pane.fg
+        accent: pane.overlay.accent
+        fontFamily: pane.overlay.fontFamily
+        titleSize: pane.overlay.uiFontSmall
+        descriptionSize: pane.overlay.uiCaption
+        opacity: enabled ? 1 : 0.45
+        Accessible.role: Accessible.CheckBox
+        Accessible.name: label
+        Accessible.checked: checked
+        onActiveFocusChanged: if (activeFocus)
+            pane.reveal(this)
+    }
+    // A collapsible group heading: ▸ Position.
+    component Disclosure: Action {
+        property bool expanded: false
+        width: parent ? parent.width : implicitWidth
+        leftAlign: true
+        bordered: false
+        text: (expanded ? "▾  " : "▸  ") + Accessible.name
+        Accessible.description: expanded ? "Expanded" : "Collapsed"
     }
     component Entry: Controls.TextField {
         property string accessibleLabel: placeholderText
@@ -572,7 +577,7 @@ Card {
         selectByMouse: true
         font.family: pane.overlay.fontFamily
         font.pixelSize: pane.overlay.uiFontSmall
-        padding: 10
+        padding: Style.spacing.controlPaddingX
         background: Rectangle {
             radius: pane.overlay.radiusControl
             color: Util.alpha(pane.fg, .04)
@@ -580,6 +585,8 @@ Card {
             border.color: parent.activeFocus ? pane.overlay.accent : Util.alpha(pane.fg, .25)
         }
     }
+    // The kit's Dropdown draws at the bar's text size; the overlay scales its
+    // type with the screen, so its choices stay a ComboBox styled to match.
     component Choice: Controls.ComboBox {
         id: choice
         property string accessibleLabel: ""
@@ -588,10 +595,10 @@ Card {
             pane.reveal(this)
         font.family: pane.overlay.fontFamily
         font.pixelSize: pane.overlay.uiFontSmall
-        padding: 10
+        padding: Style.spacing.controlPaddingX
         contentItem: Label {
             text: choice.displayText
-            rightPadding: 24
+            rightPadding: pane.overlay.uiFont
             elide: Text.ElideRight
             wrapMode: Text.NoWrap
         }
@@ -602,7 +609,7 @@ Card {
             border.color: choice.activeFocus ? pane.overlay.accent : Util.alpha(pane.fg, .25)
         }
         indicator: Label {
-            x: choice.width - width - 12
+            x: choice.width - width - Style.spacing.xl
             anchors.verticalCenter: parent.verticalCenter
             text: "▾"
             color: pane.muted
@@ -610,7 +617,7 @@ Card {
         delegate: Controls.ItemDelegate {
             required property int index
             width: choice.width
-            padding: 10
+            padding: Style.spacing.controlPaddingX
             highlighted: choice.highlightedIndex === index
             contentItem: Label {
                 text: choice.textAt(index)
@@ -622,10 +629,10 @@ Card {
             }
         }
         popup: Controls.Popup {
-            y: choice.height + 4
+            y: choice.height + Style.spacing.xs
             width: choice.width
-            padding: 4
-            implicitHeight: Math.min(pane.height * .55, choices.contentHeight + 8)
+            padding: Style.spacing.xs
+            implicitHeight: Math.min(pane.height * .55, choices.contentHeight + Style.spacing.xs * 2)
             contentItem: ListView {
                 id: choices
                 clip: true
@@ -649,35 +656,40 @@ Card {
         Item {
             width: parent.width
             height: Math.max(navigation.implicitHeight, windowActions.implicitHeight)
+            // Where the rail's tabs were: the pane grows from the rail's corner.
             Row {
                 id: navigation
-                anchors.left: parent.left
-                spacing: 2
+                x: pane.dockLeft ? 0 : Math.max(0, parent.width - pane.overlay.railWidth + pane.overlay.uiPad + pane.gap)
+                spacing: Style.spacing.xxs
                 Action {
                     text: "Layouts"
+                    horizontalPadding: 4
                     bordered: false
                     enabled: !pane.pending && !pane.busy
                     onClicked: pane.leave(false)
                 }
                 Action {
                     text: "Scenes"
+                    horizontalPadding: 4
                     bordered: false
                     enabled: !pane.pending && !pane.busy
                     onClicked: pane.leave(true)
                 }
                 Action {
                     text: "Displays"
+                    horizontalPadding: 4
                     bordered: false
                     selected: true
                 }
             }
             Row {
                 id: windowActions
-                anchors.right: parent.right
-                spacing: 8
+                x: pane.dockLeft ? parent.width - width : 0
+                spacing: Style.spacing.md
                 Action {
                     text: identifyTimer.running ? "Identifying…" : "Identify displays"
-                    Accessible.description: "Show each screen's diagram number on that screen for a few seconds"
+                    tooltipText: "Show each screen's number on that screen for a few seconds"
+                    Accessible.description: tooltipText
                     enabled: !!pane.catalog && !identifyTimer.running
                     onClicked: pane.identify("")
                 }
@@ -689,6 +701,7 @@ Card {
                 }
                 Action {
                     text: "Close"
+                    tooltipText: "Esc"
                     enabled: !pane.busy
                     onClicked: pane.requestClose()
                 }
@@ -702,7 +715,7 @@ Card {
             Column {
                 width: Math.max(240, parent.width * .57)
                 height: parent.height
-                spacing: 12
+                spacing: Style.spacing.xl
                 Label {
                     text: "Arrange your displays"
                     font.pixelSize: pane.overlay.uiFont * 1.4
@@ -710,13 +723,13 @@ Card {
                 }
                 Label {
                     width: parent.width
-                    text: pane.wallpaperMode ? "Select a screen to configure its wallpaper group." : pane.canArrange ? "Drag screens to align their edges. Select a screen to adjust its settings." : "Select a screen to adjust its settings."
+                    text: pane.wallpaperMode ? "Select a screen to set its wallpaper." : pane.canArrange ? "Drag screens to line up their edges. Select one to change it." : "Select a screen to change it."
                     color: pane.muted
                 }
                 Rectangle {
                     id: diagram
                     width: parent.width
-                    height: Math.max(150, parent.height - 340)
+                    height: Math.max(150, parent.height - displayChips.height - diagramHint.height - pane.overlay.uiFont * 6)
                     color: Util.alpha(pane.fg, .025)
                     radius: pane.overlay.radiusControl
                     border.color: Util.alpha(pane.fg, .15)
@@ -741,7 +754,7 @@ Card {
                             y: (logical.y - diagram.extent.y) * diagram.factor + (diagram.height - diagram.extent.h * diagram.factor) / 2
                             width: Math.max(16, logical.w * diagram.factor)
                             height: Math.max(16, logical.h * diagram.factor)
-                            radius: 8
+                            radius: pane.overlay.radiusControl
                             color: Util.alpha(pane.overlay.accent, selectedGroup || wallpaperMember ? .25 : .07)
                             border.color: selectedGroup || wallpaperMember ? pane.overlay.accent : Util.alpha(pane.fg, .45)
                             border.width: activeFocus ? 3 : 2
@@ -767,8 +780,8 @@ Card {
                             }
                             Column {
                                 anchors.centerIn: parent
-                                width: parent.width - 12
-                                spacing: 4
+                                width: parent.width - Style.spacing.xxl
+                                spacing: Style.spacing.sm
                                 Label {
                                     width: parent.width
                                     text: Displays.groupLabel(pane.draft.displays, screen.index, pane.numbering)
@@ -788,10 +801,10 @@ Card {
                             }
                             Label {
                                 anchors.bottom: parent.bottom
-                                anchors.bottomMargin: 10
+                                anchors.bottomMargin: Style.spacing.xl
                                 width: parent.width
                                 horizontalAlignment: Text.AlignHCenter
-                                visible: pane.wallpaperMode && screen.height > 90
+                                visible: pane.wallpaperMode && screen.height > pane.overlay.uiFont * 5
                                 text: screen.wallpaperGroup.mode === "span" ? "Span · " + screen.wallpaperGroup.outputs.join(" + ") : "Independent"
                                 font.pixelSize: pane.overlay.uiCaption
                                 elide: Text.ElideRight
@@ -832,8 +845,9 @@ Card {
                     }
                 }
                 Flow {
+                    id: displayChips
                     width: parent.width
-                    spacing: 8
+                    spacing: Style.spacing.md
                     Repeater {
                         model: pane.displayOrder
                         Action {
@@ -843,100 +857,35 @@ Card {
                             text: pane.numberOf(index) + " · " + entry.connector + (!entry.connected ? " · disconnected" : !entry.enabled ? " · disabled" : entry.mirror_of ? " · mirrors " + pane.numberOf(pane.draft.displays.findIndex(function (d) {
                                             return d.id === entry.mirror_of;
                                         })) : Displays.mirrorSource(pane.draft.displays, entry) ? " · in use" : pane.isAsleep(entry) ? " · asleep" : "")
+                            tooltipText: Displays.displayName(entry)
                             selected: index === pane.selectedIndex
                             onClicked: pane.selectedIndex = index
                         }
                     }
                 }
-                Label {
-                    width: parent.width
-                    color: pane.muted
-                    text: (pane.canArrange ? "Numbered left to right, then top to bottom. Keyboard: Tab to a display, arrows move 1 px, Shift + arrows move 10 px." : "Keyboard: Tab to a display.") + " Positions use logical pixels."
-                    font.pixelSize: pane.overlay.uiCaption
-                }
-                Action {
-                    text: pane.wallpaperMode ? "Back to display settings" : "Wallpaper groups…"
-                    selected: pane.wallpaperMode
-                    enabled: !pane.busy && !pane.pending && !wallpaperEditor.busy
-                    onClicked: pane.wallpaperMode = !pane.wallpaperMode
-                }
-                // Desktop text size is one setting for the whole desktop, not a
-                // property of the selected display, and it applies at once rather
-                // than through Preview and Keep; it lives apart from both.
-                Rectangle {
-                    width: parent.width
-                    height: 1
-                    color: Util.alpha(pane.fg, .2)
-                }
-                Column {
-                    width: parent.width
-                    spacing: 6
-                    Row {
-                        width: parent.width
-                        Label { width: parent.width / 2; text: "Desktop text size"; font.bold: true }
-                        Label {
-                            width: parent.width / 2
-                            horizontalAlignment: Text.AlignRight
-                            text: (textSizeSlider.dragging ? pane.textSizeStops[Math.round(textSizeSlider.liveValue)] : pane.textSize) + "px"
-                        }
-                    }
-                    PanelSlider {
-                        id: textSizeSlider
-                        width: parent.width
-                        bar: pane.sliderPalette
-                        minimum: 0
-                        maximum: pane.textSizeStops.length - 1
-                        step: 1
-                        integer: true
-                        tickCount: pane.textSizeStops.length
-                        value: Displays.nearestStop(pane.textSizeStops, pane.textSize)
-                        enabled: !textSizeProcess.running && !pane.busy
-                        activeFocusOnTab: true
-                        Accessible.role: Accessible.Slider
-                        Accessible.name: "Desktop text size"
-                        onReleased: function(v) { pane.setTextSize(Math.round(v)); }
-                        Keys.onPressed: function(event) {
-                            var delta = event.key === Qt.Key_Left ? -1 : event.key === Qt.Key_Right ? 1 : 0;
-                            if (delta) {
-                                pane.setTextSize(Math.max(0, Math.min(maximum, value + delta)));
-                                event.accepted = true;
-                            }
-                        }
-                        Rectangle {
-                            anchors.fill: parent
-                            anchors.margins: -2
-                            visible: textSizeSlider.activeFocus
-                            color: "transparent"
-                            border.color: pane.overlay.accent
-                            radius: pane.overlay.radiusControl
-                        }
-                    }
-                    Label {
-                        width: parent.width
-                        text: "Text on every display, changed at once. It is not part of Preview and Keep."
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
-                    }
+                Note {
+                    id: diagramHint
+                    text: (pane.canArrange ? "Numbered left to right. Tab to a screen; arrows nudge it 1 px, Shift + arrows 10 px." : "Tab to a screen to select it.")
                 }
             }
             Flickable {
                 id: inspector
                 width: parent.width - parent.children[0].width - parent.spacing
                 height: parent.height
-                contentHeight: (pane.wallpaperMode ? wallpaperEditor.implicitHeight : settings.implicitHeight) + 36
+                contentHeight: inspectorColumn.implicitHeight + pane.scrollHint
                 clip: true
                 boundsBehavior: Flickable.StopAtBounds
                 Controls.ScrollBar.vertical: Controls.ScrollBar {
                     policy: Controls.ScrollBar.AlwaysOn
-                    width: 7
+                    width: Math.max(4, Style.spacing.sm)
                     visible: inspector.contentHeight > inspector.height
                     contentItem: Rectangle {
-                        implicitWidth: 7
-                        radius: 3
+                        implicitWidth: Math.max(4, Style.spacing.sm)
+                        radius: width / 2
                         color: Util.alpha(pane.overlay.accent, .7)
                     }
                     background: Rectangle {
-                        radius: 3
+                        radius: width / 2
                         color: Util.alpha(pane.fg, .08)
                     }
                 }
@@ -945,475 +894,482 @@ Card {
                     z: 5
                     x: 0
                     y: inspector.contentY + inspector.height - height
-                    width: inspector.width - 12
-                    height: 32
-                    visible: inspector.contentY + inspector.height < inspector.contentHeight - 8
+                    width: inspector.width - Style.spacing.xxl
+                    height: pane.scrollHint
+                    visible: inspector.contentY + inspector.height < inspector.contentHeight - Style.spacing.lg
                     color: pane.overlay.surfaceColor
-                    Label {
+                    Note {
                         anchors.centerIn: parent
+                        width: implicitWidth
                         text: "Scroll for more settings ↓"
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
                     }
-                }
-                WallpaperSettings {
-                    id: wallpaperEditor
-                    width: inspector.width - 12
-                    visible: pane.wallpaperMode
-                    overlay: pane.overlay
-                    displays: pane.draft.displays
-                    selectedDisplay: pane.selectedDisplay
-                    blocked: pane.busy || !!pane.pending || pane.dirty
                 }
                 Column {
-                    id: settings
-                    visible: !pane.wallpaperMode
-                    width: inspector.width - 12
-                    spacing: 12
-                    enabled: !pane.busy && !pane.pending
-                    Label {
-                        width: parent.width
-                        text: pane.selectedDisplay ? pane.selectedDisplay.connector : "No display selected"
-                        font.bold: true
-                        font.pixelSize: pane.overlay.uiFont * 1.25
-                    }
-                    Label {
-                        width: parent.width
-                        text: pane.selectedDisplay ? pane.selectedDisplay.description || "" : ""
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
-                    }
-                    Label {
-                        width: parent.width
-                        visible: !!pane.selectedDisplay && !pane.selectedDisplay.connected
-                        text: "Disconnected · saved settings and workspace assignments are retained."
-                        color: pane.muted
-                    }
-                    Label {
-                        width: parent.width
-                        visible: pane.selectedAsleep
-                        text: "Asleep · the display is off until you wake it."
-                        color: pane.overlay.accent
-                    }
-                    Column {
-                        width: parent.width
-                        spacing: 8
-                        visible: !!pane.selectedDisplay && !pane.selectedDisplay.connected
+                    id: inspectorColumn
+                    width: inspector.width - Style.spacing.xxl
+                    spacing: Style.spacing.xl
+
+                    // What the inspector is about: the selected display's
+                    // settings, or its wallpaper group.
+                    Row {
+                        id: inspectorTabs
+                        spacing: Style.spacing.sm
                         Action {
-                            text: "Remove saved display"
-                            enabled: !queryProcess.running && Displays.removalError(pane.draft, pane.selectedDisplay) === ""
-                            Accessible.description: "Remove this disconnected display's saved settings immediately"
-                            onClicked: pane.removeSelectedDisplay()
-                        }
-                        Label {
-                            width: parent.width
-                            text: Displays.removalError(pane.draft, pane.selectedDisplay) || "Removes saved settings immediately, including specific monitor rules, startup workspace and placement preferences. Workspace layouts, windows and wallpaper groups are kept. A reconnected display is discovered again."
-                            color: pane.muted
-                            font.pixelSize: pane.overlay.uiCaption
-                        }
-                    }
-                    Column {
-                        width: parent.width
-                        spacing: 8
-                        visible: !!pane.selectedDisplay && !pane.selectedDisplay.connected
-                        Label {
-                            width: parent.width
-                            text: pane.matchOptions.length > 1 ? "Match these saved settings to a connected display with the same identity." : "No connected display has this saved identity. Reconnect the display to match its settings."
-                            color: pane.muted
-                        }
-                        Choice {
-                            width: parent.width
-                            visible: pane.matchOptions.length > 1
-                            accessibleLabel: "Connected display to match"
-                            model: pane.matchOptions
-                            textRole: "label"
-                            currentIndex: Math.max(0, pane.matchOptions.findIndex(function (option) {
-                                return option.value === pane.matchingConnector;
-                            }))
-                            onActivated: function (index) {
-                                pane.matchingConnector = pane.matchOptions[index].value;
-                            }
+                            text: "Display"
+                            selected: !pane.wallpaperMode
+                            Accessible.role: Accessible.RadioButton
+                            Accessible.checkable: true
+                            Accessible.checked: selected
+                            tooltipText: "Resolution, scale, rotation and workspaces"
+                            enabled: !pane.busy && !pane.pending && !wallpaperEditor.busy
+                            onClicked: pane.wallpaperMode = false
                         }
                         Action {
-                            visible: pane.matchOptions.length > 1
-                            text: "Match saved display"
-                            enabled: pane.matchingConnector !== ""
-                            onClicked: pane.matchSelectedDisplay()
+                            text: "Wallpaper"
+                            selected: pane.wallpaperMode
+                            Accessible.role: Accessible.RadioButton
+                            Accessible.checkable: true
+                            Accessible.checked: selected
+                            tooltipText: "One wallpaper per display, or one spanning several"
+                            enabled: !pane.busy && !pane.pending && !wallpaperEditor.busy
+                            onClicked: pane.wallpaperMode = true
                         }
-                    }
-                    Label {
-                        width: parent.width
-                        visible: !!pane.selectedDisplay && pane.selectedDisplay.connected && !!pane.selectedDisplay.ambiguous
-                        text: "Settings are saved for this connection: " + (pane.selectedDisplay ? pane.selectedDisplay.connector : "")
-                        color: pane.muted
                     }
 
-                    Label {
-                        text: "Use as"
-                        font.bold: true
-                    }
-                    Choice {
+                    WallpaperSettings {
+                        id: wallpaperEditor
                         width: parent.width
-                        accessibleLabel: "Use display as"
-                        enabled: !!pane.selectedDisplay && pane.selectedDisplay.connected
-                        model: pane.selectedDisplay ? Displays.usageOptions(pane.draft.displays, pane.selectedDisplay) : []
-                        textRole: "label"
-                        currentIndex: Math.max(0, model.findIndex(function (o) {
-                            return o.value === (!pane.selectedDisplay.enabled ? "disabled" : pane.selectedDisplay.mirror_of || "extended");
-                        }))
-                        onActivated: function (index) {
-                            pane.draft = Displays.setUsage(pane.draft, pane.selectedIndex, model[index].value);
-                            pane.dirty = true;
-                        }
+                        visible: pane.wallpaperMode
+                        overlay: pane.overlay
+                        displays: pane.draft.displays
+                        selectedDisplay: pane.selectedDisplay
+                        blocked: pane.busy || !!pane.pending || pane.dirty
                     }
+
                     Column {
+                        id: settings
+                        visible: !pane.wallpaperMode
                         width: parent.width
-                        spacing: 8
-                        visible: !!pane.selectedMirrorSource
-                        Label {
+                        spacing: Style.spacing.xl
+                        enabled: !pane.busy && !pane.pending
+
+                        // ---- Which display: its name, its connector, sleep.
+                        Item {
                             width: parent.width
-                            text: pane.catalog ? Displays.mirrorStatus(pane.catalog.displays, pane.liveDisplay, pane.numbering) : ""
-                            color: pane.overlay.accent
-                        }
-                        Action {
-                            text: pane.liveDisplay && pane.selectedMirrorSource && pane.liveDisplay.id === pane.selectedMirrorSource.id ? "This display is in use" : "Use this display"
-                            primary: enabled
-                            enabled: !pane.dirty && !wallpaperEditor.dirty && !queryProcess.running && !!pane.catalog && Displays.canUseDisplay(pane.catalog.displays, pane.liveDisplay)
-                            Accessible.description: "Size the shared desktop for this display and save immediately"
-                            onClicked: pane.useDisplay(pane.liveDisplay.connector)
-                        }
-                        Action {
-                            text: "Switch back to " + pane.previousSource
-                            visible: pane.previousSource !== "" && !!pane.catalog && !!pane.selectedMirrorSource && Displays.mirrorSource(pane.catalog.displays, pane.catalog.displays.find(function(d) { return d.connector === pane.previousSource; })) === pane.selectedMirrorSource
-                            enabled: !pane.dirty && !wallpaperEditor.dirty && !queryProcess.running && !!pane.catalog && Displays.canUseDisplay(pane.catalog.displays, pane.catalog.displays.find(function(d) { return d.connector === pane.previousSource; }))
-                            onClicked: pane.useDisplay(pane.previousSource)
-                        }
-                        Label {
-                            width: parent.width
-                            text: pane.dirty || wallpaperEditor.dirty ? "Save or reset your pending edits before switching displays." : "Windows fit the active display; the others show a scaled copy. Switching saves immediately. Each display keeps its resolution, refresh rate, scale and rotation."
-                            color: pane.muted
-                            font.pixelSize: pane.overlay.uiCaption
-                        }
-                    }
-                    Column {
-                        width: parent.width
-                        spacing: 8
-                        visible: !!pane.selectedDisplay && pane.selectedDisplay.enabled && !pane.selectedMirrors
-                        Label {
-                            text: "Workspace"
-                            font.bold: true
-                        }
-                        Row {
-                            width: parent.width
-                            spacing: 8
-                            Choice {
-                                width: parent.width - showWorkspaceAction.width - 8
-                                accessibleLabel: "Workspace to show on this display"
-                                model: pane.workspaceOptions
-                                textRole: "label"
-                                currentIndex: Math.max(0, model.findIndex(function (o) {
-                                    return o.value === (pane.workspaceChoice === "" ? "" : pane.selectedWorkspace);
-                                }))
-                                onActivated: function (index) { pane.workspaceChoice = model[index].value; }
+                            implicitHeight: Math.max(displayTitle.implicitHeight, sleepAction.implicitHeight)
+                            Column {
+                                id: displayTitle
+                                anchors.left: parent.left
+                                anchors.right: sleepAction.visible ? sleepAction.left : parent.right
+                                anchors.rightMargin: Style.spacing.lg
+                                anchors.verticalCenter: parent.verticalCenter
+                                spacing: Style.spacing.xxs
+                                Label {
+                                    width: parent.width
+                                    text: pane.selectedDisplay ? Displays.displayName(pane.selectedDisplay) : "No display selected"
+                                    font.bold: true
+                                    font.pixelSize: pane.overlay.uiFont * 1.25
+                                    elide: Text.ElideRight
+                                    wrapMode: Text.NoWrap
+                                }
+                                Note {
+                                    visible: !!pane.selectedDisplay
+                                    text: pane.selectedDisplay ? "Display " + pane.numberOf(pane.selectedIndex) + "  ·  " + pane.selectedDisplay.connector
+                                        + (pane.selectedDisplay.connected && pane.selectedDisplay.ambiguous ? "  ·  settings kept for this connection" : "") : ""
+                                }
                             }
                             Action {
-                                id: showWorkspaceAction
-                                text: "Apply"
-                                Accessible.name: "Apply selected workspace to this display"
-                                enabled: pane.canShowWorkspace
-                                onClicked: pane.run(["show-workspace", pane.selectedDisplay.connector, pane.selectedWorkspace])
-                            }
-                        }
-                        Entry {
-                            width: parent.width
-                            visible: pane.workspaceChoice === ""
-                            placeholderText: "Number or name:research"
-                            text: pane.customWorkspace
-                            onTextEdited: pane.customWorkspace = text
-                            onAccepted: if (pane.canShowWorkspace)
-                                pane.run(["show-workspace", pane.selectedDisplay.connector, pane.selectedWorkspace])
-                        }
-                        Controls.CheckBox {
-                            width: parent.width
-                            text: "Use this workspace at startup"
-                            font.family: pane.overlay.fontFamily
-                            font.pixelSize: pane.overlay.uiFontSmall
-                            enabled: pane.validSelectedWorkspace
-                            checked: !!pane.selectedDisplay && pane.selectedDisplay.initial_workspace === pane.selectedWorkspace
-                            onClicked: pane.setDisplay("initial_workspace", checked ? pane.selectedWorkspace : null)
-                            onActiveFocusChanged: if (activeFocus) pane.reveal(this)
-                            contentItem: Label {
-                                text: parent.text
-                                leftPadding: parent.indicator.width + parent.spacing
-                                verticalAlignment: Text.AlignVCenter
-                            }
-                        }
-                        Label {
-                            width: parent.width
-                            text: "Apply switches immediately and brings the workspace here if it is on another display. Startup changes are saved with Preview changes → Keep changes."
-                            color: pane.muted
-                            font.pixelSize: pane.overlay.uiCaption
-                        }
-                        Label {
-                            width: parent.width
-                            visible: !!pane.selectedDisplay && !!pane.selectedDisplay.initial_workspace && pane.selectedDisplay.initial_workspace !== pane.selectedWorkspace
-                            text: "Startup workspace: " + (pane.selectedDisplay ? String(pane.selectedDisplay.initial_workspace || "").replace(/^name:/, "") : "")
-                            color: pane.muted
-                        }
-                    }
-                    Label {
-                        width: parent.width
-                        visible: pane.selectedMirrors
-                        text: "Workspaces and layout follow display " + (pane.selectedDisplay ? pane.numberOf(pane.draft.displays.findIndex(function (d) {
-                                return d.id === pane.selectedDisplay.mirror_of;
-                            })) : "") + ". Independent preferences are retained for Extended display. Different aspect ratios may stretch the image."
-                        color: pane.muted
-                    }
-                    Row {
-                        spacing: 8
-                        Action {
-                            // One button follows the compositor's power state, so
-                            // it never offers to wake a display that is already on.
-                            text: pane.selectedAsleep ? "Wake display" : "Sleep display"
-                            enabled: !!pane.liveDisplay && !!pane.liveDisplay.enabled
-                            onClicked: {
-                                // Never go dark with the display the overlay is on: move first.
-                                if (!pane.selectedAsleep)
-                                    pane.overlay.placeDisplayConfirmation(null, pane.selectedDisplay.connector);
-                                pane.run([pane.selectedAsleep ? "wake" : "sleep", pane.selectedDisplay.connector]);
-                            }
-                        }
-                    }
-                    Label {
-                        width: parent.width
-                        text: pane.selectedAsleep ? "This display is asleep. Wake it here, or press a key if no other display is awake." : !!pane.liveDisplay && !!pane.liveDisplay.enabled ? "Sleep is temporary and keeps workspaces in place. If Hypertile is on this display it moves to another awake one first. Wake it from here; if it is the last awake display, a key press wakes it." : "Sleep needs a connected, enabled display."
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
-                    }
-                    Label {
-                        text: "Resolution and refresh rate"
-                        font.bold: true
-                    }
-                    Choice {
-                        width: parent.width
-                        accessibleLabel: "Resolution and refresh rate"
-                        model: Displays.modeChoices(pane.selectedDisplay)
-                        textRole: "label"
-                        displayText: Displays.currentModeLabel(pane.selectedDisplay)
-                        onActivated: function (index) {
-                            var choice = model[index];
-                            var mode = {width: choice.width, height: choice.height, refresh: choice.refresh, mode_policy: choice.mode_policy};
-                            pane.setMode(mode);
-                        }
-                    }
-                    Label {
-                        width: parent.width
-                        visible: !!pane.selectedDisplay && !!pane.selectedDisplay.mode_policy && pane.selectedDisplay.mode_policy !== "fixed"
-                        text: pane.selectedDisplay ? "Currently " + Displays.modeLabel(pane.selectedDisplay) + ". Adapts when the display's available modes change." : ""
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
-                    }
-                    Label {
-                        width: parent.width
-                        visible: !!pane.selectedDisplay && pane.selectedDisplay.mode_available === false
-                        text: "Saved mode is unavailable. Choose a supported mode to enable this display."
-                        color: pane.overlay.accent
-                    }
-                    Column {
-                        width: parent.width
-                        spacing: 6
-                        Label { text: "Scale"; font.bold: true }
-                        Row {
-                            id: scaleButtons
-                            width: parent.width
-                            spacing: 4
-                            readonly property var options: Displays.scaleOptions(pane.selectedDisplay)
-                            Repeater {
-                                model: scaleButtons.options
-                                Action {
-                                    required property var modelData
-                                    width: (scaleButtons.width - scaleButtons.spacing * (scaleButtons.options.length - 1)) / scaleButtons.options.length
-                                    padding: 4
-                                    text: modelData.label
-                                    selected: !!pane.selectedDisplay && Math.abs(pane.selectedDisplay.scale - modelData.value) < 0.001
-                                    Accessible.name: "Display scale " + modelData.label
-                                    onClicked: pane.setDisplay("scale", modelData.value)
+                                id: sleepAction
+                                // One button follows the compositor's power state, so
+                                // it never offers to wake a display that is already on.
+                                visible: !!pane.liveDisplay && !!pane.liveDisplay.enabled
+                                anchors.right: parent.right
+                                anchors.verticalCenter: parent.verticalCenter
+                                text: pane.selectedAsleep ? "Wake" : "Sleep"
+                                tooltipText: pane.selectedAsleep ? "Turn this display back on" : "Turn this display off for now; its workspaces stay. If Hypertile is on it, it moves first. A key press wakes the last awake display."
+                                Accessible.name: pane.selectedAsleep ? "Wake display" : "Sleep display"
+                                Accessible.description: tooltipText
+                                onClicked: {
+                                    // Never go dark with the display the overlay is on: move first.
+                                    if (!pane.selectedAsleep)
+                                        pane.overlay.placeDisplayConfirmation(null, pane.selectedDisplay.connector);
+                                    pane.run([pane.selectedAsleep ? "wake" : "sleep", pane.selectedDisplay.connector]);
                                 }
                             }
                         }
-                    }
-                    Column {
-                        width: parent.width
-                        spacing: 6
-                        Label { text: "Rotation"; font.bold: true }
-                        Choice {
+                        Label {
                             width: parent.width
-                            accessibleLabel: "Display rotation"
-                            model: ["Normal", "90°", "180°", "270°", "Flipped", "Flipped 90°", "Flipped 180°", "Flipped 270°"]
-                            currentIndex: pane.selectedDisplay ? pane.selectedDisplay.transform || 0 : 0
-                            onActivated: function(index) { pane.setDisplay("transform", index); }
+                            visible: pane.selectedAsleep
+                            text: "Asleep. Wake it here, or press a key if no other display is awake."
+                            color: pane.overlay.accent
                         }
-                    }
-                    Row {
-                        width: parent.width
-                        spacing: 12
-                        enabled: !!pane.selectedDisplay && !pane.selectedMirrors
-                        Repeater {
-                            model: ["x", "y"]
+
+                        // ---- A saved display that is not connected.
+                        Note {
+                            visible: !!pane.selectedDisplay && !pane.selectedDisplay.connected
+                            text: "Disconnected. Its settings and workspaces are kept for when it returns."
+                        }
+                        Column {
+                            width: parent.width
+                            spacing: Style.spacing.md
+                            visible: !!pane.selectedDisplay && !pane.selectedDisplay.connected && pane.matchOptions.length > 1
+                            Caption { text: "Match to a connected display" }
+                            Choice {
+                                width: parent.width
+                                accessibleLabel: "Connected display to match"
+                                model: pane.matchOptions
+                                textRole: "label"
+                                currentIndex: Math.max(0, pane.matchOptions.findIndex(function (option) {
+                                    return option.value === pane.matchingConnector;
+                                }))
+                                onActivated: function (index) {
+                                    pane.matchingConnector = pane.matchOptions[index].value;
+                                }
+                            }
+                            Action {
+                                text: "Match saved display"
+                                enabled: pane.matchingConnector !== ""
+                                onClicked: pane.matchSelectedDisplay()
+                            }
+                        }
+                        Column {
+                            width: parent.width
+                            spacing: Style.spacing.md
+                            visible: !!pane.selectedDisplay && !pane.selectedDisplay.connected
+                            Action {
+                                text: "Forget this display"
+                                tooltipText: "Remove its saved settings now: monitor rules, startup workspace and placement. Workspace layouts, windows and wallpaper groups stay. A reconnected display is found again."
+                                enabled: !queryProcess.running && Displays.removalError(pane.draft, pane.selectedDisplay) === ""
+                                Accessible.name: "Remove saved display"
+                                Accessible.description: tooltipText
+                                onClicked: pane.removeSelectedDisplay()
+                            }
+                            Note {
+                                visible: text !== ""
+                                text: Displays.removalError(pane.draft, pane.selectedDisplay) || (pane.matchOptions.length > 1 ? "" : "No connected display has this identity. Reconnect it to match its settings.")
+                            }
+                        }
+
+                        // ---- Use as: extended, mirrored, disabled.
+                        Column {
+                            width: parent.width
+                            spacing: Style.spacing.md
+                            Caption { text: "Use as" }
+                            Choice {
+                                width: parent.width
+                                accessibleLabel: "Use display as"
+                                enabled: !!pane.selectedDisplay && pane.selectedDisplay.connected
+                                model: pane.selectedDisplay ? Displays.usageOptions(pane.draft.displays, pane.selectedDisplay) : []
+                                textRole: "label"
+                                currentIndex: Math.max(0, model.findIndex(function (o) {
+                                    return o.value === (!pane.selectedDisplay.enabled ? "disabled" : pane.selectedDisplay.mirror_of || "extended");
+                                }))
+                                onActivated: function (index) {
+                                    pane.draft = Displays.setUsage(pane.draft, pane.selectedIndex, model[index].value);
+                                    pane.dirty = true;
+                                }
+                            }
                             Column {
-                                required property string modelData
-                                width: (parent.width - 12) / 2
-                                spacing: 6
+                                width: parent.width
+                                spacing: Style.spacing.md
+                                visible: !!pane.selectedMirrorSource
                                 Label {
-                                    text: modelData.toUpperCase() + " position"
-                                    font.bold: true
+                                    width: parent.width
+                                    text: pane.catalog ? Displays.mirrorStatus(pane.catalog.displays, pane.liveDisplay, pane.numbering) : ""
+                                    color: pane.overlay.accent
+                                }
+                                Flow {
+                                    width: parent.width
+                                    spacing: Style.spacing.md
+                                    Action {
+                                        text: pane.liveDisplay && pane.selectedMirrorSource && pane.liveDisplay.id === pane.selectedMirrorSource.id ? "This display is in use" : "Use this display"
+                                        primary: enabled
+                                        enabled: !pane.dirty && !wallpaperEditor.dirty && !queryProcess.running && !!pane.catalog && Displays.canUseDisplay(pane.catalog.displays, pane.liveDisplay)
+                                        tooltipText: "Size the shared desktop for this display; saved at once"
+                                        Accessible.description: tooltipText
+                                        onClicked: pane.useDisplay(pane.liveDisplay.connector)
+                                    }
+                                    Action {
+                                        text: "Switch back to " + pane.previousSource
+                                        visible: pane.previousSource !== "" && !!pane.catalog && !!pane.selectedMirrorSource && Displays.mirrorSource(pane.catalog.displays, pane.catalog.displays.find(function(d) { return d.connector === pane.previousSource; })) === pane.selectedMirrorSource
+                                        enabled: !pane.dirty && !wallpaperEditor.dirty && !queryProcess.running && !!pane.catalog && Displays.canUseDisplay(pane.catalog.displays, pane.catalog.displays.find(function(d) { return d.connector === pane.previousSource; }))
+                                        onClicked: pane.useDisplay(pane.previousSource)
+                                    }
+                                }
+                                Note {
+                                    text: pane.dirty || wallpaperEditor.dirty ? "Keep or discard your other edits before switching displays." : "Windows fit the active display; the others show a scaled copy. Switching saves at once."
+                                }
+                            }
+                            Note {
+                                visible: pane.selectedMirrors
+                                text: "Follows display " + (pane.selectedDisplay ? pane.numberOf(pane.draft.displays.findIndex(function (d) {
+                                    return d.id === pane.selectedDisplay.mirror_of;
+                                })) : "") + "'s workspaces and layout. Its own settings come back with Extended."
+                            }
+                        }
+
+                        // ---- Resolution, scale, rotation.
+                        Column {
+                            width: parent.width
+                            spacing: Style.spacing.md
+                            Caption { text: "Resolution and refresh rate" }
+                            Choice {
+                                width: parent.width
+                                accessibleLabel: "Resolution and refresh rate"
+                                model: Displays.modeChoices(pane.selectedDisplay)
+                                textRole: "label"
+                                displayText: Displays.currentModeLabel(pane.selectedDisplay)
+                                onActivated: function (index) {
+                                    var choice = model[index];
+                                    var mode = {width: choice.width, height: choice.height, refresh: choice.refresh, mode_policy: choice.mode_policy};
+                                    pane.setMode(mode);
+                                }
+                            }
+                            Note {
+                                visible: !!pane.selectedDisplay && !!pane.selectedDisplay.mode_policy && pane.selectedDisplay.mode_policy !== "fixed"
+                                text: pane.selectedDisplay ? "Now " + Displays.modeLabel(pane.selectedDisplay) + "; follows the display's modes." : ""
+                            }
+                            Label {
+                                width: parent.width
+                                visible: !!pane.selectedDisplay && pane.selectedDisplay.mode_available === false
+                                text: "The saved mode is unavailable. Choose one to turn this display on."
+                                color: pane.overlay.accent
+                            }
+                        }
+                        Column {
+                            width: parent.width
+                            spacing: Style.spacing.md
+                            Caption { text: "Scale" }
+                            Row {
+                                id: scaleButtons
+                                width: parent.width
+                                spacing: Style.spacing.sm
+                                readonly property var options: Displays.scaleOptions(pane.selectedDisplay)
+                                Repeater {
+                                    model: scaleButtons.options
+                                    Action {
+                                        required property var modelData
+                                        width: (scaleButtons.width - scaleButtons.spacing * (scaleButtons.options.length - 1)) / scaleButtons.options.length
+                                        horizontalPadding: Style.spacing.xs
+                                        text: modelData.label
+                                        selected: !!pane.selectedDisplay && Math.abs(pane.selectedDisplay.scale - modelData.value) < 0.001
+                                        Accessible.name: "Display scale " + modelData.label
+                                        onClicked: pane.setDisplay("scale", modelData.value)
+                                    }
+                                }
+                            }
+                        }
+                        Column {
+                            width: parent.width
+                            spacing: Style.spacing.md
+                            Caption { text: "Rotation" }
+                            Choice {
+                                width: parent.width
+                                accessibleLabel: "Display rotation"
+                                model: ["Normal", "90°", "180°", "270°", "Flipped", "Flipped 90°", "Flipped 180°", "Flipped 270°"]
+                                currentIndex: pane.selectedDisplay ? pane.selectedDisplay.transform || 0 : 0
+                                onActivated: function(index) { pane.setDisplay("transform", index); }
+                            }
+                        }
+
+                        // ---- Position: dragging the diagram is the usual way.
+                        Disclosure {
+                            Accessible.name: "Position"
+                            expanded: pane.positionExpanded
+                            tooltipText: "Exact X and Y in logical pixels"
+                            onClicked: pane.positionExpanded = !pane.positionExpanded
+                        }
+                        Row {
+                            visible: pane.positionExpanded
+                            width: parent.width
+                            spacing: Style.spacing.xl
+                            enabled: !!pane.selectedDisplay && !pane.selectedMirrors
+                            Repeater {
+                                model: ["x", "y"]
+                                Column {
+                                    required property string modelData
+                                    width: (parent.width - parent.spacing) / 2
+                                    spacing: Style.spacing.md
+                                    Caption {
+                                        text: modelData.toUpperCase() + " position"
+                                    }
+                                    Entry {
+                                        width: parent.width
+                                        accessibleLabel: modelData.toUpperCase() + " position"
+                                        text: pane.selectedDisplay ? String(pane.selectedDisplay[modelData] || 0) : "0"
+                                        validator: IntValidator {
+                                            bottom: -100000
+                                            top: 100000
+                                        }
+                                        onEditingFinished: if (acceptableInput)
+                                            pane.setDisplay(modelData, Number(text))
+                                    }
+                                }
+                            }
+                        }
+
+                        // ---- Workspaces: which one shows here, which one at
+                        // startup, and the layouts and placement for this display.
+                        Disclosure {
+                            visible: !!pane.selectedDisplay && pane.selectedDisplay.enabled && !pane.selectedMirrors
+                            Accessible.name: "Workspaces"
+                            expanded: pane.workspacePreferencesExpanded
+                            tooltipText: "Show a workspace here, the startup workspace, this display's default layout and which workspaces live here"
+                            onClicked: pane.workspacePreferencesExpanded = !pane.workspacePreferencesExpanded
+                        }
+                        Column {
+                            width: parent.width
+                            spacing: Style.spacing.xl
+                            visible: pane.workspacePreferencesExpanded && !!pane.selectedDisplay && pane.selectedDisplay.enabled && !pane.selectedMirrors
+                            Column {
+                                width: parent.width
+                                spacing: Style.spacing.md
+                                Caption { text: "Show a workspace here" }
+                                Row {
+                                    width: parent.width
+                                    spacing: Style.spacing.md
+                                    Choice {
+                                        width: parent.width - showWorkspaceAction.width - parent.spacing
+                                        accessibleLabel: "Workspace to show on this display"
+                                        model: pane.workspaceOptions
+                                        textRole: "label"
+                                        currentIndex: Math.max(0, model.findIndex(function (o) {
+                                            return o.value === (pane.workspaceChoice === "" ? "" : pane.selectedWorkspace);
+                                        }))
+                                        onActivated: function (index) { pane.workspaceChoice = model[index].value; }
+                                    }
+                                    Action {
+                                        id: showWorkspaceAction
+                                        text: "Show"
+                                        tooltipText: "Switch now; the workspace moves here if it is on another display"
+                                        Accessible.name: "Show the selected workspace on this display"
+                                        enabled: pane.canShowWorkspace
+                                        onClicked: pane.run(["show-workspace", pane.selectedDisplay.connector, pane.selectedWorkspace])
+                                    }
                                 }
                                 Entry {
                                     width: parent.width
-                                    accessibleLabel: modelData.toUpperCase() + " position"
-                                    text: pane.selectedDisplay ? String(pane.selectedDisplay[modelData] || 0) : "0"
-                                    validator: IntValidator {
-                                        bottom: -100000
-                                        top: 100000
-                                    }
-                                    onEditingFinished: if (acceptableInput)
-                                        pane.setDisplay(modelData, Number(text))
+                                    visible: pane.workspaceChoice === ""
+                                    placeholderText: "Number or name:research"
+                                    text: pane.customWorkspace
+                                    onTextEdited: pane.customWorkspace = text
+                                    onAccepted: if (pane.canShowWorkspace)
+                                        pane.run(["show-workspace", pane.selectedDisplay.connector, pane.selectedWorkspace])
+                                }
+                                Switch {
+                                    label: "Start on this workspace"
+                                    description: "At login this display shows it. Saved with Keep changes."
+                                    enabled: pane.validSelectedWorkspace
+                                    checked: !!pane.selectedDisplay && pane.selectedDisplay.initial_workspace === pane.selectedWorkspace
+                                    onClicked: if (enabled) pane.setDisplay("initial_workspace", checked ? null : pane.selectedWorkspace)
+                                }
+                                Note {
+                                    visible: !!pane.selectedDisplay && !!pane.selectedDisplay.initial_workspace && pane.selectedDisplay.initial_workspace !== pane.selectedWorkspace
+                                    text: "Starts on workspace " + (pane.selectedDisplay ? String(pane.selectedDisplay.initial_workspace || "").replace(/^name:/, "") : "")
                                 }
                             }
-                        }
-                    }
-                    Rectangle {
-                        width: parent.width
-                        height: 1
-                        color: Util.alpha(pane.fg, .2)
-                    }
-                    Action {
-                        width: parent.width
-                        text: (pane.workspacePreferencesExpanded ? "▾ " : "▸ ") + "Workspace preferences"
-                        Accessible.name: "Workspace preferences"
-                        Accessible.description: pane.workspacePreferencesExpanded ? "Expanded" : "Collapsed"
-                        onClicked: pane.workspacePreferencesExpanded = !pane.workspacePreferencesExpanded
-                    }
-                    Column {
-                        width: parent.width
-                        spacing: 8
-                        visible: pane.workspacePreferencesExpanded
-                        enabled: !!pane.selectedDisplay && !pane.selectedMirrors
-                        Label {
-                            text: "Default layout for this monitor"
-                            font.bold: true
-                        }
-                        Choice {
-                            width: parent.width
-                            accessibleLabel: "Default layout for this monitor"
-                            model: pane.layoutOptions
-                            textRole: "label"
-                            currentIndex: Math.max(0, pane.layoutOptions.findIndex(function (l) {
-                                return l.value === (pane.selectedDisplay ? pane.selectedDisplay.default_layout || null : null);
-                            }))
-                            onActivated: function (index) {
-                                pane.setDisplay("default_layout", pane.layoutOptions[index].value);
-                            }
-                        }
-                        Label {
-                            width: parent.width
-                            text: "Applies to inheriting workspaces, including future ones. Explicit workspace layouts stay unchanged."
-                            color: pane.muted
-                            font.pixelSize: pane.overlay.uiCaption
-                        }
-                        Label {
-                            text: "Workspaces on this monitor"
-                            font.bold: true
-                        }
-                        Repeater {
-                            model: pane.selectedAssignments()
                             Column {
-                                required property string modelData
-                                width: settings.width
-                                spacing: 6
-                                Label {
+                                width: parent.width
+                                spacing: Style.spacing.md
+                                Caption { text: "Default layout on this display" }
+                                Choice {
                                     width: parent.width
-                                    text: "Workspace " + modelData.replace(/^name:/, "")
+                                    accessibleLabel: "Default layout on this display"
+                                    model: pane.layoutOptions
+                                    textRole: "label"
+                                    currentIndex: Math.max(0, pane.layoutOptions.findIndex(function (l) {
+                                        return l.value === (pane.selectedDisplay ? pane.selectedDisplay.default_layout || null : null);
+                                    }))
+                                    onActivated: function (index) {
+                                        pane.setDisplay("default_layout", pane.layoutOptions[index].value);
+                                    }
+                                }
+                                Note { text: "For workspaces here without a layout of their own, new ones included." }
+                            }
+                            Column {
+                                width: parent.width
+                                spacing: Style.spacing.md
+                                Caption { text: "Workspaces that live here" }
+                                Repeater {
+                                    model: pane.selectedAssignments()
+                                    Row {
+                                        required property string modelData
+                                        width: settings.width
+                                        spacing: Style.spacing.md
+                                        Label {
+                                            width: pane.overlay.uiFont * 6
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: "Workspace " + modelData.replace(/^name:/, "")
+                                            elide: Text.ElideRight
+                                            wrapMode: Text.NoWrap
+                                        }
+                                        Choice {
+                                            width: parent.width - pane.overlay.uiFont * 6 - removeAssignment.width - parent.spacing * 2
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            accessibleLabel: "Layout for workspace " + modelData.replace(/^name:/, "")
+                                            model: [
+                                                {
+                                                    label: "Display default",
+                                                    value: null
+                                                }
+                                            ].concat(pane.layoutOptions.slice(1))
+                                            textRole: "label"
+                                            currentIndex: Math.max(0, model.findIndex(function (l) {
+                                                return l.value === (pane.draft.workspaces[modelData].layout || null);
+                                            }))
+                                            onActivated: function (index) {
+                                                pane.setAssignment(modelData, model[index].value);
+                                            }
+                                        }
+                                        Action {
+                                            id: removeAssignment
+                                            anchors.verticalCenter: parent.verticalCenter
+                                            text: "Remove"
+                                            Accessible.name: "Remove the display placement for workspace " + modelData.replace(/^name:/, "")
+                                            onClicked: {
+                                                var next = Displays.clone(pane.draft);
+                                                delete next.workspaces[modelData].monitor;
+                                                pane.draft = next;
+                                                pane.dirty = true;
+                                            }
+                                        }
+                                    }
                                 }
                                 Row {
+                                    id: assignmentRow
                                     width: parent.width
-                                    spacing: 8
-                                    Choice {
-                                        width: parent.width - removeAssignment.width - parent.spacing
-                                        accessibleLabel: "Layout for workspace " + modelData.replace(/^name:/, "")
-                                        model: [
-                                            {
-                                                label: "Monitor default",
-                                                value: null
-                                            }
-                                        ].concat(pane.layoutOptions.slice(1))
-                                        textRole: "label"
-                                        currentIndex: Math.max(0, model.findIndex(function (l) {
-                                            return l.value === (pane.draft.workspaces[modelData].layout || null);
-                                        }))
-                                        onActivated: function (index) {
-                                            pane.setAssignment(modelData, model[index].value);
+                                    spacing: Style.spacing.md
+                                    readonly property bool validEntry: Displays.validWorkspace(Displays.workspaceKey(workspaceField.text))
+                                    Entry {
+                                        id: workspaceField
+                                        width: parent.width - addAssignment.width - parent.spacing
+                                        placeholderText: "Number or workspace name"
+                                        onAccepted: if (assignmentRow.validEntry) {
+                                            pane.setAssignment(text, null, true);
+                                            text = "";
                                         }
                                     }
                                     Action {
-                                        id: removeAssignment
-                                        text: "Remove"
-                                        Accessible.name: "Remove monitor assignment for workspace " + modelData.replace(/^name:/, "")
+                                        id: addAssignment
+                                        text: "Add"
+                                        Accessible.name: "Place this workspace on this display"
+                                        enabled: assignmentRow.validEntry
                                         onClicked: {
-                                            var next = Displays.clone(pane.draft);
-                                            delete next.workspaces[modelData].monitor;
-                                            pane.draft = next;
-                                            pane.dirty = true;
+                                            pane.setAssignment(workspaceField.text, null, true);
+                                            workspaceField.text = "";
                                         }
                                     }
                                 }
-                            }
-                        }
-                        Row {
-                            id: assignmentRow
-                            width: parent.width
-                            spacing: 8
-                            readonly property bool validEntry: Displays.validWorkspace(Displays.workspaceKey(workspaceField.text))
-                            Entry {
-                                id: workspaceField
-                                width: parent.width - addAssignment.width - parent.spacing
-                                placeholderText: "Number or workspace name"
-                                onAccepted: if (assignmentRow.validEntry) {
-                                    pane.setAssignment(text, null, true);
-                                    text = "";
+                                Label {
+                                    width: parent.width
+                                    visible: workspaceField.text.trim() !== "" && !assignmentRow.validEntry
+                                    text: "Use a number from 1, or a name made of letters, digits and . _ - :"
+                                    color: pane.overlay.accent
+                                    font.pixelSize: pane.overlay.uiCaption
                                 }
-                            }
-                            Action {
-                                id: addAssignment
-                                text: "Add"
-                                Accessible.name: "Assign workspace to this monitor"
-                                enabled: assignmentRow.validEntry
-                                onClicked: {
-                                    pane.setAssignment(workspaceField.text, null, true);
-                                    workspaceField.text = "";
-                                }
+                                Note { text: "Keep changes moves these workspaces here and remembers it for new ones. A scene keeps the layout it needs." }
                             }
                         }
-                        Label {
-                            width: parent.width
-                            visible: workspaceField.text.trim() !== "" && !assignmentRow.validEntry
-                            text: "Use a number from 1, or a name made of letters, digits and . _ - :"
-                            color: pane.overlay.accent
-                            font.pixelSize: pane.overlay.uiCaption
-                        }
-                    }
-                    Label {
-                        width: parent.width
-                        visible: pane.workspacePreferencesExpanded
-                        text: "Applying moves existing workspaces and remembers placement for future workspaces. Active scenes keep their required layout; replace the scene from Layouts to change it."
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
-                    }
-                    Label {
-                        width: parent.width
-                        text: "Keep changes saves your display configuration. Existing automatic settings are preserved unless you change them."
-                        color: pane.muted
-                        font.pixelSize: pane.overlay.uiCaption
                     }
                 }
             }
@@ -1421,46 +1377,47 @@ Card {
         Rectangle {
             id: footer
             width: parent.width
-            height: Math.max(64, footerText.implicitHeight + 24)
+            height: Math.max(pane.overlay.uiFont * 3.4, footerText.implicitHeight + Style.spacing.xxl * 2)
             radius: pane.overlay.radiusControl
             color: pane.confirmingDiscard ? Util.alpha(Color.urgent, .1) : Util.alpha(pane.pending ? pane.overlay.accent : pane.fg, .06)
             Row {
                 id: footerActions
                 anchors.right: parent.right
-                anchors.rightMargin: 12
+                anchors.rightMargin: Style.spacing.xxl
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 8
+                spacing: Style.spacing.md
                 Action {
                     id: discardAction
                     visible: pane.confirmingDiscard
                     text: "Discard"
+                    foreground: Color.urgent
+                    accent: Color.urgent
+                    tooltipText: "D"
                     Accessible.description: "Close and drop the unsaved display changes (D)"
                     onClicked: pane.discardAndClose()
-                    contentItem: Label {
-                        text: discardAction.text
-                        color: Color.urgent
-                        horizontalAlignment: Text.AlignHCenter
-                        verticalAlignment: Text.AlignVCenter
-                    }
                 }
                 Action {
                     id: keepEditingAction
                     visible: pane.confirmingDiscard
                     text: "Keep editing"
                     primary: true
+                    tooltipText: "Esc"
                     Accessible.description: "Return to the unsaved changes (Esc)"
                     onClicked: pane.keepEditing()
                 }
                 Action {
                     visible: !pane.pending && !pane.confirmingDiscard
                     text: "Refresh"
-                    Accessible.description: "Re-read the connected displays"
+                    tooltipText: "Read the connected displays again"
+                    Accessible.description: tooltipText
                     enabled: !pane.busy
                     onClicked: pane.refresh()
                 }
                 Action {
                     visible: !pane.confirmingDiscard
-                    text: pane.pending ? "Revert" : "Reset"
+                    text: pane.pending ? "Revert" : "Discard"
+                    tooltipText: pane.pending ? "Put the previous settings back now (Esc)" : "Drop the edits that are not previewed yet"
+                    Accessible.description: tooltipText
                     enabled: !pane.busy && (pane.dirty || !!pane.pending)
                     onClicked: pane.revert()
                 }
@@ -1468,7 +1425,8 @@ Card {
                     id: keepAction
                     visible: !pane.confirmingDiscard
                     text: pane.pending ? "Keep changes" : "Preview changes"
-                    primary: true
+                    primary: enabled
+                    tooltipText: pane.pending ? "Enter" : "Try the changes for 15 seconds before keeping them"
                     enabled: !pane.busy && !wallpaperEditor.dirty && !wallpaperEditor.busy && (pane.dirty || !!pane.pending)
                     onClicked: pane.pending ? pane.run(["keep", pane.pending.token]) : pane.preview()
                 }
@@ -1476,12 +1434,12 @@ Card {
             Label {
                 id: footerText
                 anchors.left: parent.left
-                anchors.leftMargin: 12
+                anchors.leftMargin: Style.spacing.xxl
                 anchors.right: footerActions.left
-                anchors.rightMargin: 12
+                anchors.rightMargin: Style.spacing.xxl
                 anchors.verticalCenter: parent.verticalCenter
-                color: pane.error !== "" ? Color.urgent : pane.fg
-                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Enter keeps, Escape reverts. Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Changes are ready to preview. You will have 15 seconds to keep them." : "Arrangement edits use Preview → Keep. Workspace and active display switches apply immediately."))
+                color: pane.error !== "" ? Readability.textColor(Color.urgent, pane.overlay.surfaceColor, 1) : pane.fg
+                text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Enter keeps, Esc reverts. Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Ready to preview. You get 15 seconds to keep the changes." : "Display changes preview first, then you keep or revert them."))
             }
         }
     }

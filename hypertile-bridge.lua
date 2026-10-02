@@ -1068,7 +1068,7 @@ end
 function M.notify_shell(layout, osd)
   local quiet = " >/dev/null 2>&1"
   if osd then
-    local payload = json.encode({ icon = "\u{F1CAC}", message = M.display_name(layout), duration = 1200 })
+    local payload = json.encode({ icon = "\u{F0575}", message = M.display_name(layout), duration = 1200 })
     os.execute(shell_quote(M.shell_bin) .. " -q osd show " .. shell_quote(payload) .. quiet)
   end
   os.execute(shell_quote(M.shell_bin) .. " -q hypertile-bar refresh" .. quiet)

@@ -102,7 +102,7 @@ Item {
     else errorTimer.stop()
   }
   property string statusText: ""
-  readonly property bool barSettingsOpen: barSettings.visible
+  readonly property bool barSettingsOpen: settingsPanel.visible
   readonly property bool transferDialogOpen: importDialog.visible || exportDialog.visible
   property bool statusSticky: false   // a status that stays until replaced
   onStatusTextChanged: statusSticky = false
@@ -126,6 +126,7 @@ Item {
   property bool confirmingDelete: false
   property bool renaming: false
   property bool choosingNew: false
+  property bool showingMore: false    // the viewed layout's ⋯ menu in the rail
   property bool peeking: false
   property bool nudging: false        // a run of Shift+arrow presses shares one undo entry
   property string pendingView: ""     // layout to view once the list is re-read
@@ -133,8 +134,12 @@ Item {
   // ---- preferences (persisted in ~/.local/state/hypertile/overlay.json)
   property bool dockLeft: false
   property bool showKeys: false
-  property bool layoutSectionOpen: false
   property bool rulesSectionOpen: false
+  property bool applySectionOpen: false       // Layouts: APPLY TO
+  property bool zoneMoreOpen: false           // Edit: the zone's MORE options
+  property bool appearanceSectionOpen: false  // Edit: gutters, border, corners
+  property bool behaviourSectionOpen: false   // Edit: empty zones, a lone window
+  property bool coachDismissed: false         // the first-run card on the Layouts tab
 
   // ---- drag state (one MouseArea does all hit-testing, so nothing is
   // destroyed under the pointer while the model changes)
@@ -154,6 +159,15 @@ Item {
     var m = ({})
     for (var i = 0; i < zones.length; i++) m[zones[i].name] = zones[i]
     return m
+  }
+  // Whether a zone's card has room for its own buttons; the rail offers
+  // them only for zones too small to carry them.
+  readonly property int zoneInset: Style.space(6)
+  // Where the rail sits on the stage, for the zone cards to step around;
+  // null while it is hidden or faded for a peek.
+  readonly property var railRect: (rail.visible && !root.peeking) ? Qt.rect(rail.x, rail.y, rail.width, rail.height) : null
+  function zoneRoomy(z) {
+    return !!z && z.w - zoneInset * 2 > uiFont * 12 && z.h - zoneInset * 2 > uiFont * 6
   }
   readonly property var noZone: ({ name: "", x: 0, y: 0, w: 1, h: 1, fit: { x: 0, y: 0, w: 1, h: 1 }, fitted: false, numbers: [], stack: "v", spacer: false, neverSplit: false, pctW: 0, pctH: 0 })
   onZonesChanged: syncZoneModel()
@@ -232,7 +246,10 @@ Item {
 
   function focusKeys() { keys.forceActiveFocus() }
 
-  function showBarSettings() { barSettings.open() }
+  // Settings: the gear, or the bar widget's right-click (which lands on
+  // the bar position).
+  function showSettings() { settingsPanel.openAt("") }
+  function showBarSettings() { settingsPanel.openAt("bar") }
 
   // ------------------------------------------------------------- scenes
   //
@@ -327,6 +344,7 @@ Item {
     pendingSwitch = null
     confirmingDelete = false
     choosingNew = false
+    showingMore = false
     errorText = ""
     browseTimer.stop()
     revertBrowse()
@@ -470,11 +488,14 @@ Item {
 
   function assignContent(type, app) {
     if (!selected || !viewedIsActive) { errorText = "Select a zone in the current layout"; return }
-    var what = type === "empty" ? "Empty" : app ? nameForClass(app, contentCatalog ? contentCatalog.apps : []) : "Local windows"
+    var where = zoneLabel(selected)
+    var name = app ? nameForClass(app, contentCatalog ? contentCatalog.apps : []) : ""
+    var status = type === "empty" ? "Emptying " + where + "…" : app ? "Putting " + name + " in " + where + "…" : "Opening " + where + " to any window…"
+    var done = type === "empty" ? where + " stays empty" : app ? "Put " + name + " in " + where : where + " takes any window"
     var args = ["scene", "content", "--workspace", workspaceId, "--zone", selected, "--type", type, "--json"]
     if (app) args.push("--app-class", app)
-    if (runCtl(args, "Putting " + what + " in " + zoneLabel(selected) + "…", "Content update requested"))
-      root.sceneFeedback = {done: "Put " + what + " in " + zoneLabel(selected), operation: "", zone: selected}
+    if (runCtl(args, status, "Content update requested"))
+      root.sceneFeedback = {done: done, operation: "", zone: selected}
   }
 
   function assignApp(app) {
@@ -517,14 +538,18 @@ Item {
     var doc = null
     try { doc = JSON.parse(String(text || "")) } catch (e) { doc = null }
     if (!doc) return
-    if (doc.dockLeft !== undefined) root.dockLeft = doc.dockLeft === true
-    if (doc.showKeys !== undefined) root.showKeys = doc.showKeys === true
-    if (doc.layoutSectionOpen !== undefined) root.layoutSectionOpen = doc.layoutSectionOpen === true
-    if (doc.rulesSectionOpen !== undefined) root.rulesSectionOpen = doc.rulesSectionOpen === true
+    for (var i = 0; i < root.prefKeys.length; i++) {
+      var key = root.prefKeys[i]
+      if (doc[key] !== undefined) root[key] = doc[key] === true
+    }
   }
 
+  readonly property var prefKeys: ["dockLeft", "showKeys", "rulesSectionOpen", "applySectionOpen", "zoneMoreOpen",
+    "appearanceSectionOpen", "behaviourSectionOpen", "coachDismissed"]
   function savePrefs() {
-    prefsFile.setText(JSON.stringify({ dockLeft: root.dockLeft, showKeys: root.showKeys, layoutSectionOpen: root.layoutSectionOpen, rulesSectionOpen: root.rulesSectionOpen }))
+    var doc = {}
+    for (var i = 0; i < root.prefKeys.length; i++) doc[root.prefKeys[i]] = root[root.prefKeys[i]]
+    prefsFile.setText(JSON.stringify(doc))
   }
 
   function setPref(key, value) {
@@ -557,6 +582,7 @@ Item {
     root.sceneCommitOnRefresh = false
     root.dismissAfterApply = false
     root.choosingNew = false
+    root.showingMore = false
     root.peeking = false
     prefsFile.reload()
     refresh()
@@ -674,6 +700,7 @@ Item {
     root.statusText = ""
     root.confirmingDelete = false
     root.choosingNew = false
+    root.showingMore = false
     browseTimer.restart()
   }
 
@@ -810,6 +837,7 @@ Item {
     if (root.busy || root.editing || root.transferDialogOpen) return
     root.confirmingDelete = false
     root.choosingNew = false
+    root.showingMore = false
     importDialog.open()
   }
 
@@ -817,6 +845,7 @@ Item {
     if (root.busy || root.editing || root.transferDialogOpen || !root.viewed || root.viewed.builtin) return
     root.confirmingDelete = false
     root.choosingNew = false
+    root.showingMore = false
     exportDialog.layoutName = root.viewed.name
     exportDialog.selectedFile = "file://" + root.home.split("/").map(encodeURIComponent).join("/") + "/" + root.viewed.name + ".json"
     exportDialog.open()
@@ -895,6 +924,7 @@ Item {
     if (root.browseToken !== "") revertBrowse()
     root.confirmingDelete = false
     root.choosingNew = false
+    root.showingMore = false
     root.renaming = true
     root.errorText = ""
     rail.focusName(root.viewed.name)
@@ -1020,6 +1050,7 @@ Item {
     root.applyQueue = []
     root.confirmingDelete = false
     root.choosingNew = false
+    root.showingMore = false
     root.pendingSwitch = { workspaces: workspaces.map(String), close: close === true,
       layoutName: layoutName || layoutTarget(root.viewed) }
   }
@@ -1030,7 +1061,7 @@ Item {
     if (p.sceneName) return "The changes to " + p.previousName + " are not saved. Using " + p.sceneName + " replaces this workspace's arrangement; apps stay open. Cancel and save the scene first to keep those changes."
     var managed = p.workspaces.filter(function(w) { return contentWorkspace(w) })
     var s = managed.length === 1 ? "Workspace " + managed[0] + " has content assigned to its zones. " : "Workspaces " + managed.join(", ") + " have content assigned to their zones. "
-    s += "Every zone goes back to local windows; apps stay open."
+    s += "Every zone goes back to taking any window; apps stay open."
     return s + " Save the arrangement as a scene first to come back to it."
   }
 
@@ -1107,6 +1138,7 @@ Item {
     root.confirmingDelete = false
     root.confirmingDiscard = false
     root.choosingNew = false
+    root.showingMore = false
     root.nudging = false
     root.errorText = ""
     root.statusText = ""
@@ -1211,6 +1243,19 @@ Item {
     var after = Editor.setZoneProp(root.draft, root.selected, key, value)
     if (after === root.draft) {
       if (key === "spacer") root.statusText = "At least one zone must take windows"
+      return
+    }
+    edit(after)
+  }
+
+  // Windows, one window, or nothing (a spacer): one edit, one undo step.
+  function zoneHolds(holds) {
+    if (!root.editing || root.selected === "") return
+    var leaf = Editor.findLeaf(root.draft, root.selected)
+    if (!leaf || Editor.zoneHolds(leaf.node) === holds) return
+    var after = Editor.setZoneHolds(root.draft, root.selected, holds)
+    if (after === root.draft) {
+      if (holds === "nothing") root.statusText = "At least one zone must take windows"
       return
     }
     edit(after)
@@ -1685,6 +1730,7 @@ Item {
       if (root.pendingSwitch) { root.pendingSwitch = null; return true }
       if (root.confirmingDelete) { root.confirmingDelete = false; return true }
       if (root.choosingNew) { root.choosingNew = false; return true }
+      if (root.showingMore) { root.showingMore = false; return true }
       if (root.confirmingDiscard) { root.confirmingDiscard = false; return true }
       if (root.pickerOpen) { root.pickerOpen = false; return true }
       if (root.numbering) { finishNumbering(); return true }
@@ -1770,9 +1816,9 @@ Item {
     if (k === Qt.Key_Return || k === Qt.Key_Enter) { if (root.viewedIsActive) dismiss(); else applyViewed(true); return true }
     if (plain && k === Qt.Key_R) { refresh(); return true }
     if (plain && k === Qt.Key_E) { startEdit(false); return true }
-    if (plain && k === Qt.Key_N) { root.confirmingDelete = false; root.choosingNew = !root.choosingNew; return true }
+    if (plain && k === Qt.Key_N) { root.confirmingDelete = false; root.showingMore = false; root.choosingNew = !root.choosingNew; return true }
     if (k === Qt.Key_F2) { startRename(); return true }
-    if (k === Qt.Key_Delete || (plain && k === Qt.Key_D)) { root.choosingNew = false; if (root.viewed && !root.viewed.builtin && !root.viewedIsDefault) root.confirmingDelete = !root.confirmingDelete; return true }
+    if (k === Qt.Key_Delete || (plain && k === Qt.Key_D)) { root.choosingNew = false; root.showingMore = false; if (root.viewed && !root.viewed.builtin && !root.viewedIsDefault) root.confirmingDelete = !root.confirmingDelete; return true }
     return false
   }
 
@@ -1869,6 +1915,7 @@ Item {
           root.pickerOpen = false
           root.confirmingDelete = false
           root.choosingNew = false
+          root.showingMore = false
           if (root.naming) root.naming = false
           if (root.renaming) root.renaming = false
           if (!root.editing) {
@@ -1939,18 +1986,21 @@ Item {
         }
       }
 
-      BarSettings {
-        id: barSettings
+      SettingsPanel {
+        id: settingsPanel
         overlay: root
         x: rail.x
         y: window.edgeTop
       }
 
+      // Opens from the rail's corner, so the tabs stay where they were.
       DisplaysPane {
         id: displaysPane
         overlay: root
         visible: root.displaysMode
-        anchors.centerIn: parent
+        x: root.dockLeft ? window.edgeLeft : parent.width - window.edgeRight - width
+        y: window.edgeTop
+        dockLeft: root.dockLeft
         width: Math.min(root.uiFont * 78, parent.width - window.edgeLeft - window.edgeRight)
         height: Math.min(root.uiFont * 53, parent.height - window.edgeTop - window.edgeBottom)
         onLeave: function(scenes) { root.showContent(scenes) }
@@ -2029,6 +2079,12 @@ Item {
     function setDefault(): void { root.setDefault() }
     function inCycle(on: bool): void { root.setInCycle(on) }
     function dock(side: string): void { root.setPref("dockLeft", side === "left") }
+    function more(on: bool): void { if (!root.editing && !root.contentMode) { root.choosingNew = false; root.confirmingDelete = false; root.showingMore = on } }
+    function newPrompt(on: bool): void { if (!root.editing && !root.contentMode) { root.showingMore = false; root.confirmingDelete = false; root.choosingNew = on } }
+    function pref(key: string, on: bool): void { if (root.prefKeys.indexOf(key) !== -1) root.setPref(key, on) }
+    function settings(where: string): void { where === "bar" ? root.showBarSettings() : root.showSettings() }
+    function closeSettings(): void { settingsPanel.close() }
+    function holds(name: string, value: string): void { root.selected = name; root.zoneHolds(value) }
     function keysHint(on: bool): void { root.setPref("showKeys", on) }
     function peek(on: bool): void { root.peeking = on }
     function refresh(): void { root.refresh() }
@@ -2049,6 +2105,11 @@ Item {
       displaysPane.setDisplay(key, parsed)
     }
     function displaySelect(index: int): void { displaysPane.selectedIndex = index }
+    function displayGroup(name: string, open: bool): void {
+      if (name === "workspaces") displaysPane.workspacePreferencesExpanded = open
+      else if (name === "position") displaysPane.positionExpanded = open
+      else if (name === "wallpaper") displaysPane.wallpaperMode = open
+    }
     function displayPreview(): void { displaysPane.preview() }
     function displayKeep(): void { if (displaysPane.pending) displaysPane.run(["keep", displaysPane.pending.token]) }
     function displayRevert(): void { displaysPane.revert() }
@@ -2114,6 +2175,7 @@ Item {
         undo: root.undoStack.length, status: root.statusText, error: root.errorText,
         workspaces: root.workspaces.length, windows: root.windows.length, defaultLayout: root.defaultLayout,
         committed: root.committedLayout, live: root.liveLayout, dockLeft: root.dockLeft, showKeys: root.showKeys,
+        showingMore: root.showingMore, settingsOpen: root.barSettingsOpen,
         area: root.area, contentMode: root.contentMode, query: rail.searchText, matches: rail.matchCount,
         namingScene: root.namingScene, pendingSwitch: root.pendingSwitch, catalogFailed: root.catalogFailed,
         scene: root.contentCatalog ? root.contentCatalog.current : null })

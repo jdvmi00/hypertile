@@ -82,13 +82,15 @@ for (const changes of [{busy: true}, {transferDialogOpen: true}, {barSettingsOpe
 // Opening menu bar settings preserves any layout preview or unsaved edit.
 {
   const {root, context} = fixture()
-  let opened = 0
-  context.barSettings = {open() { opened++ }}
+  const opened = []
+  context.settingsPanel = {openAt(where) { opened.push(where) }}
   root.liveLayout = 'lua:wide'
   root.editing = true
   root.dirty = true
   root.open('{"settings":"bar"}')
-  assert.equal(opened, 1)
+  assert.deepEqual(opened, ['bar'], 'the bar widget opens settings on the menu bar position')
+  root.showSettings()
+  assert.deepEqual(opened, ['bar', ''], 'the gear opens settings at the top')
   assert.equal(root.committedLayout, 'lua:quad')
   assert.equal(root.liveLayout, 'lua:wide')
   assert.equal(root.editing, true)
@@ -465,3 +467,56 @@ for (const managedContent of [false, true]) {
   root.setDefault()
   assert.deepEqual(clone(context.ctlProc.command), ["ctl", "default", "dwindle"])
 }
+
+// The layout's ⋯ menu is a transient prompt: Esc closes it before anything
+// else, New and Delete replace it, and browsing to another layout closes it.
+{
+  const {root, context, calls} = fixture()
+  let next = 1
+  for (const m of qml.matchAll(/Qt\.(Key_\w+|\w+Modifier)/g)) if (!(m[1] in context.Qt)) context.Qt[m[1]] = next++
+  const key = (name, text) => ({key: context.Qt[name], modifiers: 0, text: text || '', isAutoRepeat: false})
+  root.showingMore = true
+  root.handleKey(key('Key_Escape'))
+  assert.equal(root.showingMore, false, 'Esc closes the menu')
+  assert.deepEqual(calls, [], 'Esc on an open menu does not close the overlay')
+  root.showingMore = true
+  root.handleKey(key('Key_N', 'n'))
+  assert.equal(root.showingMore, false); assert.equal(root.choosingNew, true, 'n swaps the menu for the New prompt')
+  root.handleKey(key('Key_Escape'))
+  assert.equal(root.choosingNew, false)
+  root.showingMore = true
+  root.handleKey(key('Key_D', 'd'))
+  assert.equal(root.showingMore, false); assert.equal(root.confirmingDelete, true, 'd swaps the menu for the delete prompt')
+  root.confirmingDelete = false
+  root.showingMore = true
+  root.viewAt(1)
+  assert.equal(root.showingMore, false, 'browsing to another layout closes the menu')
+  root.showingMore = true
+  root.startEdit(true, false)
+  assert.equal(root.showingMore, false, 'Duplicate starts a copy and closes the menu')
+}
+
+// Holds: windows, one window, nothing; one edit and one undo step each, and
+// the last zone that takes windows cannot hold nothing.
+{
+  const {root, context} = fixture()
+  context.schedulePreview = () => {}
+  Object.assign(root, {editing: true, undoStack: [], selected: 'a', draft: {columns: [{name: 'a'}, {name: 'b'}], fill: ['a', 'b']}})
+  root.zoneHolds('one')
+  assert.equal(root.draft.columns[0].never_split, true)
+  assert.equal(root.undoStack.length, 1)
+  root.zoneHolds('one')
+  assert.equal(root.undoStack.length, 1, 'choosing the current option is not an edit')
+  root.zoneHolds('nothing')
+  assert.equal(root.draft.columns[0].spacer, true)
+  assert.equal(root.draft.columns[0].never_split, undefined)
+  assert.equal(root.undoStack.length, 2)
+  root.selected = 'b'
+  root.zoneHolds('nothing')
+  assert.equal(root.draft.columns[1].spacer, undefined)
+  assert.match(root.statusText, /At least one zone/)
+  assert.equal(root.undoStack.length, 2)
+  root.undo()
+  assert.equal(root.draft.columns[0].never_split, true, 'undo steps back one holds change')
+}
+console.log("layout menu and zone holds: all checks passed")

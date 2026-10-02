@@ -438,7 +438,7 @@ esac
   bridge.notify_shell("lua:quad", true)
   bridge.notify_shell("dwindle", false)
   local shell_log = slurp(tmp .. "/shell.log")
-  check(shell_log:find('osd show {"duration": 1200, "icon": "\u{F1CAC}", "message": "quad"}', 1, true) or shell_log:find('"message": "quad"', 1, true), "notify_shell flashes the display name in the OSD: " .. shell_log)
+  check(shell_log:find('osd show {"duration": 1200, "icon": "\u{F0575}", "message": "quad"}', 1, true) or shell_log:find('"message": "quad"', 1, true), "notify_shell flashes the display name in the OSD: " .. shell_log)
   check(not shell_log:find('"message": "Dwindle"', 1, true), "notify_shell keeps quiet without osd")
   check(select(2, shell_log:gsub("hypertile%-bar refresh", "")) == 2, "notify_shell refreshes the bar widget on every switch: " .. shell_log)
 
