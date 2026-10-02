@@ -18,6 +18,7 @@ import uuid
 from adapter import Adapter, DisplayError, match, same, validate, independent, apply_order, lua_string
 from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules, valid_workspace, selector
 from configuration import Configuration
+from modes import automatic_options, same_mode, signature
 
 
 def atomic(path, value):
@@ -83,6 +84,39 @@ class Service:
             self.reconcile(read(self.confirmed_path, dict(version=1, displays=[], workspaces={})), 'event')
             return True
 
+    def configured(self, displays):
+        if self.configuration:
+            policies = self.configuration.mode_policies(displays)
+            for display in displays:
+                if display['connector'] in policies:
+                    display['mode_policy'] = policies[display['connector']]
+        return displays
+
+    def apply(self, display, previous=None):
+        # hl.monitor merges an existing exact connector rule. Omitting mode
+        # preserves even custom modelines/expressions during geometry edits.
+        preserve = bool(previous and same_mode(display, previous)
+                        and display.get('mode_policy', 'fixed') == previous.get('mode_policy', 'fixed')
+                        and self.configuration)
+        if preserve:
+            if display['connector'] in self.configuration.explicit_outputs():
+                self.adapter.apply(display, preserve_mode=True)
+            else:
+                mode = self.configuration.mode_values([display]).get(display['connector'])
+                if mode is None and display['enabled']:
+                    raise DisplayError('Use a connector-specific monitor rule to edit ' + display['connector'] + ' without replacing its computed mode.')
+                self.adapter.apply(display, mode=mode)
+        else:
+            self.adapter.apply(display)
+
+    @staticmethod
+    def check_capabilities(before, current):
+        """Reject stale requests before a write, including identity swaps on a port."""
+        previous = {d['connector']: signature(d) for d in before}
+        now = {d['connector']: signature(d) for d in current}
+        if previous != now:
+            raise DisplayError('Display connections or available modes changed. Refresh displays and preview again.')
+
     def catalog(self):
         # Layout helpers inherit the caller's display lock. Their identity
         # lookup must remain read-only and must not reacquire that same lock.
@@ -95,7 +129,7 @@ class Service:
         """Read the catalog and settle power while the caller holds the lock."""
         if settle_power:
             self._settle_power()
-        current = self.adapter.displays()
+        current = self.configured(self.adapter.displays())
         confirmed = read(self.confirmed_path, dict(version=1, displays=[], workspaces={}))
         if self.policy:
             from policy import read_rules
@@ -132,6 +166,14 @@ class Service:
                              if (m := re.fullmatch(r'(\d+)x(\d+)@([\d.]+)Hz', value))), None)
                 if mode:
                     d.update(width=int(mode[1]), height=int(mode[2]), refresh=float(mode[3]), scale=1, transform=0)
+        for d in current:
+            d['capability_signature'] = signature(d)
+            d['automatic_modes'] = automatic_options(d)
+            if not d['enabled'] and d.get('mode_policy') == 'highres' and d['automatic_modes']:
+                # A dock/PBP change while disabled invalidates saved pixel size,
+                # but not the user's automatic choice.
+                for key in ('width', 'height', 'refresh'):
+                    d[key] = d['automatic_modes'][0][key]
         current.extend(disconnected)
         return dict(version=1, displays=current, workspaces=self.adapter.workspaces(), confirmed=confirmed,
                     pending=read(self.pending_path), configuration=str(self.configuration.path) if self.configuration else None,
@@ -150,7 +192,18 @@ class Service:
         status = read(self.directory.parent / 'sessions/status.json', {})
         if status.get('mode') == 'restoring':
             raise DisplayError('Wait for session restoration to finish before changing displays.')
-        before = self.adapter.displays()
+        if not isinstance(document, dict) or not isinstance(document.get('displays'), list):
+            raise DisplayError('Expected version 1 settings with a displays array.')
+        before = self.configured(self.adapter.displays())
+        document = copy.deepcopy(document)
+        # Older clients omit policy. Only a mode edit opts out of the native
+        # selector; moving/scaling a display must not freeze its current size.
+        for d in document.get('displays', []):
+            if not isinstance(d, dict):
+                continue
+            old = match(d, before) if isinstance(d.get('id'), str) else None
+            if old and 'mode_policy' not in d and same_mode(d, old) and 'mode_policy' in old:
+                d['mode_policy'] = old['mode_policy']
         known = read(self.confirmed_path, {}).get('displays', [])
         desired = validate(document, before, known=known)
         removed = self.validate_removals(document, before, known)
@@ -166,6 +219,9 @@ class Service:
         document = copy.deepcopy(document)
         resolved = {d['id']: d for d in desired}
         for d in document['displays']:
+            # Connection metadata is a snapshot, not a saved user preference.
+            d.pop('capability_signature', None)
+            d.pop('automatic_modes', None)
             if d['id'] in resolved:
                 d['connector'] = resolved[d['id']]['connector']
                 # Preview, configuration writes and confirmed preferences
@@ -197,8 +253,10 @@ class Service:
         try:
             # Establish destinations first, move assigned workspaces, disable sources last.
             for d in sorted(desired, key=apply_order) if not save_only else []:
-                if handoff and any(old['connector'] == d['connector'] and same(d, old) for old in before):
+                old = next((m for m in before if m['connector'] == d['connector']), None)
+                if old and same(d, old) and d.get('mode_policy', 'fixed') == old.get('mode_policy', 'fixed'):
                     continue
+                self.check_capabilities(before, self.adapter.displays())
                 application = d
                 if handoff and d['connector'] == handoff['target']:
                     from handoff import promotion
@@ -212,10 +270,10 @@ class Service:
                 pending['touched'].append(d['connector'])
                 pending['expected'][d['connector']] = application
                 atomic(self.pending_path, pending)  # journal before each compositor mutation
-                self.adapter.apply(application)
-                old = next((m for m in before if m['connector'] == d['connector']), None)
+                self.apply(application, old)
                 if handoff and independent(d) and old and not independent(old):
-                    self.adapter.apply(application)
+                    self.check_capabilities(before, self.adapter.displays())
+                    self.apply(application, old)
                 if independent(d) and old and not old['enabled'] and not old.get('awake', True):
                     self.adapter.power(d['connector'], True)
                 self.adapter.verify([application])
@@ -227,15 +285,21 @@ class Service:
                 atomic(self.pending_path, pending)
                 # Both displays cannot occupy the group's anchor while they are
                 # independent. Anchor the new source after demoting the old one.
-                self.adapter.apply(target)
+                self.check_capabilities(before, self.adapter.displays())
+                self.apply(target, target)
                 self.adapter.verify([target])
             actual = self.adapter.verify(desired)
+            self.check_capabilities(before, actual)
             if not save_only:
                 self._settle_power(actual)
             if handoff:
                 self._focus_handoff(handoff, handoff['target'])
             # The countdown is time to look at the result, so it starts once
             # every output has settled rather than before the first modeset.
+            policies = {d['connector']: d.get('mode_policy', 'fixed') for d in desired}
+            for d in actual:
+                if d['connector'] in policies:
+                    d['mode_policy'] = policies[d['connector']]
             pending.update(phase='preview', expected={d['connector']: d for d in actual}, deadline=time.time() + self.PREVIEW_SECONDS)
             atomic(self.pending_path, pending)
             return dict(token=pending['token'], deadline=pending['deadline'], seconds=max(0, pending['deadline'] - time.time()))
@@ -379,18 +443,25 @@ class Service:
                       if 'rule_touched' not in pending or saved.get('workspace') in pending['rule_touched']]
         rule_errors = restore_rules(rule_files) if pending.get('phase') in ('committing', 'recovery-needed') else []
         if self.configuration and pending.get('config_touched'):
-            rule_errors.extend(self.configuration.rollback(pending.get('config_plan')))
-            if not rule_errors:
-                try:
+            try:
+                # Restoring a Lua file also triggers Hyprland's auto-reload.
+                # Do not replay a saved mode onto changed hardware that way.
+                self.check_capabilities(pending['before'], current)
+                rule_errors.extend(self.configuration.rollback(pending.get('config_plan')))
+                if not rule_errors:
                     self.adapter.reload()
-                except Exception as error:
-                    rule_errors.append(str(error))
+            except Exception as error:
+                rule_errors.append(str(error))
         report['errors'].extend(rule_errors)
         restore = []
         for old in pending['before']:
             name = old['connector']
             actual = by_connector.get(name)
             if name not in pending['touched'] or not actual:
+                continue
+            if signature(old) != signature(actual):
+                report['external'].append(name)
+                report['fallback'] = True
                 continue
             expected = pending['expected'].get(name)
             if expected and not same(actual, expected) and not same(actual, old):
@@ -405,6 +476,11 @@ class Service:
                 report['fallback'] = True
                 continue
             try:
+                actual = next((x for x in live if x['connector'] == d['connector']), None)
+                if not actual or signature(d) != signature(actual):
+                    report['external'].append(d['connector'])
+                    report['fallback'] = True
+                    continue
                 was_mirror = any(x['connector'] == d['connector'] and not independent(x) for x in live)
                 if pending.get('handoff') and independent(d) and was_mirror:
                     from handoff import promotion
@@ -413,15 +489,21 @@ class Service:
                 if d.get('mirror_connector') and not any(x['connector'] == d['mirror_connector'] and independent(x) for x in live):
                     d = dict(d, mirror_of=None, mirror_connector=None)
                     report['fallback'] = True
-                self.adapter.apply(d)
+                self.apply(d, pending['expected'].get(d['connector']))
                 if pending.get('handoff') and independent(d) and was_mirror:
-                    self.adapter.apply(d)
+                    self.check_capabilities(live, self.adapter.displays())
+                    self.apply(d, pending['expected'].get(d['connector']))
                 self.adapter.verify([d])
             except Exception as error:
                 report['errors'].append(str(error))
         for d in anchors:
             try:
-                self.adapter.apply(d)
+                actual = next((x for x in self.adapter.displays() if x['connector'] == d['connector']), None)
+                if not actual or signature(d) != signature(actual):
+                    report['external'].append(d['connector'])
+                    report['fallback'] = True
+                    continue
+                self.apply(d, d)
                 self.adapter.verify([d])
             except Exception as error:
                 report['errors'].append(str(error))
@@ -508,8 +590,10 @@ class Service:
         try:
             # A screen can reconnect while the user inspects the preview.
             # Recheck immediately before any durable preferences/config writes.
-            self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
-            self.adapter.verify([d for d in pending['expected'].values() if d['connector'] in pending['touched']])
+            current = self.adapter.displays()
+            self.validate_removals(pending['document'], current, pending.get('removed', []))
+            self.check_capabilities(pending['before'], current)
+            self.adapter.verify(list(pending['expected'].values()))
         except Exception:
             self._rollback(pending)
             raise
@@ -528,7 +612,9 @@ class Service:
             sync_rules(pending.get('rule_files', []))
             if self.configuration and pending.get('config_plan'):
                 def before_config():
-                    self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
+                    current = self.adapter.displays()
+                    self.validate_removals(pending['document'], current, pending.get('removed', []))
+                    self.check_capabilities(pending['before'], current)
                     pending['config_touched'] = True
                     atomic(self.pending_path, pending)
                 self.configuration.commit(pending['config_plan'], before_write=before_config)
@@ -537,6 +623,7 @@ class Service:
                                      if pending.get('save_only') or d['connector'] in pending['touched']])
                 if not pending.get('save_only'):
                     self.reconcile(pending['document'], 'keep')
+            self.check_capabilities(pending['before'], self.adapter.displays())
             confirmed = dict(pending['document'], _transaction=token)
             confirmed.pop('removed_displays', None)
             atomic(self.confirmed_path, confirmed)

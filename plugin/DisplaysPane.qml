@@ -1197,12 +1197,21 @@ Card {
                     Choice {
                         width: parent.width
                         accessibleLabel: "Resolution and refresh rate"
-                        model: pane.selectedDisplay ? (pane.selectedDisplay.modes || []).map(Displays.modeLabel) : []
-                        displayText: pane.selectedDisplay ? pane.selectedDisplay.width + "×" + pane.selectedDisplay.height + " @ " + Number(pane.selectedDisplay.refresh).toFixed(2) + " Hz" : ""
+                        model: Displays.modeChoices(pane.selectedDisplay)
+                        textRole: "label"
+                        displayText: Displays.currentModeLabel(pane.selectedDisplay)
                         onActivated: function (index) {
-                            var mode = Displays.parseMode(pane.selectedDisplay.modes[index]);
+                            var choice = model[index];
+                            var mode = {width: choice.width, height: choice.height, refresh: choice.refresh, mode_policy: choice.mode_policy};
                             pane.setMode(mode);
                         }
+                    }
+                    Label {
+                        width: parent.width
+                        visible: !!pane.selectedDisplay && !!pane.selectedDisplay.mode_policy && pane.selectedDisplay.mode_policy !== "fixed"
+                        text: pane.selectedDisplay ? "Currently " + Displays.modeLabel(pane.selectedDisplay) + ". Adapts when the display's available modes change." : ""
+                        color: pane.muted
+                        font.pixelSize: pane.overlay.uiCaption
                     }
                     Label {
                         width: parent.width
