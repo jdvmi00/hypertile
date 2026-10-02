@@ -1,4 +1,6 @@
 import QtQuick
+import QtQuick.Controls as Controls
+import QtQuick.Dialogs
 import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
@@ -100,6 +102,8 @@ Item {
     else errorTimer.stop()
   }
   property string statusText: ""
+  readonly property bool barSettingsOpen: barSettings.visible
+  readonly property bool transferDialogOpen: importDialog.visible || exportDialog.visible
   property bool statusSticky: false   // a status that stays until replaced
   onStatusTextChanged: statusSticky = false
 
@@ -227,6 +231,8 @@ Item {
   readonly property int radiusControl: Math.max(Style.cornerRadius, Style.space(7))
 
   function focusKeys() { keys.forceActiveFocus() }
+
+  function showBarSettings() { barSettings.open() }
 
   // ------------------------------------------------------------- scenes
   //
@@ -531,6 +537,7 @@ Item {
   function open(payloadJson) {
     var payload = ({})
     try { payload = JSON.parse(payloadJson || "{}") || ({}) } catch (e) {}
+    if (payload.settings === "bar" && root.opened) { root.showBarSettings(); return }
     if (payload.mode === "move" && payload.request) {
       root.moveMode = true
       root.dismissing = false
@@ -554,6 +561,7 @@ Item {
     prefsFile.reload()
     refresh()
     Qt.callLater(function() { keys.forceActiveFocus() })
+    if (payload.settings === "bar") Qt.callLater(root.showBarSettings)
   }
 
   function close() {
@@ -579,6 +587,7 @@ Item {
   }
 
   function dismiss() {
+    if (root.transferDialogOpen || importProc.running) return
     if (displaysPane.wallpaperEditor.dirty || displaysPane.wallpaperEditor.busy) {
       root.displaysMode = true
       displaysPane.wallpaperMode = true
@@ -652,7 +661,7 @@ Item {
         || String(workspace) !== root.workspaceId) return "unhandled"
     // Consume the shortcut during dialogs or an action as well: falling
     // through would change the real layout behind the overlay's selection.
-    if (!root.busy && !root.naming && !root.renaming && !root.pendingSwitch
+    if (!root.busy && !root.transferDialogOpen && !root.barSettingsOpen && !root.naming && !root.renaming && !root.pendingSwitch
         && !root.choosingNew && !root.confirmingDelete) root.step(delta < 0 ? -1 : 1)
     return "handled"
   }
@@ -796,6 +805,88 @@ Item {
   // Window corner radius this layout gives its tiled windows; the zone
   // cards use the same radius so the picture matches the workspace.
   readonly property int effectiveRounding: (activeSpec && activeSpec.rounding !== undefined) ? activeSpec.rounding : (current ? (current.rounding || 0) : 0)
+
+  function chooseImport() {
+    if (root.busy || root.editing || root.transferDialogOpen) return
+    root.confirmingDelete = false
+    root.choosingNew = false
+    importDialog.open()
+  }
+
+  function chooseExport() {
+    if (root.busy || root.editing || root.transferDialogOpen || !root.viewed || root.viewed.builtin) return
+    root.confirmingDelete = false
+    root.choosingNew = false
+    exportDialog.layoutName = root.viewed.name
+    exportDialog.selectedFile = "file://" + root.home.split("/").map(encodeURIComponent).join("/") + "/" + root.viewed.name + ".json"
+    exportDialog.open()
+  }
+
+  function importLayout(path) {
+    if (root.busy || root.editing || !path) return false
+    root.busy = true
+    root.errorText = ""
+    root.statusText = "Importing layout…"
+    importProc.command = [root.ctl, "import", path, "--json"]
+    importProc.running = true
+    return true
+  }
+
+  function finishImport(text, code, status) {
+    root.busy = false
+    root.statusText = ""
+    // The CLI reports the saved name before reloading. A failed reload must
+    // still reveal the imported file, rather than encourage a duplicate retry.
+    var result = null
+    try { result = JSON.parse(text) } catch (e) {}
+    if (result && result.name) {
+      root.pendingView = result.name
+      root.refresh()
+      if (code === 0 && status === 0) root.statusText = "Imported " + result.name
+      else root.errorText = "Imported " + result.name + ", but could not reload Hyprland.\n" + root.errorText
+    }
+    root.focusKeys()
+  }
+
+  function exportLayout(name, path, overwrite) {
+    if (root.busy || root.editing || !name || !path) return false
+    var args = ["export", name, path]
+    if (overwrite) args.push("--force")
+    return runCtl(args, "Exporting " + name + "…", "Exported " + name + " to " + path)
+  }
+
+  // Keep the picker inside the layer surface so its keyboard grab cannot
+  // leave a separate native dialog behind the fullscreen overlay.
+  FileDialog {
+    id: importDialog
+    parentWindow: window.contentItem.Window.window
+    options: FileDialog.DontUseNativeDialog
+    popupType: Controls.Popup.Item
+    title: "Import layout"
+    nameFilters: ["Hypertile layouts (*.json)"]
+    onAccepted: root.importLayout(decodeURIComponent(String(selectedFile).replace(/^file:\/\//, "")))
+    onRejected: root.focusKeys()
+  }
+
+  FileDialog {
+    id: exportDialog
+    parentWindow: window.contentItem.Window.window
+    options: FileDialog.DontUseNativeDialog
+    popupType: Controls.Popup.Item
+    property string layoutName: ""
+    title: "Export layout"
+    fileMode: FileDialog.SaveFile
+    defaultSuffix: "json"
+    nameFilters: ["Hypertile layouts (*.json)"]
+    onAccepted: root.exportLayout(layoutName, decodeURIComponent(String(selectedFile).replace(/^file:\/\//, "")), true)
+    onRejected: root.focusKeys()
+  }
+
+  CtlProcess {
+    id: importProc
+    stdout: StdioCollector { id: importOutput; waitForEnd: true }
+    onFinished: function(code, status) { root.finishImport(importOutput.text, code, status) }
+  }
 
   // Rename the viewed layout: its file, every workspace rule that points
   // at it, and the default follow the new name.
@@ -1531,6 +1622,7 @@ Item {
         return
       }
       root.statusText = root.ctlDone
+      if (command[1] === "export") { root.focusKeys(); return }
       root.acceptSceneAction(ctlOutput.text)
       if (root.applyQueue.length > 0) {
         var next = root.applyQueue.slice()
@@ -1567,6 +1659,7 @@ Item {
   // ------------------------------------------------------------ keyboard
 
   function handleKey(event) {
+    if (root.transferDialogOpen) return false
     var plain = !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))
     var ctrl = event.modifiers & Qt.ControlModifier
     var shift = event.modifiers & Qt.ShiftModifier
@@ -1846,6 +1939,13 @@ Item {
         }
       }
 
+      BarSettings {
+        id: barSettings
+        overlay: root
+        x: rail.x
+        y: window.edgeTop
+      }
+
       DisplaysPane {
         id: displaysPane
         overlay: root
@@ -1922,6 +2022,8 @@ Item {
     function use(): void { root.applyViewed(true) }
     function deleteLayout(): void { root.deleteViewed() }
     function rename(name: string): void { root.renameViewed(name) }
+    function importLayout(path: string): void { root.importLayout(path) }
+    function exportLayout(path: string): void { if (root.viewed && !root.viewed.builtin) root.exportLayout(root.viewed.name, path, false) }
     function applyTo(workspace: string): void { root.applyTo(workspace) }
     function applyMonitor(monitor: string): void { root.applyMonitor(monitor) }
     function setDefault(): void { root.setDefault() }

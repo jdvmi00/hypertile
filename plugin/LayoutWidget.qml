@@ -61,6 +61,10 @@ BarWidget {
     if (root.bar) root.bar.run("omarchy-shell shell toggle jmartin.hypertile")
   }
 
+  function openBarSettings() {
+    if (root.bar) root.bar.run("omarchy-shell shell summon jmartin.hypertile " + Util.shellQuote(JSON.stringify({settings: "bar"})))
+  }
+
   function cycle(reverse) {
     if (root.setupService && !root.setupService.ready) return
     if (root.bar) root.bar.run(Util.shellQuote(root.ctl) + " cycle" + (reverse ? " --reverse" : "") + (root.workspaceId > 0 ? " --workspace " + root.workspaceId : ""))
@@ -167,9 +171,10 @@ BarWidget {
       ? "Hypertile runtime is unavailable. Re-enable the plugin to retry setup."
       : (root.label !== "" ? root.label + " on workspace " + root.workspaceId + "\n" : "")
         + Session.summary(sessionReader.data, sessionReader.available, sessionReader.checked) + "\n"
-        + "Click: layouts overlay · Scroll or middle-click: next layout"
+        + "Click: layouts overlay · Scroll or middle-click: next layout\nRight-click: menu bar position"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.MiddleButton) root.cycle(false)
+      else if (mouseButton === Qt.RightButton) root.openBarSettings()
       else root.openOverlay()
     }
     onWheelMoved: function(delta) { root.wheel(delta) }

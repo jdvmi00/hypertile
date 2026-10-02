@@ -34,6 +34,12 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
   list [--json]              layouts on disk (and which is on the active workspace);
                              --json includes each spec
   dump <name>                print a layout as JSON
+  export <name> [file|-] [--force]
+                             export a JSON layout (stdout if no file); --force
+                             permits replacing an existing export file
+  import [file|-] [--name NAME] [--no-reload] [--json]
+                             import a JSON layout as an independent copy;
+                             name conflicts get a -2, -3, ... suffix
   validate [file|-]          check a JSON layout, print nothing on success
   save [file|-] [--no-reload]
                              write JSON layout to disk, then reload Hyprland
@@ -94,7 +100,7 @@ local function read_input(arg_path)
 end
 
 -- Flags that consume the next argument (--flag value or --flag=value).
-local takes_value = { workspace = true }
+local takes_value = { workspace = true, name = true }
 
 -- Split argv into positionals and --flags.
 local function parse(argv)
@@ -207,6 +213,22 @@ function commands.dump(pos)
     die(err)
   end
   print(bridge.to_json(name, spec))
+end
+
+function commands.export(pos, flags)
+  local name = pos[1] or die("export needs a layout name")
+  local result, err = bridge.export_layout(name, pos[2], flags.force)
+  if not result then die(err) end
+  if not pos[2] or pos[2] == "-" then io.write(result) else print(result) end
+end
+
+function commands.import(pos, flags)
+  local name, path = bridge.import_layout(read_input(pos[1]), flags.name)
+  if not name then die(path) end
+  -- Report successful persistence even if the subsequent reload fails.
+  if flags.json then print(json.encode({ name = name, path = path }))
+  else print("Imported " .. name .. " -> " .. path) end
+  reload_unless(flags)
 end
 
 function commands.validate(pos)

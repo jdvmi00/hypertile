@@ -90,6 +90,15 @@ when there are none. Browsing previews it; Escape restores the previous
 layout. You can also use dwindle as the default. As a built-in layout, it
 cannot be edited, renamed, deleted, or removed from the cycle here.
 
+### Move Hypertile on the menu bar
+
+Right-click Hypertile’s bar widget, or click the gear in the overlay header.
+The **Menu bar** popover shows three small screen previews: **Left**, **Middle**,
+and **Right**. Select one to move the widget immediately on every screen.
+The checkmark follows its current position, which Omarchy remembers after
+restarts and updates. For a vertical bar, the choices are **Top**, **Middle**,
+and **Bottom**. Escape closes the popover without closing the overlay.
+
 ### Your first layout
 
 A fresh install includes **welcome**, a four-zone layout with horizontal
@@ -557,7 +566,9 @@ scriptable from keybinds, shell aliases, and other tools.
 | next / previous layout | `hypertile-ctl cycle`, `hypertile-ctl cycle --reverse` |
 | try a layout without persisting | `hypertile-ctl apply quad --no-persist` |
 | set the default | `hypertile-ctl default quad` |
-| export, edit, re-import | `hypertile-ctl dump quad > quad.json`, then `hypertile-ctl save quad.json` |
+| export a layout | `hypertile-ctl export quad quad.json` (also **Export…** in the Layouts tab) |
+| import a layout as a new copy | `hypertile-ctl import quad.json` (also **Import…**); existing names gain `-2`, `-3`, etc. |
+| edit an existing layout through JSON | `hypertile-ctl dump quad > quad.json`, then `hypertile-ctl save quad.json` |
 | preview a JSON layout live, no disk write | `hypertile-ctl preview quad.json --workspace 9` |
 | rename or delete | `hypertile-ctl rename quad grid`, `hypertile-ctl remove grid` |
 | scenes | `hypertile-ctl scene list`, `scene apply work --workspace 1`, `scene current` |
