@@ -6,6 +6,7 @@ import copy
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import signal
 import socket
@@ -97,6 +98,13 @@ class Service:
                 # Stable saved references survive connector changes and a pair
                 # of identical displays temporarily becoming one display.
                 actual['id'] = saved['id']
+                # Disabled-at-startup outputs have no initialized mode/geometry.
+                # Keep the settings needed to enable them in the editor; live
+                # enabled/power/topology state still comes from the compositor.
+                if not actual['enabled']:
+                    for key in ('width', 'height', 'refresh', 'scale', 'transform', 'x', 'y'):
+                        if key in saved:
+                            actual[key] = saved[key]
                 for key in ('default_layout', 'initial_workspace', 'explicit_match', 'extended_position'):
                     if key in saved:
                         actual[key] = saved[key]
@@ -109,6 +117,11 @@ class Service:
         for d in current:
             if d.get('mirror_connector'):
                 d['mirror_of'] = ids.get(d['mirror_connector'], d.get('mirror_of'))
+            if not d['enabled'] and (d['width'] <= 0 or d['height'] <= 0):
+                mode = next((m for value in d['modes']
+                             if (m := re.fullmatch(r'(\d+)x(\d+)@([\d.]+)Hz', value))), None)
+                if mode:
+                    d.update(width=int(mode[1]), height=int(mode[2]), refresh=float(mode[3]), scale=1, transform=0)
         current.extend(disconnected)
         return dict(version=1, displays=current, workspaces=self.adapter.workspaces(), confirmed=confirmed,
                     pending=read(self.pending_path), configuration=str(self.configuration.path) if self.configuration else None,
@@ -125,7 +138,14 @@ class Service:
             if status.get('mode') == 'restoring':
                 raise DisplayError('Wait for session restoration to finish before changing displays.')
             before = self.adapter.displays()
-            desired = validate(document, before)
+            desired = validate(document, before, known=read(self.confirmed_path, {}).get('displays', []))
+            remaining = {d['connector']: d for d in before}
+            remaining.update({d['connector']: d for d in desired})
+            # Newly enabled destinations are explicitly woken below. An already
+            # enabled sleeping output must be woken before removing its controls.
+            awake = {d['connector'] for d in before if d.get('awake', True) or not d['enabled']}
+            if not any(independent(d) and d['connector'] in awake for d in remaining.values()):
+                raise DisplayError('Wake an extended display before disabling or mirroring the last awake display.')
             if self.policy:
                 self.policy.validate_changes(document)
             document = copy.deepcopy(document)
@@ -133,6 +153,9 @@ class Service:
             for d in document['displays']:
                 if d['id'] in resolved:
                     d['connector'] = resolved[d['id']]['connector']
+                    # Preview, configuration writes and confirmed preferences
+                    # must describe the same normalized scale.
+                    d['scale'] = resolved[d['id']]['scale']
                     old = match(d, before)
                     if d.get('mirror_of') and old and independent(old):
                         d['extended_position'] = dict(x=old['x'], y=old['y'])
@@ -166,10 +189,14 @@ class Service:
                     pending['expected'][d['connector']] = d
                     atomic(self.pending_path, pending)  # journal before each compositor mutation
                     self.adapter.apply(d)
+                    old = next((m for m in before if m['connector'] == d['connector']), None)
+                    if independent(d) and old and not old['enabled'] and not old.get('awake', True):
+                        self.adapter.power(d['connector'], True)
                     self.adapter.verify([d])
                 if not pending.get('placed'):
                     self.reconcile(document, 'preview')
                 actual = self.adapter.verify(desired)
+                self._settle_power(actual)
                 # The countdown is time to look at the result, so it starts once
                 # every output has settled rather than before the first modeset.
                 pending.update(phase='preview', expected={d['connector']: d for d in actual}, deadline=time.time() + self.PREVIEW_SECONDS)
@@ -208,7 +235,7 @@ class Service:
         for d in sorted(restore, key=apply_order):
             # Never disable the only output left after a physical unplug.
             live = self.adapter.displays()
-            if not d['enabled'] and sum(independent(x) for x in live) <= 1:
+            if not d['enabled'] and not any(independent(x) and x['connector'] != d['connector'] for x in live):
                 report['fallback'] = True
                 continue
             try:
@@ -231,10 +258,15 @@ class Service:
             self.adapter.verify([rescue])
             report['fallback'] = True
         enabled = {d['connector'] for d in self.adapter.displays() if independent(d)}
+        existing = {selector(w) for w in self.adapter.workspaces()}
         for w in pending['workspaces']:
+            # Hyprland destroys empty workspaces during output evacuation. They
+            # have no windows to recover and cannot be moved after rollback.
+            if selector(w) not in existing:
+                continue
             if w.get('monitor') in enabled and w['monitor'] not in report['external']:
                 try:
-                    self.adapter.move(w['name'], w['monitor'])
+                    self.adapter.move(selector(w), w['monitor'])
                 except Exception as error:
                     report['errors'].append(str(error))
             elif w.get('monitor') not in enabled:
@@ -257,7 +289,7 @@ class Service:
             (self.directory / 'staged.json').unlink(missing_ok=True)
         return report
 
-    def revert(self, token=None):
+    def revert(self, token=None, expired_only=False):
         with self.lock():
             pending = read(self.pending_path)
             if not pending:
@@ -268,6 +300,10 @@ class Service:
                 return dict(reason='already-confirmed')
             if token and token != pending['token']:
                 raise DisplayError('Preview token no longer matches.')
+            # Application holds this lock and can extend the countdown after
+            # the watchdog observed its initial deadline. Check again here.
+            if expired_only and time.time() < pending['deadline']:
+                return dict(reason='not-expired')
             return self._rollback(pending)
 
     def keep(self, token):
@@ -358,7 +394,7 @@ class Service:
             current = self.adapter.displays()
             recovery = dict(reason=reason, fallback=False, errors=[])
             try:
-                desired = [] if document.get('configuration_backed') else validate(document, current)
+                desired = [] if document.get('configuration_backed') else validate(document, current, known=document['displays'])
             except DisplayError as error:
                 # A cable/backend can expose different modes after reconnect. Preserve
                 # confirmed intent and keep the compositor's currently usable desktop.
@@ -480,7 +516,7 @@ class Service:
         # awake output sleeps, guarantee a keyboard path back instead. The original
         # values are remembered until every output is awake again.
         guard = read(self.power_path) or dict(original=self.adapter.wake_options())
-        others_awake = any(d['enabled'] and d.get('awake', True) and d['connector'] != connector for d in displays)
+        others_awake = bool(connector) and any(independent(d) and d.get('awake', True) and d['connector'] != connector for d in displays)
         guard['apply'] = {name: False for name in self.adapter.WAKE_OPTIONS} if others_awake \
             else dict(guard['original'], key_press_enables_dpms=True)
         atomic(self.power_path, guard)
@@ -502,8 +538,18 @@ class Service:
         if all(d.get('awake', True) for d in displays if d['enabled']):
             self.adapter.set_wake_options(guard['original'])
             self.power_path.unlink(missing_ok=True)
-        elif self.adapter.wake_options() != guard['apply']:
-            self.adapter.set_wake_options(guard['apply'])
+        else:
+            # Unplugging/disabling the awake output must not leave the sleeping
+            # desktop with both input wake paths held off. Recompute on topology
+            # changes and after reload, rather than replaying the old guard.
+            options = {name: False for name in self.adapter.WAKE_OPTIONS} \
+                if any(independent(d) and d.get('awake', True) for d in displays) \
+                else dict(guard['original'], key_press_enables_dpms=True)
+            if guard['apply'] != options:
+                guard['apply'] = options
+                atomic(self.power_path, guard)
+            if self.adapter.wake_options() != options:
+                self.adapter.set_wake_options(options)
         return True
 
 
@@ -560,8 +606,8 @@ def main():
                 if not pending or pending['token'] != args.token:
                     return
                 if time.time() >= pending['deadline']:
-                    service.revert(args.token)
-                    return
+                    if service.revert(args.token, expired_only=True)['reason'] != 'not-expired':
+                        return
                 time.sleep(min(.25, max(.01, pending['deadline'] - time.time())))
         elif args.command == 'stop':
             result = service.stop()

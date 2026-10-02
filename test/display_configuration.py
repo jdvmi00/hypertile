@@ -127,6 +127,21 @@ class ConfigurationTests(unittest.TestCase):
         self.doc['displays'][0]['scale'] += .0000001
         self.assertIsNone(self.plan())
 
+    def test_keep_saves_the_scale_used_by_preview(self):
+        # A 6144x2560 mode cannot use 1.4; validation selects 4/3. Saving
+        # the original request would disagree with preview and fail reload.
+        self.adapter.current[0].update(width=6144, height=2560, modes=['6144x2560@60.00Hz'])
+        self.adapter.current[1]['x'] = 6144
+        doc = dict(version=1, displays=self.adapter.displays(), workspaces={})
+        doc['displays'][0]['scale'] = 1.4
+        doc['displays'][1]['x'] = 4608
+        pending = self.service.preview(doc, watchdog=False)
+        plan = read(self.service.pending_path)['config_plan']
+        self.assertIn('scale = ' + str(4 / 3), plan['after'])
+        self.assertNotIn('scale = 1.4,', plan['after'])
+        self.service.keep(pending['token'])
+        self.assertAlmostEqual(read(self.service.confirmed_path)['displays'][0]['scale'], 4 / 3)
+
     def test_long_comments_and_strings_are_not_rules(self):
         self.config.path.write_text(SOURCE + '\n--[=[ hl.monitor({output="DP-1"}) ]=]\nlocal text = "hl.monitor"\n')
         self.doc['displays'][0]['transform'] = 1

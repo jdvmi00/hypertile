@@ -102,6 +102,45 @@ def main():
                     print('PASS: isolated workspace creation, cross-monitor movement, named workspaces and unchanged saved preferences')
                     return
                 document = dict(version=1, displays=outputs)
+                # The scale written on Keep must be the one actually previewed,
+                # including compositor normalization and a real config reload.
+                scaled = copy.deepcopy(document)
+                scaled['displays'][0]['scale'] = 1.4
+                scaled['displays'][1]['x'] = 960
+                pending = display('preview', '--json', json.dumps(scaled))
+                display('keep', pending['token'])
+                assert abs(display('status')['confirmed']['displays'][0]['scale'] - 4 / 3) < .000001
+                assert 'scale = 1.4,' not in monitors.read_text()
+                ctl('reload')
+                assert abs(next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-1')['scale'] - 4 / 3) < .001
+                pending = display('preview', '--json', json.dumps(document))
+                display('keep', pending['token'])
+                # Reverting a mirror enabled from Disabled must disable the
+                # mirror again while retaining its independent source.
+                disabled = copy.deepcopy(document)
+                disabled['displays'][1]['enabled'] = False
+                pending = display('preview', '--json', json.dumps(disabled))
+                display('keep', pending['token'])
+                mirror_from_disabled = dict(version=1, displays=display('list')['displays'], workspaces={})
+                mirror_from_disabled['displays'][1].update(enabled=True, mirror_of=outputs[0]['id'])
+                pending = display('preview', '--json', json.dumps(mirror_from_disabled))
+                display('revert', pending['token'])
+                restored = display('list')
+                assert restored['displays'][0]['enabled'] and not restored['displays'][1]['enabled'], restored
+                assert not restored['recovery']['errors'], restored['recovery']
+                pending = display('preview', '--json', json.dumps(document))
+                display('keep', pending['token'])
+                # Geometry preview must not strand confirmation on a sleeping
+                # destination after disabling the last awake screen.
+                display('sleep', 'WAYLAND-2')
+                asleep_destination = copy.deepcopy(document)
+                asleep_destination['displays'][0]['enabled'] = False
+                refused = subprocess.run([str(ROOT / 'bin/hypertile-displays'), 'preview', '--json', json.dumps(asleep_destination)],
+                                         env=env, text=True, capture_output=True, timeout=25)
+                assert refused.returncode != 0 and 'Wake an extended display' in refused.stdout, refused.stdout
+                assert not display('status')['pending']
+                display('wake', 'WAYLAND-2')
+                print('PASS: normalized scale Keep/reload, disabled mirror rollback and sleeping destination protection')
                 # Mirror preview, rollback to Extended, persistence, and explicit clear.
                 mirrored = dict(version=1, displays=display('list')['displays'], workspaces={})
                 source, target = mirrored['displays']
@@ -264,6 +303,27 @@ def main():
                 display('restore')
                 assert not display('status')['pending']
                 assert next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['transform'] == 1, display('status')
+                # Recreate a confirmed disabled output. The Wayland backend
+                # advertises no modes; Hyprland may retain the old monitor's
+                # dimensions until a compositor restart (zero-mode startup is
+                # covered by the transaction unit suite).
+                cold = dict(version=1, displays=display('list')['displays'], workspaces={})
+                cold['displays'][1]['enabled'] = False
+                pending = display('preview', '--json', json.dumps(cold))
+                display('keep', pending['token'])
+                ctl('output', 'remove', 'WAYLAND-2')
+                ctl('output', 'create', 'wayland', 'WAYLAND-2')
+                time.sleep(.3)
+                raw = next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')
+                assert raw['disabled'] and not raw['availableModes'], raw
+                cold = dict(version=1, displays=display('list')['displays'], workspaces={})
+                target = next(d for d in cold['displays'] if d['connector'] == 'WAYLAND-2')
+                assert target['width'] == 1280 and target['height'] == 720, target
+                target['enabled'] = True
+                pending = display('preview', '--json', json.dumps(cold))
+                display('keep', pending['token'])
+                assert not next(m for m in json.loads(ctl('-j', 'monitors', 'all')) if m['name'] == 'WAYLAND-2')['disabled']
+                print('PASS: disabled output reconnect and re-enable without advertised modes')
                 # Physically remove the nested source during preview; recovery must
                 # leave the remaining output usable without persisting the preview.
                 pending = display('preview', '--json', json.dumps(transient))

@@ -295,6 +295,52 @@ before = D.bounds(row[1]);
 row[1].mirror_of = 'x';
 assert.strictEqual(D.reflow(row, 1, before), false, 'a screen leaving the desktop moves nothing');
 console.log('Typed workspace selectors are validated before Add; resized screens keep neighbours attached');
+// Returning to Extended keeps a free saved position, but cannot reuse an area
+// that another display has occupied while this output was disabled or mirrored.
+for (const state of [{enabled:false}, {mirror_of:'left'}]) {
+    const doc = {displays:[{...left,id:'left'}, {...right,id:'right',x:0,extended_position:{x:0,y:0},...state}]};
+    const enabled = D.setUsage(doc, 1, 'extended');
+    assert(enabled.displays[1].enabled && !enabled.displays[1].mirror_of);
+    assert(!D.overlaps(D.bounds(enabled.displays[0]),D.bounds(enabled.displays[1])), 'reenabling must find free desktop space');
+    assert.deepStrictEqual(plain(doc.displays[1].extended_position),{x:0,y:0}, 'source document is unchanged');
+}
+const freeReturn = {displays:[{...left,id:'left'}, {...right,id:'right',enabled:false,x:4000,y:-200,extended_position:{x:4000,y:-200}}]};
+const returned = D.setUsage(freeReturn,1,'extended');
+assert.deepStrictEqual([returned.displays[1].x,returned.displays[1].y],[4000,-200]);
+const coldReturn = D.setUsage({displays:[{...left,id:'left'}, {...right,id:'right',enabled:false,x:-1,y:-1}]},1,'extended');
+assert(!D.overlaps(D.bounds(coldReturn.displays[0]),D.bounds(coldReturn.displays[1])));
+const legacyReturn = D.setUsage({displays:[{...left,id:'left',width:6144,height:2560,scale:4/3}, {...right,id:'right',width:6144,height:2560,enabled:false,scale:1.4,x:4389}]},1,'extended');
+assert.strictEqual(legacyReturn.displays[1].scale,4/3);
+assert(!D.overlaps(D.bounds(legacyReturn.displays[0]),D.bounds(legacyReturn.displays[1])), 'normalize a legacy saved scale before choosing free space');
+
+// Rotation in a staggered arrangement used to move the bottom row into a tall
+// right-hand neighbour. Every rectangle must remain separate after the reflow.
+row = plain([{...left,width:1920,height:1080}, {...right,x:1920,height:2160}, {...below,y:1080}]);
+before = D.bounds(row[0]);
+row[0].transform = 1;
+D.reflow(row,0,before);
+for (let i=0;i<row.length;i++) for (let j=i+1;j<row.length;j++)
+    assert(!D.overlaps(D.bounds(row[i]),D.bounds(row[j])), 'staggered neighbours must not collide after rotation');
+assert.deepStrictEqual([row[0].x,row[0].y],[0,0], 'the edited monitor stays anchored');
+
+// Changing mode normalizes scale and moves neighbours from the final size once.
+const modeDoc = {displays:[{...left,width:6144,height:2560,scale:4/3}, {...right,x:4608}]};
+const resized = D.updateDisplay(modeDoc,0,{width:1366,height:768,refresh:60});
+assert.strictEqual(resized.displays[0].scale,1);
+assert.strictEqual(resized.displays[1].x,1366);
+assert(!D.overlaps(D.bounds(resized.displays[0]),D.bounds(resized.displays[1])));
+assert.strictEqual(modeDoc.displays[0].scale,4/3);
+const modePane = {Displays:D,draft:modeDoc,selectedIndex:0,selectedDisplay:modeDoc.displays[0],pending:null,busy:false,dirty:false};
+vm.runInNewContext(helper('setMode'),modePane);
+modePane.setMode({width:1366,height:768,refresh:60});
+assert.deepStrictEqual(plain(modePane.draft),plain(resized));
+assert.strictEqual(modePane.dirty,true);
+const largeScaleMode = D.updateDisplay({displays:[{...left,width:6144,height:2560,scale:4}, {...right,x:1536}]},0,{width:1366,height:768,refresh:60});
+assert.strictEqual(largeScaleMode.displays[0].scale,2, 'a mode edit must choose a compatible scale even outside Hyprland\'s bounded search');
+assert.strictEqual(largeScaleMode.displays[1].x,683);
+assert.deepStrictEqual(plain(D.bounds({...left,width:6144,height:2560,scale:1.3333334})),{x:0,y:0,w:4608,h:1920});
+assert(D.overlaps({x:0,y:0,w:1920,h:1080},{x:1919,y:0,w:1920,h:1080}), 'even a one-pixel overlap is real');
+console.log('Safe re-enabling, staggered reflow, atomic mode changes and rounded logical geometry passed');
 console.log('Workspace picker includes live locations, saved and custom choices; rejects invalid selectors');
 
 close = closing({});
