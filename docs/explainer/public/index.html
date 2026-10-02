@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="See how Hypertile works in two minutes: design zones once and let your windows follow. A narrated explainer with real Omarchy desktop footage.">
+    <meta name="theme-color" content="#0b1020">
+    <title>Hypertile in two minutes</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b1020'/%3E%3Cpath d='M8 8v16m16-16v16M8 16h16' stroke='%235eead4' stroke-width='4'/%3E%3C/svg%3E">
+    <style>
+      :root { color-scheme: dark; font-family: system-ui, sans-serif; background: #0b1020; color: #f1f5f9; }
+      * { box-sizing: border-box; }
+      body { margin: 0; }
+      main { max-width: 1120px; margin: auto; padding: 32px 20px; }
+      header { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px 24px; margin-bottom: 20px; }
+      h1 { margin: 0; font-size: clamp(1.5rem, 4vw, 2rem); font-weight: 650; letter-spacing: -.03em; }
+      header p { margin: 0; color: #94a3b8; }
+      video { display: block; width: 100%; aspect-ratio: 16 / 9; background: #000; border: 1px solid #334155; border-radius: 8px; }
+      nav { display: flex; flex-wrap: wrap; gap: 12px 24px; margin-top: 20px; }
+      a { color: #5eead4; text-underline-offset: 4px; line-height: 1.5; }
+      a:hover { color: #ccfbf1; }
+      a:focus-visible { outline: 2px solid #5eead4; outline-offset: 5px; }
+      @media (max-width: 600px) { main { padding: 24px 12px; } }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header><h1>Hypertile in two minutes</h1><p>Narrated desktop demo · 1:56</p></header>
+      <video controls playsinline preload="none" poster="/poster.jpg" width="1920" height="1080" aria-label="Hypertile explainer">
+        <source src="/media/hypertile-explainer-f42cf8b86a60.mp4" type="video/mp4">
+        <p><a href="/media/hypertile-explainer-f42cf8b86a60.mp4">Watch or download the explainer.</a></p>
+      </video>
+      <nav aria-label="Hypertile links">
+        <a href="https://github.com/jdvmi00/hypertile#readme">Read the README</a>
+        <a href="https://plugins.omarchy.org/plugin.html?id=jmartin.hypertile">Omarchy plugin page</a>
+        <a href="/media/hypertile-explainer-f42cf8b86a60.mp4">Open MP4</a>
+      </nav>
+    </main>
+  </body>
+</html>
