@@ -463,6 +463,30 @@ end
 -- 13. Spec validation.
 ---------------------------------------------------------------------------
 do
+  local spec = hypertile.compile({ columns = { { name = "fill" }, { name = "ruled" } },
+    rules = { { slot = "ruled", title = "a*a*a*a*b" }, { slot = "ruled", class = "^safe$" } } })
+  local ctx = make_ctx(8)
+  for _, target in ipairs(ctx.targets) do target.window.title = string.rep("a", 128) end
+  local messages, original_print = {}, print
+  print = function(message) messages[#messages + 1] = message end
+  local ok, err = pcall(function()
+    for _ = 1, 2 do
+      local assigned = hypertile.assign(spec, ctx.targets)
+      check(#assigned.fill + #assigned.ruled == #ctx.targets, "expensive rules still place every window")
+      check(assigned.fill[1] == ctx.targets[1], "budget exhaustion falls back to fill order")
+    end
+  end)
+  print = original_print
+  check(ok, "bounded assignment completes: " .. tostring(err))
+  check(#messages == 1 and messages[1]:find("matching limit", 1, true), "matching limit warns once per compiled layout")
+  ctx = make_ctx(1, { { class = "safe", title = "short" } })
+  local assigned = hypertile.assign(spec, ctx.targets)
+  check(assigned.ruled[1] == ctx.targets[1], "next calculation receives a fresh match budget")
+  assigned = hypertile.assign(spec, ctx.targets, { pins = { [ctx.targets[1].window.address] = "fill" } })
+  check(assigned.fill[1] == ctx.targets[1], "pins retain precedence over bounded matching")
+end
+
+do
   local function rejects(spec, pattern, label)
     local ok, err = pcall(hypertile.compile, spec)
     check(not ok and tostring(err):find(pattern, 1, true), label .. ": " .. tostring(err))
@@ -504,6 +528,68 @@ do
   check(hypertile.handle_msg(spec, state, "size a 0", win) == "size must be > 0", "a zero size override is refused")
   check(hypertile.handle_msg(spec, state, "size a -2", win) == "size must be > 0", "a negative size override is refused")
   check(type(hypertile.handle_msg(spec, state, "bogus", win)) == "string", "an unknown message reports an error string")
+end
+
+-- Navigation boxes are independent of occupancy, but must follow geometry,
+-- in-place weight edits, resets and spec hot swaps across all workspaces.
+do
+  local spec = { columns = { { name = "a" }, { name = "b" } }, empty = "collapse", single = "slot" }
+  local provider, _, state = hypertile.provider("cache-test", spec)
+  local ctx = make_ctx(2, { { workspace = { id = 1 } }, { workspace = { id = 1 } } })
+  local live = hypertile.live["cache-test"]
+  local original, calls = hypertile.slot_boxes, 0
+  hypertile.slot_boxes = function(...)
+    calls = calls + 1
+    return original(...)
+  end
+  provider.recalculate(ctx)
+  local first = live.boxes["1"]
+  provider.recalculate(ctx)
+  table.remove(ctx.targets)
+  provider.recalculate(ctx)
+  check(calls == 1 and live.boxes["1"] == first, "focus and occupancy changes reuse navigation boxes")
+  check(ctx.placed[1].w == ctx.area.w, "occupancy still updates window placement")
+  for _, key in ipairs({ "x", "y", "w", "h" }) do
+    ctx.area[key] = ctx.area[key] + 10
+    provider.recalculate(ctx)
+  end
+  check(calls == 5 and live.boxes["1"].a.x == 10 and live.boxes["1"].a.y == 10,
+    "every area dimension invalidates navigation boxes")
+  state.sizes.a = 3
+  provider.recalculate(ctx)
+  check(calls == 6 and live.boxes["1"].a.w == ctx.area.w * .75, "in-place size edit invalidates boxes")
+  state.sizes.a = nil
+  provider.recalculate(ctx)
+  check(calls == 7 and live.boxes["1"].a.w == ctx.area.w / 2, "removing an override invalidates boxes")
+  ctx.targets[1].window.workspace.id = 2
+  provider.recalculate(ctx)
+  check(calls == 8 and live.boxes["1"] ~= live.boxes["2"], "workspaces own separate navigation boxes")
+  state.sizes = { a = 2 }
+  provider.recalculate(ctx)
+  check(calls == 9, "replacing the size table invalidates boxes")
+  hypertile.handle_msg(live.compiled, state, "reset")
+  provider.recalculate(ctx)
+  check(calls == 10 and live.boxes["2"].a.w == ctx.area.w / 2, "reset invalidates boxes")
+  hypertile.provider("cache-test", { rows = { { name = "a" }, { name = "b" } } })
+  provider.recalculate(ctx)
+  check(calls == 11 and live.boxes["2"].a.h == ctx.area.h / 2 and not live.boxes["1"],
+    "hot swap invalidates all cached geometry even through the old provider")
+  hypertile.slot_boxes = original
+end
+
+-- Deep empty subtrees collapse correctly, including when occupancy changes.
+do
+  local tree = { name = "last" }
+  for i = 1, 150 do tree = { columns = { { name = "s" .. i }, tree } } end
+  tree.single, tree.fill, tree.cycle = "slot", { "last" }, { "last" }
+  local compiled = hypertile.compile(tree)
+  local ctx, state = make_ctx(1), { pins = {}, sizes = {} }
+  hypertile.recalculate(compiled, ctx, state)
+  check(same_box(ctx.placed[1], ctx.area), "deep occupied leaf gets the whole collapsed area")
+  state.pins[ctx.targets[1].window.address] = "s150"
+  local boxes = hypertile.recalculate(compiled, ctx, state)
+  check(same_box(ctx.placed[1], ctx.area) and boxes.last == nil,
+    "subtree occupancy is recomputed for the next placement")
 end
 
 print(string.format("%d checks, %d failures", checks, failures))

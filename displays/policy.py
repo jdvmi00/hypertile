@@ -273,9 +273,9 @@ class WorkspacePolicy:
         return {key: qualify(value["document"]["layout"]) for key, value in records.items()
                 if value.get("phase") != "restored" and value.get("document", {}).get("layout")}
 
-    def _available(self, document):
+    def _available(self, document, current=None):
         from adapter import match
-        current = self.adapter.displays()
+        current = self.adapter.displays() if current is None else current
         return {d["id"]: actual["connector"] for d in document.get("displays", [])
                 if d.get("enabled", True) and (actual := match(d, current)) and actual["enabled"]
                 and not actual.get("mirror_of") and not d.get("mirror_of")
@@ -326,15 +326,18 @@ class WorkspacePolicy:
                 raise ValueError("Layout " + qualified[4:] + " is unavailable; choose a saved layout before applying display preferences")
 
     def reconcile(self, document, reason="event"):
-        if reason not in ("preview", "apply", "handoff"):
-            from adapter import runtime_mirrors
-            document = runtime_mirrors(document, self.adapter.displays())
         validate(document)
         if not document.get("displays"):
             return {"moves": [], "layouts": []}
-        available = self._available(document)
+        # Resolve topology and identities from one fresh read inside the
+        # caller's transaction, not separate hyprctl processes per helper.
+        current = self.adapter.displays()
+        if reason not in ("preview", "apply", "handoff"):
+            from adapter import runtime_mirrors
+            document = runtime_mirrors(document, current)
+        validate(document)
+        available = self._available(document, current)
         workspaces = self.adapter.workspaces()
-        scenes = self._scenes()
         if reason in ("preview", "apply"):
             self.validate_changes(document)
         instance = os.environ.get("HYPRLAND_INSTANCE_SIGNATURE", "")

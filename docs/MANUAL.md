@@ -376,6 +376,11 @@ hypertile.layout("code", {
 
 `class` and `title` are Lua patterns: anchor them with `^` and `$`, and
 escape dots as `%.`. Find a window's class with `hypertile-ctl windows`.
+Matching has a work limit so an expensive rule cannot stall the desktop.
+An over-budget match is skipped; windows without another matching rule use
+normal fill order. The compositor logs a warning once per loaded layout.
+Patterns are limited to 1,024 bytes, and a class or title longer than 8,192
+bytes does not match. Each placement calculation gets a fresh work allowance.
 
 ### Focus: one window, centred, with breathing room
 

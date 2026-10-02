@@ -447,6 +447,12 @@ esac
   check(wins and wins[1].title == "Docs tab", "windows() flattens tabs in titles: " .. tostring(wins and wins[1].title))
   local wss = bridge.workspaces()
   check(wss and #wss == 2 and wss[1].id == 1 and wss[2].id == 3 and wss[2].active and wss[2].monitor == "DP-1", "workspaces() sorted by id with monitor and active flag")
+  local resolve = bridge.workspace_layout_source
+  bridge.workspace_layout_source = function() error("live queries must not resolve saved preferences") end
+  local live_wss = bridge.workspaces(true)
+  check(live_wss and #live_wss == 2 and live_wss[2].layout == "lua:quad" and not live_wss[2].layout_source,
+    "live workspace queries bypass saved preferences")
+  bridge.workspace_layout_source = resolve
 
   -- default layout: read and replace general.layout in a temp looknfeel.lua
   local lf = assert(io.open(bridge.looknfeel_path, "w"))
@@ -590,6 +596,10 @@ do
   end
 
   local out, code = run("dump quad")
+  local live_out, live_code = run("workspaces --json --live")
+  local live_list = live_code == 0 and json.decode(live_out).workspaces
+  check(live_list and #live_list == 2 and live_list[2].layout == "lua:quad" and live_list[2].active
+    and not live_list[2].layout_source, "CLI live workspaces include bar fields without source resolution")
   check(code == 0 and out:find('"name": "quad"'), "cli dump prints JSON: " .. out:sub(1, 80))
   local _, vcode = run("validate -", out)
   check(vcode == 0, "cli validate accepts dump output")
