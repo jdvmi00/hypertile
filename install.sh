@@ -6,6 +6,7 @@
 # shell expect it, which is this script's job:
 #
 #   ~/.config/hypr/hypertile.lua           engine
+#   ~/.config/hypr/hypertile-pattern.lua   bounded rule matching
 #   ~/.config/hypr/hypertile-json.lua      JSON module (bridge)
 #   ~/.config/hypr/hypertile-bridge.lua    bridge library
 #   ~/.config/hypr/hypertile-layouts.lua   loader for layouts/*.lua
@@ -200,7 +201,8 @@ if [[ ! -e "$hypr/layouts" && ! -L "$hypr/layouts" ]]; then
 fi
 mkdir -p "$hypr/layouts"
 
-for f in hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
+# Install the new dependency before a watched engine write can trigger reload.
+for f in hypertile-pattern.lua hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
   install -m 0644 "$src/$f" "$hypr/$f"
 done
 

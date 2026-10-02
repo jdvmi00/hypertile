@@ -1,5 +1,118 @@
 # Changelog
 
+## 1.5.0 (2026-10-02)
+
+Hypertile 1.5.0 adds layout sharing, menu bar settings, and immediate mirror
+switching, simplifies the overlay, and improves display recovery and placement.
+
+- Layout placement caches repeated geometry and subtree scans; the bar and
+  display policy avoid redundant queries. Rule matching has bounded work so
+  pathological patterns cannot stall the compositor. Closed-window pins are
+  pruned from session snapshots.
+
+- Wallpaper groups support Omarchy's newer sized background renderer while
+  retaining asynchronous decoding, theme transitions, and custom-image fallback.
+
+- Fresh session processes can restore display settings without import failures.
+
+- A narrated two-minute explainer introduces Hypertile from the README.
+
+- Displays keep adjoining edges together when an input switch, PBP mode,
+  scaling or rotation changes their logical size. Placement survives reloads
+  and service restarts without restoring stale resolutions. Manual moves and
+  intentional gaps are retained, and the open display diagram refreshes.
+
+- A calmer overlay for first-time use. The Layouts tab keeps **Use** and
+  **Edit** in view and moves Rename, Duplicate, Export…, the `SUPER+L` cycle
+  switch, and Delete into a **⋯** menu; **+ New** on the LAYOUTS heading starts
+  a blank layout, a copy, or an import. The fill order joins the header, and
+  the workspace controls collapse into **Apply to**. A **Getting started** card
+  explains the basics until dismissed.
+
+- **Settings** behind the gear gathers the preferences that belong to no
+  layout: saving windows for startup, the rail's side, the key list, the menu
+  bar position, and the desktop text size (moved from Displays). The bar
+  widget's right-click opens it at the menu bar position.
+
+- Edit mode: what a zone **Holds** (Windows, One window, Nothing) replaces the
+  Spacer and Never split switches, as one undo step. Stack, capacity ("No
+  limit"), aspect and scale move into a collapsed **More options**; the layout's
+  settings split into collapsed **Appearance** and **Behaviour** sections whose
+  headings list what is not the default. **Save** is the primary action,
+  **Renumber** is **Fill order**, and **Leave** is **Done**. The rail offers
+  split and delete only for zones too small to show them on their card.
+
+- Displays: the inspector leads with the display's name (make and model) and
+  **Sleep**, then Use as, resolution, scale and rotation; **Position** and
+  **Workspaces** are collapsed and the help text is shorter. A **Display |
+  Wallpaper** switch replaces the Wallpaper groups button, and the wallpaper
+  checkboxes are now choices: This display or Span displays, Theme wallpaper
+  or Custom image, Fill or Fit. The pane opens from the rail's corner, so its
+  tabs stay where the rail's were. Footer verbs are Discard, Revert, Preview
+  changes and Keep changes; **Apply** is **Show**.
+
+- One button style everywhere in the overlay, with a primary style for each
+  surface's main action; the Displays and Wallpaper views use the same kit as
+  the rail, and the wallpaper image picker opens inside the overlay.
+
+- Scenes: **Any window** replaces "Local windows", and the app list starts
+  short with **Show all**; a search still covers every app.
+
+- Zone badges and card buttons step clear of the rail; the rail shows a
+  scroll indicator. "Zone" replaces "slot" and "tile" in the overlay and the
+  move picker. The bar and OSD icon uses a glyph every Nerd Font 3 release has.
+
+- Display previews leave unchanged screens alone and preserve automatic modes,
+  custom modelines, and refresh-rate caps during geometry edits. The resolution
+  picker offers Automatic (highest resolution). Changed connections or mode
+  lists stop stale previews and saves; rollback avoids replaying old modes after
+  docking, monitor replacement, or picture-by-picture changes.
+  Geometry edits preserve the winning description rule's mode even when an
+  older connector rule exists. Automatic previews accept Hyprland's resolved
+  mode, check its resulting arrangement, and retain recovery after a fallback.
+
+- Window drag and drop and numbered tile outlines work on displays positioned
+  above, below, or beside the desktop origin.
+
+- Disabling a display moves all its workspaces and windows, including named
+  workspaces and scratchpads, to an awake extended display. Revert restores
+  their previous placement; failed moves leave the source enabled.
+
+- Change Hypertile’s menu bar position at any time: right-click the widget or
+  use the overlay’s gear, then choose **Left**, **Middle**, or **Right**. Visual
+  position cards follow the current placement and apply immediately across
+  screens, preserving widget settings and the rest of the bar.
+
+- **Export…** and **Import…** share layouts as JSON from the Layouts tab.
+  Matching `hypertile-ctl export` and `import` commands support files and stdin/stdout.
+  Imports validate before saving, preserve existing layouts by choosing an unused
+  name, and keep scene identities independent from the original.
+
+- **Remove saved display** saves immediately without Preview or Keep, preserving
+  unrelated unsaved edits. Removing a disconnected display clears obsolete
+  mirror references in explicit connector rules when the remaining display is
+  Extended. Failed saves restore the profile and its configuration.
+
+- Mirror groups: **Use this display** fits the shared desktop to the chosen
+  monitor while each output retains its own mode, scale, and rotation. Switching
+  saves immediately with **Switch back** and recovery on failure. Workspaces,
+  windows and focus follow the source; other extended displays keep their content.
+  Relative numbering stays stable within a group. `display use-display next` cycles
+  its awake members for shortcut use.
+
+- Displays disabled at startup retain usable saved settings or an advertised
+  mode. Returning to Extended finds free space when the old position is occupied;
+  staggered arrangements remain separate after resizing or rotation. Logical
+  bounds match Hyprland's rounding, and one-pixel overlaps are rejected.
+- Mode changes normalize scale and rearrange neighbours as one edit. Keep saves
+  the normalized scale used by preview. Revert correctly disables a mirror that
+  was previously disabled, and the watchdog rechecks the deadline under the
+  display lock so slow application does not consume the confirmation countdown.
+  Rollback skips empty workspaces removed during monitor evacuation.
+- Re-enabling a sleeping output wakes it before disabling its source. Disabling
+  the last awake extended display requires an awake destination. Keyboard wake
+  remains available when the awake output disappears or all outputs are slept.
+
 ## 1.4.2 (2026-09-20)
 
 - Displays: the preview countdown starts after every output has settled;

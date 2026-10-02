@@ -16,7 +16,7 @@ function load(file, exports) {
 }
 const E = load("Editor.js", ["splitZone", "deleteZone", "resizeSiblings", "setFill", "layoutTree", "dividers", "dividerAt", "leafAt", "leafNames", "uniqueName", "nodeAt", "kindOf",
   "fillableNames", "setZoneProp", "setLayoutProp", "setGap", "setCapacity", "addRule", "removeRule", "rulesFor", "exactPattern",
-  "renameZone", "neighbor", "edgeDivider", "nudge", "setZoneExtent", "extentTarget", "validName"])
+  "renameZone", "neighbor", "edgeDivider", "nudge", "setZoneExtent", "extentTarget", "validName", "zoneHolds", "setZoneHolds", "findLeaf"])
 const G = load("Geometry.js", ["zones"])
 
 let checks = 0, failures = 0
@@ -254,6 +254,28 @@ const quad = {
   let root = E.setZoneProp({ name: "only" }, "only", "never_split", true)
   root = E.splitZone(root, "only", "columns")
   check(root.never_split === undefined && root.columns[0].never_split === true, "root split moves never_split onto the zone")
+}
+
+// ---- what a zone holds: windows, one window, nothing, each one edit
+{
+  const leaf = (spec, name) => E.findLeaf(spec, name).node
+  check(E.zoneHolds(leaf(ultrawide, "left")) === "windows", "a plain zone holds windows")
+  const one = E.setZoneHolds(ultrawide, "left", "one")
+  check(leaf(one, "left").never_split === true && E.zoneHolds(leaf(one, "left")) === "one", "one window sets never_split")
+  check(E.setZoneHolds(one, "left", "one") === one, "an unchanged choice returns the input")
+  const none = E.setZoneHolds(one, "left", "nothing")
+  check(leaf(none, "left").spacer === true && leaf(none, "left").never_split === undefined, "nothing makes a spacer and drops never_split")
+  check(none.fill.indexOf("left") === -1, "a spacer leaves the fill: " + none.fill.join())
+  assertValid("holds nothing", none)
+  const back = E.setZoneHolds(none, "left", "one")
+  check(leaf(back, "left").spacer === undefined && leaf(back, "left").never_split === true && back.fill.indexOf("left") !== -1, "nothing to one window clears the spacer, sets never_split and refills: " + back.fill.join())
+  assertValid("holds one", back)
+  const windows = E.setZoneHolds(back, "left", "windows")
+  check(E.zoneHolds(leaf(windows, "left")) === "windows" && leaf(windows, "left").never_split === undefined, "windows clears never_split")
+  const last = { columns: [{ name: "a", spacer: true }, { name: "b", never_split: true }], fill: ["b"] }
+  check(E.setZoneHolds(last, "b", "nothing") === last, "the last zone that takes windows cannot hold nothing")
+  check(E.setZoneHolds(ultrawide, "left", "bogus") === ultrawide && E.setZoneHolds(ultrawide, "missing", "one") === ultrawide, "unknown choices and zones are ignored")
+  check(leaf(ultrawide, "left").never_split === undefined && ultrawide.fill.join() === "center,right,left", "the input is never mutated")
 }
 
 // ---- rename: every reference follows, bad or taken names are refused

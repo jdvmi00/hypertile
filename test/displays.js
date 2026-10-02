@@ -16,6 +16,32 @@ for(const transform of [0,2,4,6]) assert.strictEqual(D.bounds({...b,transform}).
 assert.deepStrictEqual(plain(D.parseMode('3840x2160@59.94Hz')), {width:3840,height:2160,refresh:59.94})
 assert.strictEqual(D.parseMode('unavailable'),null)
 console.log('Display diagram geometry, snapping, scaling, rotation and modes passed')
+assert.strictEqual(D.displayName({make:'Dell Inc.', model:'DELL U5226KW', description:'Dell Inc. DELL U5226KW ABC1234', connector:'DP-1'}), 'Dell U5226KW')
+assert.strictEqual(D.displayName({description:'Dell Inc. DELL U5226KW ABC1234', connector:'DP-1'}), 'Dell U5226KW ABC1234', 'older catalogs fall back to the description')
+assert.strictEqual(D.displayName({make:'LG Electronics', model:'LG ULTRAGEAR', connector:'DP-2'}), 'LG ULTRAGEAR')
+assert.strictEqual(D.displayName({make:'Samsung Electric Company', model:'Odyssey G9', connector:'DP-3'}), 'Samsung Electric Odyssey G9')
+assert.strictEqual(D.displayName({make:'Unknown', model:'', description:'', connector:'HEADLESS-1'}), 'HEADLESS-1')
+assert.strictEqual(D.displayName({connector:'eDP-1'}), 'eDP-1')
+assert.strictEqual(D.displayName(null), '')
+console.log('Display names lead with make and model, never empty')
+const savedDisplay = {id:'saved', connector:'DP-2', connected:false, initial_workspace:'2', default_layout:'lua:quad'}
+const removalDraft = {version:1, displays:[{id:'live', connector:'DP-1', connected:true}, savedDisplay], workspaces:{
+    '2':{monitor:'saved', layout:'lua:quad'}, '3':{monitor:'saved', layout:null}, '4':{monitor:'live', layout:'master'}
+}}
+const removedDraft = D.removeDisplay(removalDraft, 1)
+assert.deepStrictEqual(plain(removedDraft.displays), [{id:'live', connector:'DP-1', connected:true}])
+assert.deepStrictEqual(plain(removedDraft.removed_displays), ['saved'])
+assert.deepStrictEqual(plain(removedDraft.workspaces), {
+    '2':{monitor:null, layout:'lua:quad'}, '3':{monitor:null, layout:null}, '4':{monitor:'live', layout:'master'}
+})
+assert.strictEqual(removalDraft.displays.length, 2, 'removal never mutates the original draft')
+assert.strictEqual(removalDraft.workspaces['2'].monitor, 'saved')
+assert.throws(() => D.removeDisplay(removalDraft, 0), /Connected displays/)
+assert.throws(() => D.removeDisplay(removalDraft, 99), /Select a saved display/)
+assert.throws(() => D.removeDisplay({...removalDraft, displays:[...removalDraft.displays, {id:'mirror', connected:false, mirror_of:'saved'}]}, 1), /another source/)
+const twoRemovals = D.removeDisplay({...plain(removedDraft), displays:[...plain(removedDraft.displays), {id:'other', connected:false}]}, 1)
+assert.deepStrictEqual(plain(twoRemovals.removed_displays), ['saved', 'other'])
+console.log('Saved display removal preserves workspace layouts and rejects connected screens and mirror sources')
 // Exercise the pane's pure action helpers without a graphical session.
 const qml = fs.readFileSync('plugin/DisplaysPane.qml', 'utf8')
 function helper(name) {
@@ -25,6 +51,40 @@ function helper(name) {
     assert(start >= 0 && end > start, 'helper must remain extractable: ' + name)
     return qml.slice(start, end)
 }
+function removing(state) {
+    const ctx = Object.assign({Displays:D, draft:plain(removalDraft), selectedIndex:1, busy:false, pending:null,
+        queryProcess:{running:false}, dirty:false, error:'', notice:'', matchingConnector:'old',
+        workspaceChoice:'2', customWorkspace:'work', confirmingDiscard:true}, state)
+    ctx.run = args => { ctx.sent = args }
+    Object.defineProperty(ctx, 'selectedDisplay', {get() {return this.draft.displays[this.selectedIndex] || null}})
+    vm.runInNewContext(helper('removeSelectedDisplay'), ctx)
+    vm.runInNewContext(helper('removedDisplay'), ctx)
+    return ctx
+}
+let remove = removing({})
+remove.removeSelectedDisplay()
+assert.deepStrictEqual(plain(remove.sent), ['remove-display','saved'])
+assert.deepStrictEqual([remove.draft.displays.length, remove.selectedIndex, remove.dirty, remove.confirmingDiscard], [2,1,false,false])
+remove.removedDisplay('saved')
+assert.deepStrictEqual([remove.draft.displays.length, remove.selectedIndex, remove.dirty], [1,0,false])
+assert.deepStrictEqual([remove.matchingConnector, remove.workspaceChoice, remove.customWorkspace], ['',null,''])
+assert.strictEqual(remove.draft.removed_displays, undefined, 'completed removal does not need Preview or Keep')
+remove = removing({dirty:true})
+remove.draft.displays[0].scale = 2
+remove.removeSelectedDisplay()
+remove.removedDisplay('saved')
+assert.strictEqual(remove.dirty, true)
+assert.strictEqual(remove.draft.displays[0].scale, 2, 'unrelated unsaved edits survive immediate removal')
+for (const state of [{busy:true}, {pending:{token:'t'}}, {queryProcess:{running:true}}]) {
+    remove = removing(state)
+    remove.removeSelectedDisplay()
+    assert.strictEqual(remove.draft.displays.length, 2, 'removal waits for pending queries and transactions')
+    assert.strictEqual(remove.dirty, false)
+}
+remove = removing({selectedIndex:0})
+remove.removeSelectedDisplay()
+assert.match(remove.error, /Connected displays/)
+assert.strictEqual(remove.draft.displays.length, 2)
 const pane = {
     Displays: D,
     selectedDisplay: {id: 'portrait'},
@@ -204,6 +264,37 @@ assert.strictEqual(D.usageOptions(mirrorDraft.displays, mirrorDraft.displays[0])
 assert.strictEqual(D.setUsage(mirrorDoc, 1, 'disabled').displays[1].enabled, false)
 console.log('Mirror groups, source selection, retained preferences and Extended restoration passed')
 
+const switchedMirrors = plain(mirrorDraft.displays)
+switchedMirrors[0].connector = 'DP-1'
+switchedMirrors[1].connector = 'DP-2'
+switchedMirrors[0].mirror_of = 'b'
+switchedMirrors[1].mirror_of = null
+switchedMirrors[1].x = switchedMirrors[0].x
+switchedMirrors[1].y = switchedMirrors[0].y
+assert.deepStrictEqual(plain(D.numbering(switchedMirrors)), [1, 2], 'physical numbers must survive a source switch')
+assert.strictEqual(D.mirrorSource(switchedMirrors, switchedMirrors[0]).id, 'b')
+assert(D.canUseDisplay(switchedMirrors, switchedMirrors[0]))
+assert(!D.canUseDisplay(switchedMirrors, switchedMirrors[1]))
+assert(!D.canUseDisplay(switchedMirrors, {...switchedMirrors[0], awake:false}))
+assert(!D.canUseDisplay(mirrorDoc.displays, mirrorDoc.displays[0]), 'independent displays have no source switch')
+assert(D.mirrorStatus(switchedMirrors, switchedMirrors[0]).includes('display 2 · DP-2'))
+const switching = {catalog:{displays:switchedMirrors}, Displays:D, dirty:false, busy:false, pending:null,
+    wallpaperEditor:{dirty:false}, queryProcess:{running:false}, confirmingDiscard:true, calls:[]}
+switching.run = args => switching.calls.push(plain(args))
+vm.runInNewContext(helper('useDisplay'), switching)
+switching.useDisplay(switchedMirrors[0].connector)
+assert.deepStrictEqual(switching.calls, [['use-display', switchedMirrors[0].connector]])
+assert(!switching.confirmingDiscard)
+for (const field of ['dirty', 'busy', 'pending']) {
+    switching[field] = true
+    switching.useDisplay(switchedMirrors[0].connector)
+    switching[field] = false
+}
+switching.wallpaperEditor.dirty = true
+switching.useDisplay(switchedMirrors[0].connector)
+assert.strictEqual(switching.calls.length, 1, 'source switching never mixes with unsaved edits or an active operation')
+console.log('Immediate mirror handoff controls, source status, stable numbering and unsaved edit guards passed')
+
 // A lone desktop rectangle has no relative arrangement, including a mirror group.
 for (const others of [[], [{...b, enabled:false}], [{...b, connected:false}], [{...b, mirror_of:'a'}]]) {
     const displays = [{...a, id:'a', x:177, y:374}, ...others]
@@ -239,8 +330,13 @@ for (const [width,height] of [[6144,2560],[1920,1080],[3840,2160],[2560,1440],[1
     }
 }
 assert.deepStrictEqual(plain(D.scaleOptions(null)), [])
+// Desktop text size lives in Settings: one setting for every display,
+// applied at once, never part of a display preview.
+const settingsQml = fs.readFileSync('plugin/SettingsPanel.qml', 'utf8')
+const textSizeStart = settingsQml.indexOf('  function setTextSize(')
+assert(textSizeStart >= 0, 'setTextSize must remain extractable from SettingsPanel.qml')
 const textPane = {textSizeStops:[9,10,11,12,14,16,20], pendingTextSize:-1, textSizeProcess:{running:false}, draft:untouchedDraft, dirty:false}
-vm.runInNewContext(helper('setTextSize'), textPane)
+vm.runInNewContext(settingsQml.slice(textSizeStart, settingsQml.indexOf('\n  }', textSizeStart) + 4), textPane)
 assert.strictEqual(D.nearestStop(textPane.textSizeStops,13),3)
 textPane.setTextSize(4)
 assert.deepStrictEqual(plain(textPane.textSizeProcess.command), ['omarchy','display','text','size','14'])
@@ -295,6 +391,52 @@ before = D.bounds(row[1]);
 row[1].mirror_of = 'x';
 assert.strictEqual(D.reflow(row, 1, before), false, 'a screen leaving the desktop moves nothing');
 console.log('Typed workspace selectors are validated before Add; resized screens keep neighbours attached');
+// Returning to Extended keeps a free saved position, but cannot reuse an area
+// that another display has occupied while this output was disabled or mirrored.
+for (const state of [{enabled:false}, {mirror_of:'left'}]) {
+    const doc = {displays:[{...left,id:'left'}, {...right,id:'right',x:0,extended_position:{x:0,y:0},...state}]};
+    const enabled = D.setUsage(doc, 1, 'extended');
+    assert(enabled.displays[1].enabled && !enabled.displays[1].mirror_of);
+    assert(!D.overlaps(D.bounds(enabled.displays[0]),D.bounds(enabled.displays[1])), 'reenabling must find free desktop space');
+    assert.deepStrictEqual(plain(doc.displays[1].extended_position),{x:0,y:0}, 'source document is unchanged');
+}
+const freeReturn = {displays:[{...left,id:'left'}, {...right,id:'right',enabled:false,x:4000,y:-200,extended_position:{x:4000,y:-200}}]};
+const returned = D.setUsage(freeReturn,1,'extended');
+assert.deepStrictEqual([returned.displays[1].x,returned.displays[1].y],[4000,-200]);
+const coldReturn = D.setUsage({displays:[{...left,id:'left'}, {...right,id:'right',enabled:false,x:-1,y:-1}]},1,'extended');
+assert(!D.overlaps(D.bounds(coldReturn.displays[0]),D.bounds(coldReturn.displays[1])));
+const legacyReturn = D.setUsage({displays:[{...left,id:'left',width:6144,height:2560,scale:4/3}, {...right,id:'right',width:6144,height:2560,enabled:false,scale:1.4,x:4389}]},1,'extended');
+assert.strictEqual(legacyReturn.displays[1].scale,4/3);
+assert(!D.overlaps(D.bounds(legacyReturn.displays[0]),D.bounds(legacyReturn.displays[1])), 'normalize a legacy saved scale before choosing free space');
+
+// Rotation in a staggered arrangement used to move the bottom row into a tall
+// right-hand neighbour. Every rectangle must remain separate after the reflow.
+row = plain([{...left,width:1920,height:1080}, {...right,x:1920,height:2160}, {...below,y:1080}]);
+before = D.bounds(row[0]);
+row[0].transform = 1;
+D.reflow(row,0,before);
+for (let i=0;i<row.length;i++) for (let j=i+1;j<row.length;j++)
+    assert(!D.overlaps(D.bounds(row[i]),D.bounds(row[j])), 'staggered neighbours must not collide after rotation');
+assert.deepStrictEqual([row[0].x,row[0].y],[0,0], 'the edited monitor stays anchored');
+
+// Changing mode normalizes scale and moves neighbours from the final size once.
+const modeDoc = {displays:[{...left,width:6144,height:2560,scale:4/3}, {...right,x:4608}]};
+const resized = D.updateDisplay(modeDoc,0,{width:1366,height:768,refresh:60});
+assert.strictEqual(resized.displays[0].scale,1);
+assert.strictEqual(resized.displays[1].x,1366);
+assert(!D.overlaps(D.bounds(resized.displays[0]),D.bounds(resized.displays[1])));
+assert.strictEqual(modeDoc.displays[0].scale,4/3);
+const modePane = {Displays:D,draft:modeDoc,selectedIndex:0,selectedDisplay:modeDoc.displays[0],pending:null,busy:false,dirty:false};
+vm.runInNewContext(helper('setMode'),modePane);
+modePane.setMode({width:1366,height:768,refresh:60});
+assert.deepStrictEqual(plain(modePane.draft),plain(resized));
+assert.strictEqual(modePane.dirty,true);
+const largeScaleMode = D.updateDisplay({displays:[{...left,width:6144,height:2560,scale:4}, {...right,x:1536}]},0,{width:1366,height:768,refresh:60});
+assert.strictEqual(largeScaleMode.displays[0].scale,2, 'a mode edit must choose a compatible scale even outside Hyprland\'s bounded search');
+assert.strictEqual(largeScaleMode.displays[1].x,683);
+assert.deepStrictEqual(plain(D.bounds({...left,width:6144,height:2560,scale:1.3333334})),{x:0,y:0,w:4608,h:1920});
+assert(D.overlaps({x:0,y:0,w:1920,h:1080},{x:1919,y:0,w:1920,h:1080}), 'even a one-pixel overlap is real');
+console.log('Safe re-enabling, staggered reflow, atomic mode changes and rounded logical geometry passed');
 console.log('Workspace picker includes live locations, saved and custom choices; rejects invalid selectors');
 
 close = closing({});
@@ -303,3 +445,21 @@ close.requestClose();
 assert(close.confirmingDiscard && !close.closed);
 close.discardAndClose();
 assert(!close.wallpaperEditor.dirty && close.closed);
+
+// Automatic mode intent survives geometry edits and is explicit in the picker.
+const autoDisplay = {id:'auto', identity:'panel', connector:'DP-1', connected:true, enabled:true,
+    width:6144,height:2560,refresh:120,scale:4/3,transform:0,x:0,y:0,
+    mode_policy:'highres', modes:['6144x2560@120.00Hz'], capability_signature:'old',
+    automatic_modes:[{mode_policy:'highres',width:6144,height:2560,refresh:120,label:'Automatic (highest resolution)'}]};
+const autoChoices = plain(D.modeChoices(autoDisplay));
+assert.deepStrictEqual(autoChoices.map(c => c.mode_policy), ['highres','fixed']);
+assert.strictEqual(D.currentModeLabel(autoDisplay),'Automatic (highest resolution)');
+let autoDraft = {version:1,displays:[autoDisplay]};
+assert.strictEqual(D.updateDisplay(autoDraft,0,{scale:2}).displays[0].mode_policy,'highres');
+const fixedChoice = autoChoices[1];
+assert.strictEqual(D.updateDisplay(autoDraft,0,fixedChoice).displays[0].mode_policy,'fixed');
+const reconnected = D.matchSavedDisplay({displays:[{...autoDisplay,connected:false},{...autoDisplay,id:'live',capability_signature:'new'}]},0,'DP-1');
+assert.strictEqual(reconnected.displays[0].capability_signature,'new');
+assert.strictEqual(reconnected.displays[0].mode_policy,'highres');
+assert.strictEqual(D.modeChoices({...autoDisplay,modes:[],automatic_modes:[]}).length,0);
+console.log('Automatic mode picker, geometry preservation and refreshed reconnect capabilities passed');

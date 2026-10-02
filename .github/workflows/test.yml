@@ -41,13 +41,13 @@ jobs:
       - name: Installer and uninstaller
         run: python3 test/install.py
       - name: Engine
-        run: lua test/harness.lua && lua test/loader.lua
+        run: lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
       - name: Window navigation
         run: lua test/navigation.lua && node test/tile_picker.js
       - name: Bridge and CLI
         run: lua test/bridge.lua
       - name: Display transactions and workspace policy
-        run: python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_policy.py && node test/displays.js
+        run: python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_safety.py && python3 test/display_placement.py && python3 test/display_policy.py && node test/displays.js
       - name: Wallpaper groups
         run: python3 test/wallpaper.py && node test/wallpaper.js
       - name: Session recovery
@@ -60,6 +60,8 @@ jobs:
         run: node test/geometry.js
       - name: Overlay editor
         run: node test/editor.js && node test/overlay.js && node test/readability.js
+      - name: Hosted explainer
+        run: node --test docs/explainer/worker.test.mjs
       - name: Installable tree excludes agent instructions
         run: test -z "$(git ls-files | grep -Ei '(^|/)(AGENTS|CLAUDE|GEMINI)\.md$' || true)"
       - name: Plugin manifest

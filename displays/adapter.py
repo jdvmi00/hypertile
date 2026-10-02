@@ -7,6 +7,8 @@ import subprocess
 import time
 from pathlib import Path
 
+from modes import AUTOMATIC, parse as parse_mode, same_mode, signature, value as mode_value
+
 
 class DisplayError(ValueError):
     pass
@@ -36,6 +38,7 @@ def normalized(monitors):
         ambiguous = counts[key] > 1
         result.append(dict(id=key + ('@' + m['name'] if ambiguous else ''), identity=key,
                            connector=m['name'], description=m.get('description', m['name']),
+                           make=m.get('make', ''), model=m.get('model', ''),
                            connected=True, ambiguous=ambiguous, enabled=not m.get('disabled', False),
                            width=m['width'], height=m['height'], refresh=m['refreshRate'],
                            x=m['x'], y=m['y'], scale=m['scale'], transform=m.get('transform', 0),
@@ -87,11 +90,31 @@ def clean_scale(width, height, scale):
     return scale
 
 
+def automatic_readback(requested, actual):
+    """Recognize a native automatic choice without relaxing other settings."""
+    if (requested.get('mode_policy') not in AUTOMATIC or not requested['enabled']
+            or not actual['enabled'] or requested['connector'] != actual['connector']
+            or any(actual[key] <= 0 for key in ('width', 'height', 'refresh'))):
+        return False
+    if not any(same_mode(actual, mode) for raw in actual.get('modes', [])
+               if (mode := parse_mode(raw))):
+        return False
+    scale = clean_scale(actual['width'], actual['height'], requested['scale'])
+    if not .25 <= scale <= 8 or any(abs(size / scale - round(size / scale)) > 1e-6
+                                  for size in (actual['width'], actual['height'])):
+        return False
+    resolved = dict(requested, width=actual['width'], height=actual['height'],
+                    refresh=actual['refresh'], scale=scale)
+    return same(resolved, actual)
+
+
 def bounds(d):
     w, h = d['width'], d['height']
     if d['transform'] % 2:
         w, h = h, w
-    return d['x'], d['y'], w / d['scale'], h / d['scale']
+    # CMonitor stores rounded logical dimensions, including fractional scales
+    # represented with limited precision in IPC.
+    return d['x'], d['y'], round(w / d['scale']), round(h / d['scale'])
 
 
 def match(saved, current):
@@ -118,7 +141,7 @@ def runtime_mirrors(document, current):
     return dict(document, displays=displays)
 
 
-def validate(document, current):
+def validate(document, current, known=()):
     if not isinstance(document, dict) or document.get('version') != 1 or not isinstance(document.get('displays'), list):
         raise DisplayError('Expected version 1 settings with a displays array.')
     result, seen, connectors = [], set(), set()
@@ -126,6 +149,8 @@ def validate(document, current):
         if not isinstance(source, dict):
             raise DisplayError('Every display must be a settings object.')
         d = dict(source)
+        if d.get('mode_policy', 'fixed') not in ('fixed', *AUTOMATIC):
+            raise DisplayError('Choose an automatic mode or an advertised resolution and refresh rate.')
         if not isinstance(d.get('id'), str) or d['id'] in seen:
             raise DisplayError('Every display needs a unique stable id.')
         seen.add(d['id'])
@@ -154,6 +179,8 @@ def validate(document, current):
         d['scale'] = clean_scale(d['width'], d['height'], d['scale'])
         if not actual:
             continue  # Keep valid disconnected preferences without testing mode availability.
+        if d.get('capability_signature') and d['capability_signature'] != signature(actual):
+            raise DisplayError('Display connections or available modes changed. Refresh displays and preview again.')
         if actual['connector'] in connectors:
             raise DisplayError('More than one saved display matches ' + actual['connector'] + '; choose a single explicit match.')
         connectors.add(actual['connector'])
@@ -161,9 +188,22 @@ def validate(document, current):
             raise DisplayError('Identical displays require an explicit connector match: ' + actual['connector'])
         d['connector'] = actual['connector']
         if d['enabled']:
+            if (d.get('mode_policy') in AUTOMATIC and not actual['modes']
+                    and d.get('mode_policy') != actual.get('mode_policy')):
+                raise DisplayError('Automatic mode selection needs advertised modes for ' + d['connector'] + '; keep its current mode or choose a supported resolution.')
+            if d['width'] <= 0 or d['height'] <= 0 or d['refresh'] <= 0:
+                raise DisplayError('Select a supported resolution and refresh rate before enabling ' + d['connector'] + '.')
+            if not .25 <= d['scale'] <= 8 or any(abs(size / d['scale'] - round(size / d['scale'])) > 1e-6 for size in (d['width'], d['height'])):
+                raise DisplayError('Select a scale that divides the resolution into whole logical pixels.')
             modes = [re.fullmatch(r'(\d+)x(\d+)@([\d.]+)Hz', m) for m in actual['modes']]
             current_mode = d['width'] == actual['width'] and d['height'] == actual['height'] and abs(d['refresh'] - actual['refresh']) < .1 and d['width'] > 0 and d['height'] > 0
-            if not current_mode and not any(m and int(m[1]) == d['width'] and int(m[2]) == d['height'] and abs(float(m[3]) - d['refresh']) < .1 for m in modes):
+            # Virtual backends can advertise no modes and initialize none while
+            # disabled. A previously confirmed mode is still safe to preview;
+            # arbitrary unadvertised modes remain rejected.
+            known_mode = not actual['enabled'] and not actual['modes'] and any(
+                match(saved, current) == actual and saved['width'] == d['width'] and saved['height'] == d['height']
+                and abs(saved['refresh'] - d['refresh']) < .1 for saved in known)
+            if not current_mode and not known_mode and not any(m and int(m[1]) == d['width'] and int(m[2]) == d['height'] and abs(float(m[3]) - d['refresh']) < .1 for m in modes):
                 raise DisplayError('Unsupported mode for ' + d['connector'] + '; select an advertised resolution and refresh rate.')
         result.append(d)
     merged = {d['connector']: d for d in current}
@@ -187,7 +227,7 @@ def validate(document, current):
         ax, ay, aw, ah = bounds(a)
         for b in active[i + 1:]:
             bx, by, bw, bh = bounds(b)
-            if min(ax + aw, bx + bw) - max(ax, bx) > 1 and min(ay + ah, by + bh) - max(ay, by) > 1:
+            if min(ax + aw, bx + bw) > max(ax, bx) and min(ay + ah, by + bh) > max(ay, by):
                 raise DisplayError('Displays overlap; move their edges apart or choose a mirror source.')
     return result
 
@@ -205,25 +245,47 @@ class Adapter:
     def workspaces(self):
         return json.loads(self.run('-j', 'workspaces'))
 
-    def apply(self, d):
+    def apply(self, d, *, preserve_mode=False, mode=None):
         fields = ['output=' + lua_string(d['connector'])]
         if d['enabled']:
-            fields += ['mode=' + lua_string(f"{d['width']}x{d['height']}@{d['refresh']:.5f}"),
-                       'position=' + lua_string(f"{d['x']}x{d['y']}"), 'scale=' + str(d['scale']),
+            if not preserve_mode:
+                fields.append('mode=' + lua_string(mode if mode is not None else mode_value(d)))
+            fields += ['position=' + lua_string(f"{d['x']}x{d['y']}"), 'scale=' + str(d['scale']),
                        'transform=' + str(d['transform']), 'disabled=false',
                        'mirror=' + lua_string(d.get('mirror_connector') or '')]
         else:
             fields += ['disabled=true']
         self.run('eval', 'hl.monitor({' + ','.join(fields) + '})')
 
-    def verify(self, desired):
+    def reposition(self, d):
+        # hl.monitor merges a partial request into the rule of the same name
+        # and keeps its other fields. Without such a rule the omitted settings
+        # fall back to defaults, so callers send this only to an output whose
+        # own connector rule is the one Hyprland applies.
+        self.run('eval', 'hl.monitor({output=' + lua_string(d['connector']) +
+                 ',position=' + lua_string(f"{d['x']}x{d['y']}") + '})')
+
+    def verify(self, desired, *, resolve_modes=False):
         # A modeset or mirror can take a few seconds to show in the readback,
-        # on real panels and on a loaded compositor alike; only failure waits.
+        # on real panels and on a loaded compositor alike; exact matches return
+        # immediately, while automatic fallbacks get the full settling window.
+        previous, stable = {}, 0
         for _ in range(50):
             current = {d['connector']: d for d in self.displays()}
             if all(d['connector'] in current and same(d, current[d['connector']]) for d in desired):
                 return list(current.values())
+            if resolve_modes and all(d['connector'] in current and
+                    (same(d, current[d['connector']]) or automatic_readback(d, current[d['connector']])) for d in desired):
+                stable = stable + 1 if all(d['connector'] in previous and
+                    same(previous[d['connector']], current[d['connector']]) for d in desired) else 1
+            else:
+                stable = 0
+            previous = current
             time.sleep(.1)
+        # Give the estimate the usual settling interval before accepting an
+        # advertised fallback. An early read can still describe the old mode.
+        if resolve_modes and stable >= 3:
+            return list(current.values())
         fields = ('enabled', 'width', 'height', 'refresh', 'x', 'y', 'scale', 'transform', 'mirror_of', 'mirror_connector')
         detail = '; '.join(d['connector'] + ': requested ' + str({k: d.get(k) for k in fields}) +
                            ', received ' + str({k: current.get(d['connector'], {}).get(k) for k in fields})
@@ -232,7 +294,7 @@ class Adapter:
 
     def move(self, workspace, connector):
         name = str(workspace)
-        selector = name if name.isdigit() or name.startswith('name:') else 'name:' + name
+        selector = name if name.isdigit() or name.startswith(('name:', 'special:')) else 'name:' + name
         self.dispatch('workspace.move', '{workspace=' + lua_string(selector) + ',monitor=' + lua_string(connector) + '}')
 
     def dispatch(self, operation, arguments):

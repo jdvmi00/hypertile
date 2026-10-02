@@ -31,7 +31,7 @@ function retrySummary(scene) {
     : "Retry uses this scene's layout and zone assignments. It opens no apps."
 }
 
-// The content assigned to a zone from the active scene. Null means the zone holds local windows by fill order.
+// The content assigned to a zone from the active scene. Null means the zone takes any window, in fill order.
 function source(catalog, workspace, zone, active) {
   if (!active || !catalog) return null
   var sources = (catalog.current || {}).sources || []
@@ -43,12 +43,12 @@ function source(catalog, workspace, zone, active) {
   return null
 }
 
-// What the zone holds, as a name: "Local windows", "Empty", an app class,
+// What the zone holds, as a name: "Any window", "Empty", an app class,
 // or an installed app name.
 function label(source) {
-  if (!source) return "Local windows"
+  if (!source) return "Any window"
   if (source.type === "empty") return "Empty"
-  if (source.type === "local") return source.app_class || "Local windows"
+  if (source.type === "local") return source.app_class || "Any window"
   if (source.type === "app") return displayName(source.app_name || source.desktop_id)
   return "Unknown source"
 }
@@ -132,9 +132,9 @@ function sceneMeta(scene, layout, workspace) {
   if (layout) bits.push(layout)
   var active = !!(scene && scene.phase && scene.phase !== "none" && scene.phase !== "restored")
   if (!active) {
-    // A restored workspace is back to plain local fill; the restore's own
+    // A restored workspace is back to plain fill order; the restore's own
     // feedback already said so, so the header describes the state, not the past.
-    if (layout) bits.push("local windows in every zone")
+    if (layout) bits.push("windows fill the zones in order")
     return bits.join("  ·  ")
   }
   if (workspace) bits.push("workspace " + workspace)

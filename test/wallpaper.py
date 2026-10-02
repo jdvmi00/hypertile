@@ -11,6 +11,60 @@ import wallpaper
 from adapter import DisplayError
 from service import Service, atomic
 
+# Integration points from Omarchy's sized BackgroundMedia renderer. The
+# opt-in wallpaper_integration.py also loads the complete installed renderer.
+SIZED_SOURCE = '''
+  property string currentBackground: ""
+  property var nativeSizes: ({})
+    var paths = [displayedBackground, incomingBackground, oldBackground, preparedBackground]
+    target: "background"
+      screen: modelData
+      color: "transparent"
+      readonly property int decodeWidth: sized ? Math.ceil(width * screen.devicePixelRatio) : 0
+      readonly property int decodeHeight: sized ? Math.ceil(height * screen.devicePixelRatio) : 0
+      BackgroundMedia {
+        id: base
+        anchors.fill: parent
+        path: root.displayedBackground
+        constrainDecode: true
+        decodeSize: panel.decodeSize(root.displayedBackground)
+        onReadyChanged: {
+          if (ready && root.finishingTransition) {
+            root.incomingBackground = ""
+            root.oldBackground = ""
+            root.preparedBackground = ""
+            root.finishingTransition = false
+            root.pruneNativeSizes()
+          }
+        }
+      }
+      Image {
+        id: oldFrame
+        anchors.fill: parent
+        readonly property size decode: panel.decodeSize(root.oldBackground)
+        source: decode.width > 0 ? root.imageUrl(root.oldBackground) : ""
+        sourceSize.width: decode.width
+        sourceSize.height: decode.height
+        fillMode: Image.PreserveAspectCrop
+        asynchronous: true
+        cache: false
+        onStatusChanged: panel.maybeStartReveal()
+      }
+        Image {
+          id: incomingFrame
+          anchors.fill: parent
+          readonly property string framePath: root.incomingBackground || root.preparedBackground
+          readonly property size decode: panel.decodeSize(framePath)
+          source: decode.width > 0 ? root.imageUrl(framePath) : ""
+          sourceSize.width: decode.width
+          sourceSize.height: decode.height
+          fillMode: Image.PreserveAspectCrop
+          asynchronous: true
+          cache: false
+          onStatusChanged: panel.maybeStartReveal()
+        }
+'''
+
 class Tests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -82,9 +136,41 @@ class Tests(unittest.TestCase):
             self.assertEqual(generated.count('width: panel.wallpaperFrame.width'), 3)
             self.assertIn('function wallpaperState()', generated)
             self.assertEqual(wallpaper.install_renderer(), (clone.name, False))
+            # An upstream renderer upgrade replaces the component URL while
+            # retaining the custom-image helper and idempotent installation.
+            (stock / 'Background.qml').write_text(SIZED_SOURCE)
+            self.assertEqual(wallpaper.install_renderer(), (clone.name, True))
+            upgraded = json.loads((clone / 'manifest.json').read_text())
+            self.assertNotEqual(upgraded['entryPoints']['service'], manifest['entryPoints']['service'])
+            renderer = clone / upgraded['entryPoints']['service']
+            generated = renderer.read_text()
+            self.assertEqual(wallpaper.install_renderer(), (clone.name, False))
             renderer.write_text(generated + '// local edit')
             with self.assertRaisesRegex(DisplayError, 'local edits'):
                 wallpaper.install_renderer()
+
+    def test_sized_renderer_preserves_bounded_decode_and_reveal(self):
+        generated = wallpaper.render(SIZED_SOURCE)
+        for fragment in ('sourceSize.width: decode.width', 'sourceSize.height: decode.height',
+                         'asynchronous: true', '!root.isVideo(framePath)',
+                         'width: panel.wallpaperFrame.width', 'panel.customImageFailed = true'):
+            self.assertEqual(generated.count(fragment), 3, fragment)
+        self.assertEqual(generated.count('cache: false'), 2)
+        self.assertIn('root.isVideo(panel.wallpaperPath(root.displayedBackground)) ? "transparent" : "black"', generated)
+        self.assertEqual(generated.count('panel.maybeStartReveal()'), 2)
+        self.assertIn('onFinishingTransitionChanged() { base.finishTransition() }', generated)
+        self.assertIn('onWallpaperConfigChanged: requestWallpaperSizes()', generated)
+        self.assertIn('Math.ceil(wallpaperFrame.width * screen.devicePixelRatio)', generated)
+        self.assertIn('root.oldBackground ? panel.wallpaperPath(root.oldBackground) : ""', generated)
+        self.assertIn('.concat((wallpaperConfig.groups || []).map(group => group.image))', generated)
+
+    def test_unknown_sized_renderer_fails_before_activation(self):
+        for point in ('path: root.displayedBackground', 'id: incomingFrame',
+                      'sourceSize.width: decode.width\n        sourceSize.height: decode.height\n        fillMode: Image.PreserveAspectCrop',
+                      'var paths = [displayedBackground, incomingBackground, oldBackground, preparedBackground]',
+                      'Math.ceil(width * screen.devicePixelRatio)', 'onStatusChanged: panel.maybeStartReveal()'):
+            with self.subTest(point=point), self.assertRaisesRegex(DisplayError, 'updated Hypertile'):
+                wallpaper.render(SIZED_SOURCE.replace(point, '/* upstream change */', 1))
 
     def test_adapter_fails_closed_for_unknown_renderer(self):
         with self.assertRaises(DisplayError): wallpaper.render('unexpected upstream code')

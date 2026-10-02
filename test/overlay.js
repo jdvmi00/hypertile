@@ -27,7 +27,7 @@ function fixture() {
   const context = {
     root, Editor: editor, Content: (() => {const c = {}; vm.runInNewContext(fs.readFileSync("plugin/Content.js", "utf8"), c); return c})(), Qt: {callLater(fn) {later.push(fn)}},
     Quickshell: {execDetached(args) {calls.push(clone(args))}},
-    browseProc: {running: false}, currentProc: {running: false}, listProc: {running: false},
+    browseProc: {running: false}, currentProc: {running: false}, listProc: {running: false}, importProc: {running: false},
     catalogProc: {running: false}, ctlProc: {running: false}, previewProc: {running: false},
     workspacesProc: {}, windowsProc: {}, defaultProc: {},
     displaysPane: {wallpaperEditor: {dirty: false, busy: false}, requestClose() { calls.push(["wallpaper-close"]) }},
@@ -71,12 +71,69 @@ for (const changes of [{opened: false}, {dismissing: true}, {editing: true}, {co
   assert.equal(root.viewIndex, 0)
   assert.equal(context.browseTimer.running, false)
 }
-for (const changes of [{busy: true}, {pendingSwitch: {}}, {naming: true}, {renaming: true}, {choosingNew: true}, {confirmingDelete: true}]) {
+for (const changes of [{busy: true}, {transferDialogOpen: true}, {barSettingsOpen: true}, {pendingSwitch: {}}, {naming: true}, {renaming: true}, {choosingNew: true}, {confirmingDelete: true}]) {
   const {root, context} = fixture()
   Object.assign(root, changes)
   assert.equal(root.cycleFromShortcut("1", 1), "handled", "a dialog must not fall through to a compositor-only cycle")
   assert.equal(root.viewIndex, 0)
   assert.equal(context.browseTimer.running, false)
+}
+
+// Opening menu bar settings preserves any layout preview or unsaved edit.
+{
+  const {root, context} = fixture()
+  const opened = []
+  context.settingsPanel = {openAt(where) { opened.push(where) }}
+  root.liveLayout = 'lua:wide'
+  root.editing = true
+  root.dirty = true
+  root.open('{"settings":"bar"}')
+  assert.deepEqual(opened, ['bar'], 'the bar widget opens settings on the menu bar position')
+  root.showSettings()
+  assert.deepEqual(opened, ['bar', ''], 'the gear opens settings at the top')
+  assert.equal(root.committedLayout, 'lua:quad')
+  assert.equal(root.liveLayout, 'lua:wide')
+  assert.equal(root.editing, true)
+  assert.equal(root.dirty, true)
+}
+
+// File transfers are serialized with other actions, and imports are selected
+// without applying them or replacing the workspace's committed layout.
+{
+  const {root, context} = fixture()
+  context.importProc = {running: false}
+  assert.equal(root.importLayout('/tmp/shared layout.json'), true)
+  assert.deepEqual(clone(context.importProc.command), ['ctl', 'import', '/tmp/shared layout.json', '--json'])
+  assert.equal(root.busy, true)
+  assert.equal(root.importLayout('/tmp/another.json'), false)
+  let refreshed = 0
+  root.refresh = () => refreshed++
+  root.finishImport('{"name":"quad-2","path":"/layouts/quad-2.lua"}', 0, 0)
+  assert.equal(root.busy, false)
+  assert.equal(root.pendingView, 'quad-2')
+  assert.equal(root.statusText, 'Imported quad-2')
+  assert.equal(refreshed, 1)
+  assert.equal(root.committedLayout, 'lua:quad')
+  assert.equal(context.browseProc.running, false)
+  root.pendingView = ''
+  root.errorText = 'Invalid JSON'
+  root.finishImport('', 1, 0)
+  assert.equal(root.pendingView, '')
+  assert.equal(root.errorText, 'Invalid JSON')
+  assert.equal(refreshed, 1)
+  root.errorText = 'Reload failed'
+  root.finishImport('{"name":"quad-3"}', 1, 0)
+  assert.match(root.errorText, /Imported quad-3.*could not reload/)
+  assert.equal(refreshed, 2)
+  assert.equal(root.exportLayout('quad', '/tmp/export.json', false), true)
+  assert.deepEqual(clone(context.ctlProc.command), ['ctl', 'export', 'quad', '/tmp/export.json'])
+  root.busy = false
+  assert.equal(root.exportLayout('quad', '/tmp/export.json', true), true)
+  assert.deepEqual(clone(context.ctlProc.command), ['ctl', 'export', 'quad', '/tmp/export.json', '--force'])
+  root.busy = false
+  root.editing = true
+  assert.equal(root.importLayout('/tmp/shared.json'), false)
+  assert.equal(root.exportLayout('quad', '/tmp/export.json'), false)
 }
 
 // A copied layout cannot use its source's name; an edit of the original can.
@@ -410,3 +467,56 @@ for (const managedContent of [false, true]) {
   root.setDefault()
   assert.deepEqual(clone(context.ctlProc.command), ["ctl", "default", "dwindle"])
 }
+
+// The layout's ⋯ menu is a transient prompt: Esc closes it before anything
+// else, New and Delete replace it, and browsing to another layout closes it.
+{
+  const {root, context, calls} = fixture()
+  let next = 1
+  for (const m of qml.matchAll(/Qt\.(Key_\w+|\w+Modifier)/g)) if (!(m[1] in context.Qt)) context.Qt[m[1]] = next++
+  const key = (name, text) => ({key: context.Qt[name], modifiers: 0, text: text || '', isAutoRepeat: false})
+  root.showingMore = true
+  root.handleKey(key('Key_Escape'))
+  assert.equal(root.showingMore, false, 'Esc closes the menu')
+  assert.deepEqual(calls, [], 'Esc on an open menu does not close the overlay')
+  root.showingMore = true
+  root.handleKey(key('Key_N', 'n'))
+  assert.equal(root.showingMore, false); assert.equal(root.choosingNew, true, 'n swaps the menu for the New prompt')
+  root.handleKey(key('Key_Escape'))
+  assert.equal(root.choosingNew, false)
+  root.showingMore = true
+  root.handleKey(key('Key_D', 'd'))
+  assert.equal(root.showingMore, false); assert.equal(root.confirmingDelete, true, 'd swaps the menu for the delete prompt')
+  root.confirmingDelete = false
+  root.showingMore = true
+  root.viewAt(1)
+  assert.equal(root.showingMore, false, 'browsing to another layout closes the menu')
+  root.showingMore = true
+  root.startEdit(true, false)
+  assert.equal(root.showingMore, false, 'Duplicate starts a copy and closes the menu')
+}
+
+// Holds: windows, one window, nothing; one edit and one undo step each, and
+// the last zone that takes windows cannot hold nothing.
+{
+  const {root, context} = fixture()
+  context.schedulePreview = () => {}
+  Object.assign(root, {editing: true, undoStack: [], selected: 'a', draft: {columns: [{name: 'a'}, {name: 'b'}], fill: ['a', 'b']}})
+  root.zoneHolds('one')
+  assert.equal(root.draft.columns[0].never_split, true)
+  assert.equal(root.undoStack.length, 1)
+  root.zoneHolds('one')
+  assert.equal(root.undoStack.length, 1, 'choosing the current option is not an edit')
+  root.zoneHolds('nothing')
+  assert.equal(root.draft.columns[0].spacer, true)
+  assert.equal(root.draft.columns[0].never_split, undefined)
+  assert.equal(root.undoStack.length, 2)
+  root.selected = 'b'
+  root.zoneHolds('nothing')
+  assert.equal(root.draft.columns[1].spacer, undefined)
+  assert.match(root.statusText, /At least one zone/)
+  assert.equal(root.undoStack.length, 2)
+  root.undo()
+  assert.equal(root.draft.columns[0].never_split, true, 'undo steps back one holds change')
+}
+console.log("layout menu and zone holds: all checks passed")

@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix='ht-drag-') as directory:
     for src in ROOT.glob('hypertile*.lua'):
         shutil.copy(src, config / src.name)
     entry = config / 'hyprland.lua'
-    entry.write_text('package.path = os.getenv("XDG_CONFIG_HOME") .. "/?.lua;" .. package.path\nhl.config({general={layout="lua:dragtest"}, animations={enabled=false}, xwayland={enabled=false}})\nhl.monitor({output="", mode="1280x720@60", position="auto", scale=1})\nhl.device({name="hl-virtual-keyboard-wtype", keybinds=true, resolve_binds_by_sym=true})\nlocal e = require("hypr.hypertile")\ne.layout("dragtest", {columns={{name="a"},{name="b"}}, empty="collapse",single="collapse"})\no = {bind=function(keys, desc, callback, options)\n if keys == "SUPER + mouse:272" then keys = "F12"\n elseif keys == "mouse:272" then keys = "F12" end\n hl.bind(keys, callback, options)\nend}\nhl.exec_cmd = function() end -- No shell or notifications in the isolated test.\nrequire("hypr.hypertile-navigation").bind()\n')
+    entry.write_text('package.path = os.getenv("XDG_CONFIG_HOME") .. "/?.lua;" .. package.path\nhl.config({general={layout="lua:dragtest"}, animations={enabled=false}, xwayland={enabled=false}})\nhl.monitor({output="", mode="1280x720@60", position="240x-1080", scale=1})\nhl.device({name="hl-virtual-keyboard-wtype", keybinds=true, resolve_binds_by_sym=true})\nlocal e = require("hypr.hypertile")\ne.layout("dragtest", {columns={{name="a"},{name="b"}}, empty="collapse",single="collapse"})\no = {bind=function(keys, desc, callback, options)\n if keys == "SUPER + mouse:272" then keys = "F12"\n elseif keys == "mouse:272" then keys = "F12" end\n hl.bind(keys, callback, options)\nend}\nhl.exec_cmd = function() end -- No shell or notifications in the isolated test.\nrequire("hypr.hypertile-navigation").bind()\n')
     parent = pathlib.Path(os.environ['WAYLAND_DISPLAY'])
     if not parent.is_absolute():
         parent = pathlib.Path(os.environ['XDG_RUNTIME_DIR']) / parent
@@ -48,6 +48,8 @@ with tempfile.TemporaryDirectory(prefix='ht-drag-') as directory:
             def clients():
                 return json.loads(ctl('clients', '-j'))
             assert not ctl('configerrors'), ctl('configerrors')
+            monitor = json.loads(ctl('monitors', '-j'))[0]
+            assert (monitor['x'], monitor['y']) == (240, -1080), monitor
             for name in ['drag-a', 'drag-b']:
                 children.append(subprocess.Popen(['foot', '--app-id', name, 'sh', '-c', 'sleep 120'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
             for _ in range(80):
@@ -82,6 +84,41 @@ with tempfile.TemporaryDirectory(prefix='ht-drag-') as directory:
             assert after[a['address']]['at'] == b['at'] and after[b['address']]['at'] == a['at'], 'release did not swap'
             assert not json.loads((runtime / 'hypertile-tile-drag.json').read_text())['active']
             print('PASS installed-compositor drag, neighbor stability, highlight, release swap', flush=True)
+
+            # With one window there is no remaining target during native drag.
+            # Dropping into an empty slot must still restore and commit it.
+            children[1].terminate()
+            children[1].wait(timeout=5)
+            for _ in range(80):
+                if len(clients()) == 1:
+                    break
+                time.sleep(0.1)
+            single = clients()[0]
+            ctl('eval', 'local f=assert(io.open(os.getenv("XDG_RUNTIME_DIR").."/request.json","w")); f:write(require("hypr.hypertile-json").encode(require("hypr.hypertile-navigation").capture())); f:close()')
+            request = json.loads((runtime / 'request.json').read_text())
+            destination = next(s for s in request['slots'] if s['zone'] != request['source'])
+            assert not destination['occupied'], destination
+            x, y = single['at']
+            sx, sy = single['size']
+            ctl('eval', f'hl.dispatch(hl.dsp.cursor.move({{x={x + sx // 2}, y={y + sy // 2}}}))')
+            key = subprocess.Popen(['wtype', '-P', 'F12', '-s', '2500', '-p', 'F12'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            children.append(key)
+            time.sleep(0.4)
+            assert clients()[0]['floating'], 'single-window drag did not start'
+            x = monitor['x'] + destination['x'] + destination['w'] / 2
+            y = monitor['y'] + destination['y'] + destination['h'] / 2
+            ctl('eval', f'hl.dispatch(hl.dsp.cursor.move({{x={x}, y={y}}}))')
+            time.sleep(0.3)
+            drag = json.loads((runtime / 'hypertile-tile-drag.json').read_text())
+            assert drag['active'] and drag['zone'] == destination['zone'], drag
+            key.communicate(timeout=5)
+            time.sleep(0.4)
+            single = clients()[0]
+            assert not single['floating'], 'single-window release left window floating'
+            assert abs(single['at'][0] - (monitor['x'] + destination['x'])) < 30, single
+            assert single['size'][0] < sx, 'empty-slot drop did not reveal configured slots'
+            assert not json.loads((runtime / 'hypertile-tile-drag.json').read_text())['active']
+            print('PASS single-window empty-slot drop on offset display', flush=True)
         finally:
             for child in children:
                 if child.poll() is None:

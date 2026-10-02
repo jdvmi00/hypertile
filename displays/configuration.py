@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 
 from adapter import DisplayError, lua_string
+from modes import AUTOMATIC, value as mode_value
 
 
 def tokens(source):
@@ -100,9 +101,17 @@ def declarations(source):
         selector = selector[1:-1]
         if selector in rules:
             raise DisplayError('Multiple monitor declarations for ' + (selector or 'the fallback'))
-        rules[selector] = dict(fields=fields, close=ts[j][1], last=values[j - 1])
+        end = j + 2
+        if values[end:end + 1] == [';']:
+            end += 1
+        rules[selector] = dict(fields=fields, close=ts[j][1], last=values[j - 1], span=(ts[i][1], ts[end - 1][2]))
         i = j + 2
     return rules
+
+
+def declares_monitors(source):
+    values = [t[0] for t in tokens(source)]
+    return any(values[i:i + 3] == ['hl', '.', 'monitor'] for i in range(len(values)))
 
 
 def rule_for(rules, display):
@@ -116,6 +125,35 @@ def rule_for(rules, display):
         if selector == display['connector'] or (selector.startswith('desc:') and description.startswith(selector[5:].strip())):
             chosen = selector
     return chosen
+
+
+def normalize_placement_source(source):
+    """Canonicalize string quotes, including journals written by older versions."""
+    if source is None:
+        return None
+    result = {}
+    for path, rules in source.items():
+        result[path] = []
+        for selector, fields in rules:
+            normalized = {}
+            for key, values in fields.items():
+                if (key in ('position', 'mirror') and len(values) == 1
+                        and re.fullmatch(r"([\"'])[^\"'\\]*\1", values[0])):
+                    values = [lua_string(values[0][1:-1])]
+                normalized[key] = values
+            result[path].append([selector, normalized])
+    return result
+
+
+def declared_position(source, display):
+    """What each file of a placement_source() says about this output's position."""
+    result = {}
+    for path, declared in source.items():
+        rules = dict(declared)
+        rule = rules.get(rule_for(rules, display) or '')
+        if rule and 'position' in rule:
+            result[path] = rule['position']
+    return result
 
 
 def replace(path, content):
@@ -167,66 +205,215 @@ class Configuration:
         visit(self.root / 'hyprland.lua')
         return seen
 
+    def uses_connector_rule(self, display, *, source=None):
+        """Only an unopposed connector rule can supply a partial update's fields.
+
+        Imports can occur between declarations. If another module also names
+        this output, leave it to that owner rather than guessing rule order.
+        A placement snapshot can supply the already parsed selectors.
+        """
+        try:
+            if source is None:
+                source = {path: declarations(body) for path, body in self.sources().items()
+                          if declares_monitors(body)}
+            if rule_for(dict(source.get(str(self.path), {})), display) != display['connector']:
+                return False
+            return not any(rule_for(dict(rules), display) is not None
+                           for path, rules in source.items() if path != str(self.path))
+        except (OSError, DisplayError):
+            return False
+
+    def mode_values(self, displays):
+        """Read literal modes without evaluating user Lua or changing its source."""
+        try:
+            source = self.path.read_text()
+            rules = declarations(source)
+        except (OSError, DisplayError):
+            return {}
+        modes = {}
+        for display in displays:
+            rule = rules.get(rule_for(rules, display) or '')
+            span = rule['fields'].get('mode') if rule else None
+            mode = source[span[0]:span[1]] if span else '"preferred"'
+            literal = re.fullmatch(r"([\"'])([^\"'\\]*)\1", mode)
+            modes[display['connector']] = literal[2] if literal else None
+        return modes
+
+    def mode_policies(self, displays):
+        return {name: value if value in AUTOMATIC else 'fixed'
+                for name, value in self.mode_values(displays).items() if value is not None}
+
+    def placement_source(self):
+        """Placement declarations only; mode/scale edits retain adjoining edges.
+
+        Ignore comments and formatting. A manual position/topology edit, a
+        changed selector or a changed import invalidates saved relationships.
+        Unsupported/generated declarations are left to their owner.
+        """
+        sources = self.sources()
+        if str(self.path) not in sources:
+            raise DisplayError('The monitor configuration is not loaded.')
+        result = {}
+        for path, source in sources.items():
+            if not declares_monitors(source):
+                continue
+            rules = declarations(source)
+            if rules:
+                for rule in rules.values():
+                    for key in ('position', 'disabled', 'mirror'):
+                        if key not in rule['fields']:
+                            continue
+                        a, b = rule['fields'][key]
+                        value = source[a:b]
+                        literal = value in ('true', 'false') if key == 'disabled' else re.fullmatch(r"([\"'])[^\"'\\]*\1", value)
+                        if not literal:
+                            raise DisplayError('Computed placement is controlled by the monitor configuration.')
+                result[path] = [[selector, {key: [t[0] for t in tokens(source[a:b])]
+                                           for key, (a, b) in rule['fields'].items()
+                                           if key in ('position', 'disabled', 'mirror')}]
+                                for selector, rule in rules.items()]
+        return normalize_placement_source(result)
+
+    def positions(self, displays):
+        """Literal coordinates declared for each output, by connector.
+
+        Recognizes saved coordinates restored by a config reload and permits
+        adoption of pre-placement-journal confirmed settings. None marks an
+        automatic/computed declaration; never guess what it resolves to.
+        """
+        source = self.path.read_text()
+        rules = declarations(source)
+        result = {}
+        for display in displays:
+            rule = rules.get(rule_for(rules, display) or '')
+            span = rule['fields'].get('position') if rule else None
+            literal = re.fullmatch(r"([\"'])(-?\d+)x(-?\d+)\1", source[span[0]:span[1]]) if span else None
+            result[display['connector']] = (int(literal[2]), int(literal[3])) if literal else None
+        return result
+
     def plan(self, before, document):
         baseline = {d['connector']: d for d in before}
+        removed = [d for d in before if d['id'] in document.get('removed_displays', [])]
         changes = []
         for d in document['displays']:
             old = baseline.get(d['connector'], {})
             groups = {'mode': ('width', 'height', 'refresh'), 'position': ('x', 'y'),
                       'scale': ('scale',), 'transform': ('transform',), 'disabled': ('enabled',)}
-            values = dict(mode=lua_string(f"{d['width']}x{d['height']}@{d['refresh']:.5f}"),
+            values = dict(mode=lua_string(mode_value(d)),
                           position=lua_string(f"{d['x']}x{d['y']}"), scale=str(d['scale']),
                           transform=str(d['transform']), disabled='false' if d['enabled'] else 'true')
             fields = {key: values[key] for key, names in groups.items()
                       if any(abs(float(d[n]) - float(old[n])) > (0.01 if n == 'refresh' else .0001 if n == 'scale' else 0)
                              if n in old else True for n in names)}
+            if d.get('mode_policy', 'fixed') in AUTOMATIC:
+                # Automatic geometry is readback, never a fixed-mode request.
+                fields.pop('mode', None)
+            if d.get('mode_policy', 'fixed') != old.get('mode_policy', 'fixed'):
+                fields['mode'] = values['mode']
             target = d.get('mirror_of')
             source = next((m for m in document['displays'] if m['id'] == target), None)
             mirror = source['connector'] if source else ''
             old_mirror = old.get('mirror_connector') or ''
+            if old_mirror and not mirror and d['enabled']:
+                # Mirror readback reports the source's desktop position. The
+                # declaration can still hold a different Extended position.
+                # Pin the new source's anchor even if its readback did not move.
+                fields['position'] = values['position']
             if mirror != old_mirror or ('disabled' in fields and ('mirror_of' in d or old.get('mirror_of'))):
                 fields['mirror'] = lua_string(mirror)
             if fields:
                 changes.append((d, fields))
-        if not changes:
+        if not changes and not removed:
             return None
         sources = self.sources()
         if str(self.path) not in sources:
             raise DisplayError(f'{self.path} must be loaded with require("hypr.monitors") before display settings can be saved')
         for path, source in sources.items():
-            if path != str(self.path):
-                vs = [t[0] for t in tokens(source)]
-                if any(vs[i:i + 3] == ['hl', '.', 'monitor'] for i in range(len(vs))):
-                    raise DisplayError(f'Display rules in {path} also control monitors. Move those rules to {self.path} to edit them here.')
+            if path != str(self.path) and declares_monitors(source):
+                raise DisplayError(f'Display rules in {path} also control monitors. Move those rules to {self.path} to edit them here.')
         source = sources[str(self.path)]
         try:
             rules = declarations(source)
         except DisplayError as error:
             raise DisplayError(f'{self.path}: {error}') from error
-        # Preview uses explicit coordinates. A geometry/topology change can move
-        # another automatically placed output even when its draft did not move.
-        # Pin those dependencies, leaving explicit positions and the fallback
-        # rule (including preferred modes and shared expressions) untouched.
-        arrangement_changed = any(
-            any(key in fields for key in ('position', 'scale', 'transform', 'disabled', 'mirror'))
-            or any(d[n] != baseline.get(d['connector'], {}).get(n) for n in ('width', 'height'))
-            for d, fields in changes)
-        if arrangement_changed:
+        if removed:
+            removed_connectors = {d['connector'] for d in removed}
             changed = {d['connector']: fields for d, fields in changes}
             for d in document['displays']:
-                if not d['enabled'] or d.get('mirror_of') or not d.get('connected', True):
+                old = baseline.get(d['connector'], {})
+                if (not old.get('connected') or not d['enabled']
+                        or 'mirror_of' not in d or d['mirror_of'] is not None):
                     continue
-                rule = rules.get(rule_for(rules, d) or '')
-                span = rule['fields'].get('position') if rule else None
-                position = source[span[0]:span[1]] if span else ''
-                if re.fullmatch(r"([\"'])-?\d+x-?\d+\1", position):
+                # An absent source can make Hyprland report an independent
+                # output while its saved rule still requests mirroring. Clear
+                # that stale dependency only in an explicit connector rule;
+                # shared, computed and unknown rules still block removal.
+                if rule_for(rules, d) != d['connector']:
+                    continue
+                span = rules[d['connector']]['fields'].get('mirror')
+                literal = re.fullmatch(r"([\"'])([^\"'\\]*)\1", source[span[0]:span[1]]) if span else None
+                if not literal or literal[2] not in removed_connectors:
                     continue
                 if d['connector'] not in changed:
                     changed[d['connector']] = {}
                     changes.append((d, changed[d['connector']]))
+                changed[d['connector']]['mirror'] = lua_string('')
                 changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
+        # Preview uses explicit coordinates. A geometry/topology change can move
+        # another automatically placed output even when its draft did not move.
+        # Pin those dependencies to match the preview. The confirmed placement
+        # reference retains adjoining edges across subsequent size changes.
+        # Leave the fallback (including modes and shared expressions) untouched.
+        arrangement_changed = any(
+            any(key in fields for key in ('position', 'scale', 'transform', 'disabled', 'mirror'))
+            or any(d[n] != baseline.get(d['connector'], {}).get(n) for n in ('width', 'height'))
+            for d, fields in changes)
+        changed = {d['connector']: fields for d, fields in changes}
+        for d in document['displays']:
+            if not d['enabled'] or d.get('mirror_of') or not d.get('connected', True):
+                continue
+            selector = rule_for(rules, d)
+            rule = rules.get(selector or '')
+            span = rule['fields'].get('position') if rule else None
+            literal = re.fullmatch(r"([\"'])(-?\d+)x(-?\d+)\1", source[span[0]:span[1]]) if span else None
+            if literal:
+                # Edge adjustment and runtime moves leave the declaration
+                # behind the live position. The reload after this save would
+                # otherwise snap the output back and fail its verification.
+                if (int(literal[2]), int(literal[3])) == (d['x'], d['y']) or (selector != d['connector'] and d.get('ambiguous')):
+                    continue
+            elif not arrangement_changed:
+                continue
+            if d['connector'] not in changed:
+                changed[d['connector']] = {}
+                changes.append((d, changed[d['connector']]))
+            changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
         edits = []
         additions = []
+        removed_selectors = set()
+        for d in removed:
+            for selector, rule in rules.items():
+                description_match = selector.startswith('desc:') and d.get('description', '').startswith(selector[5:].strip())
+                if selector != d['connector'] and not description_match:
+                    continue
+                # Prefixes may control other (including absent/future) screens.
+                # Even a full description can be shared by identical displays.
+                if description_match and (selector[5:].strip() != d.get('description') or d.get('ambiguous')
+                        or any(other['id'] != d['id'] and other.get('description', '').startswith(selector[5:].strip()) for other in before)):
+                    raise DisplayError(f'{self.path}: shared description rule {selector} prevents safe removal of {d["connector"]}. Use connector-specific rules first.')
+                a, b = rule['span']
+                edits.append((a, b, ''))
+                removed_selectors.add(selector)
+        if removed:
+            mirror_updates = {rule_for(rules, d): fields['mirror'] for d, fields in changes if 'mirror' in fields}
+            for selector, rule in rules.items():
+                if selector in removed_selectors or 'mirror' not in rule['fields']:
+                    continue
+                a, b = rule['fields']['mirror']
+                value = mirror_updates.get(selector, source[a:b])
+                literal = re.fullmatch(r"([\"'])([^\"'\\]*)\1", value)
+                if not literal or any(literal[2] == d['connector'] for d in removed):
+                    raise DisplayError(f'{self.path}: mirror rule for {selector or "the fallback"} must be cleared or assigned another source before removing a display.')
         for d, fields in changes:
             connector = d['connector']
             selector = rule_for(rules, d)
@@ -258,6 +445,8 @@ class Configuration:
             updated = updated[:a] + value + updated[b:]
         if additions:
             updated = updated.rstrip() + '\n\n-- Display settings saved by Hypertile.\n' + '\n'.join(additions) + '\n'
+        if updated == source:
+            return None
         check = subprocess.run(['lua', '-e', 'local s=io.read("*a"); local f,e=load(s); if not f then io.stderr:write(e); os.exit(1) end'],
                                input=updated, text=True, capture_output=True, timeout=5)
         if check.returncode:

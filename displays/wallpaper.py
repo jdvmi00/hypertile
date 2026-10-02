@@ -75,8 +75,11 @@ PANEL = '''
         Quickshell.screens.map(s => ({name: s.name, x: s.x, y: s.y, width: s.width, height: s.height})))
       property bool customImageFailed: false
       onWallpaperGroupChanged: customImageFailed = false
+      function wallpaperPath(themeImage) {
+        return wallpaperGroup.image && !customImageFailed ? wallpaperGroup.image : themeImage
+      }
       function wallpaperSource(themeImage) {
-        return root.imageUrl(wallpaperGroup.image && !customImageFailed ? wallpaperGroup.image : themeImage)
+        return root.imageUrl(wallpaperPath(themeImage))
       }
       contentItem.clip: true
 '''
@@ -90,9 +93,26 @@ def replace_once(source, old, new):
 
 def render(source):
     """Fail before activation if an Omarchy upgrade changes any integration point."""
+    modern = 'BackgroundMedia {\n        id: base' in source
     source = 'import "Wallpaper.js" as Wallpaper\n' + source
     source = replace_once(source, '  property string currentBackground:', INJECTION + '\n  property string currentBackground:')
     source = replace_once(source, '      screen: modelData', PANEL + '\n      screen: modelData')
+    if modern:
+        source = render_sized(source)
+    else:
+        source = render_legacy(source)
+    # Letterbox still images in black, but leave OWE's video layer visible.
+    color = 'root.isVideo(panel.wallpaperPath(root.displayedBackground)) ? "transparent" : "black"' if modern else '"black"'
+    source = replace_once(source, '      color: "transparent"', '      color: ' + color)
+    source = replace_once(source, '    target: "background"', '\n'.join([
+        '    target: "background"',
+        '    function wallpaperState(): string {',
+        '      return JSON.stringify({settings: root.wallpaperConfig, screens: Quickshell.screens.map(s => ({name: s.name, group: Wallpaper.groupFor(root.wallpaperConfig, s.name), frame: Wallpaper.frame(root.wallpaperConfig, s.name, Quickshell.screens.map(m => ({name: m.name, x: m.x, y: m.y, width: m.width, height: m.height})))}))})',
+        '    }']))
+    return source
+
+
+def render_legacy(source):
     for name, image in [('base', 'displayedBackground'), ('oldFrame', 'oldBackground'), ('incomingFrame', 'incomingBackground')]:
         import re
         pattern = r'(id: ' + name + r'\s+)anchors.fill: parent\s+source: root.imageUrl\(root.' + image + r'\)\s+fillMode: Image.PreserveAspectCrop'
@@ -106,12 +126,86 @@ def render(source):
     # A deleted/broken custom image falls back to the theme instead of a blank screen.
     source = replace_once(source, 'if (status === Image.Ready && root.finishingTransition)',
         'if (status === Image.Error && panel.wallpaperGroup.image) panel.customImageFailed = true\n          if (status === Image.Ready && root.finishingTransition)')
-    source = replace_once(source, '      color: "transparent"', '      color: "black"')
-    source = replace_once(source, '    target: "background"', '\n'.join([
-        '    target: "background"',
-        '    function wallpaperState(): string {',
-        '      return JSON.stringify({settings: root.wallpaperConfig, screens: Quickshell.screens.map(s => ({name: s.name, group: Wallpaper.groupFor(root.wallpaperConfig, s.name), frame: Wallpaper.frame(root.wallpaperConfig, s.name, Quickshell.screens.map(m => ({name: m.name, x: m.x, y: m.y, width: m.width, height: m.height})))}))})',
-        '    }']))
+    return source
+
+
+def render_sized(source):
+    """Keep native-size gating, asynchronous decoding and the prepared reveal.
+
+    BackgroundMedia exposes neither image fit nor load errors. Its still-image
+    base is expressed as an Image here so all three frames share those controls.
+    Video remains owned by OWE and is never passed to the image decoder.
+    """
+    geometry = '''x: panel.wallpaperFrame.x
+        y: panel.wallpaperFrame.y
+        width: panel.wallpaperFrame.width
+        height: panel.wallpaperFrame.height'''
+    source = replace_once(source, '''BackgroundMedia {
+        id: base
+        anchors.fill: parent
+        path: root.displayedBackground
+        constrainDecode: true
+        decodeSize: panel.decodeSize(root.displayedBackground)
+        onReadyChanged: {
+          if (ready && root.finishingTransition)''', '''Image {
+        id: base
+        ''' + geometry + '''
+        readonly property string framePath: panel.wallpaperPath(root.displayedBackground)
+        readonly property size decode: panel.decodeSize(framePath)
+        source: decode.width > 0 && !root.isVideo(framePath) ? root.imageUrl(framePath) : ""
+        sourceSize.width: decode.width
+        sourceSize.height: decode.height
+        fillMode: panel.wallpaperGroup.fit === "fit" ? Image.PreserveAspectFit : Image.PreserveAspectCrop
+        asynchronous: true
+        onStatusChanged: {
+          if (status === Image.Error && panel.wallpaperGroup.image) panel.customImageFailed = true
+          finishTransition()
+        }
+        // A fixed custom image stays Ready through a theme change; there is
+        // no new status signal when the reveal finishes in that case.
+        Connections {
+          target: root
+          function onFinishingTransitionChanged() { base.finishTransition() }
+        }
+        function finishTransition() {
+          if (status === Image.Ready && root.finishingTransition)''')
+    source = replace_once(source, '''id: oldFrame
+        anchors.fill: parent
+        readonly property size decode: panel.decodeSize(root.oldBackground)
+        source: decode.width > 0 ? root.imageUrl(root.oldBackground) : ""''', '''id: oldFrame
+        ''' + geometry + '''
+        readonly property string framePath: root.oldBackground ? panel.wallpaperPath(root.oldBackground) : ""
+        readonly property size decode: panel.decodeSize(framePath)
+        source: decode.width > 0 && !root.isVideo(framePath) ? root.imageUrl(framePath) : ""''')
+    source = replace_once(source, '''id: incomingFrame
+          anchors.fill: parent''', '''id: incomingFrame
+          ''' + geometry.replace('\n        ', '\n          '))
+    source = replace_once(source, 'readonly property string framePath: root.incomingBackground || root.preparedBackground',
+                          'readonly property string framePath: root.incomingBackground || root.preparedBackground ? panel.wallpaperPath(root.incomingBackground || root.preparedBackground) : ""')
+    source = replace_once(source, 'source: decode.width > 0 ? root.imageUrl(framePath) : ""',
+                          'source: decode.width > 0 && !root.isVideo(framePath) ? root.imageUrl(framePath) : ""')
+    # The other two frame declarations must still be the known sized renderer.
+    if source.count('fillMode: Image.PreserveAspectCrop') != 2 or source.count('onStatusChanged: panel.maybeStartReveal()') != 2:
+        raise DisplayError('This Omarchy background renderer needs an updated Hypertile frame adapter.')
+    source = source.replace('fillMode: Image.PreserveAspectCrop',
+                            'fillMode: panel.wallpaperGroup.fit === "fit" ? Image.PreserveAspectFit : Image.PreserveAspectCrop')
+    source = source.replace('onStatusChanged: panel.maybeStartReveal()', '''onStatusChanged: {
+            if (status === Image.Error && panel.wallpaperGroup.image) panel.customImageFailed = true
+            panel.maybeStartReveal()
+          }''')
+    # A spanning wallpaper needs the whole group's decode extent, while the
+    # native-size cap prevents upscaling small source images in memory.
+    source = replace_once(source, 'Math.ceil(width * screen.devicePixelRatio)', 'Math.ceil(wallpaperFrame.width * screen.devicePixelRatio)')
+    source = replace_once(source, 'Math.ceil(height * screen.devicePixelRatio)', 'Math.ceil(wallpaperFrame.height * screen.devicePixelRatio)')
+    source = replace_once(source, '  property var nativeSizes: ({})', '''  property var nativeSizes: ({})
+  onWallpaperConfigChanged: requestWallpaperSizes()
+  function requestWallpaperSizes() {
+    for (var group of (wallpaperConfig.groups || [])) {
+      if (group.image) requestNativeSize(group.image)
+    }
+  }''')
+    source = replace_once(source, 'var paths = [displayedBackground, incomingBackground, oldBackground, preparedBackground]',
+                          'var paths = [displayedBackground, incomingBackground, oldBackground, preparedBackground].concat((wallpaperConfig.groups || []).map(group => group.image))')
     return source
 
 

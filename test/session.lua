@@ -93,11 +93,21 @@ assert(rules[1].workspace == "1" and rules[1].layout == "lua:test" and rules[3].
 -- snapshot prunes cached orders for workspaces that no longer exist.
 engine.live.test.orders["1"] = { "a", "b", "c", "d" }
 engine.live.test.boxes = {["7"] = {}}
+engine.live.test.box_inputs = {["7"] = {}, ["1"] = {}}
 engine.live.test.state.navigation_keep["7"] = true
+engine.live.test.state.pins = { a = "main", gone = "main" }
+engine.live.test.state.exclusive_pins = { a = true, gone = true, orphan = true }
+engine.live.old.state.pins = { a = "elsewhere", gone = "elsewhere" }
 local snap = session.snapshot()
 assert(engine.live.test.orders["7"] == nil and engine.live.test.orders["1"], "stale workspace order pruned")
 assert(#snap.workspaces == 1 and table.concat(snap.workspaces[1].order, ",") == "a,b,c,d", "snapshot order follows the engine cache")
 assert(snap.workspaces[1].navigation_keep, "snapshot preserves explicit slot geometry")
 assert(not engine.live.test.boxes["7"] and not engine.live.test.state.navigation_keep["7"], "stale navigation state pruned")
+assert(not engine.live.test.box_inputs["7"] and engine.live.test.box_inputs["1"], "navigation cache inputs follow workspace lifetime")
+assert(engine.live.test.state.pins.a == "main" and not engine.live.test.state.pins.gone, "closed window pins are pruned")
+assert(engine.live.test.state.exclusive_pins.a and not engine.live.test.state.exclusive_pins.gone
+  and not engine.live.test.state.exclusive_pins.orphan, "closed exclusive pins are pruned")
+assert(engine.live.old.state.pins.a == "elsewhere" and not engine.live.old.state.pins.gone,
+  "pins on inactive layouts retain live windows and release closed windows")
 
 print("session adapter: all checks passed")

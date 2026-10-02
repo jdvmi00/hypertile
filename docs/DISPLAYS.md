@@ -1,16 +1,20 @@
 # Displays and workspace placement
 
-Open Hypertile and choose **Displays**. The diagram uses logical desktop
+Open Hypertile and choose **Displays**; the pane opens from the rail's corner,
+with its tabs where the rail's were. The diagram uses logical desktop
 coordinates: resolution, rotation, and scale all affect a screen's size. Drag a
-screen to align its edges, or enter its X and Y position. Changing a screen's
+screen to align its edges, or open **Position** to enter its X and Y. Changing a screen's
 scale, rotation, or resolution moves the screens attached to its right and
-bottom edges by the same amount, so they stay attached instead of overlapping.
+bottom edges by the same amount. In a staggered arrangement, remaining
+collisions move to the nearest free edge while the edited screen stays in place.
+Returning a disabled or mirrored screen to Extended keeps its previous position
+when free, or finds free space if another display now occupies that position.
 
 ![Displays arrangement and settings](screenshots/displays.png)
 
 Screens are numbered by
 position, left to right and then top to bottom, so the number on a screen says
-where it stands; a mirror counts right after its source, and disconnected or
+where it stands; members of a mirror group keep their relative numbers, and disconnected or
 disabled displays come last. Tab to a diagram screen and use arrows to move one
 logical pixel, or Shift+arrows for ten. **Identify displays** labels every
 screen with its number for a few seconds, with the selected screen highlighted;
@@ -18,12 +22,65 @@ screen with its number for a few seconds, with the selected screen highlighted;
 a connector. Closing with unsaved changes asks before discarding them; nothing is
 applied until you preview.
 
-Select a screen to change resolution and refresh rate, scale, rotation, or its
-enabled state. The mode picker lists the modes reported by Hyprland. Saved
-screens that are disconnected remain visible, with their preferences retained.
+Select a screen to change it. The inspector leads with the display's name (make
+and model, with its number and connector under it) and **Sleep**, then **Use
+as**, resolution and refresh rate, scale, and rotation; **Position** and
+**Workspaces** are collapsed below. Longer explanations are in the buttons'
+tooltips. The mode picker lists the modes reported by Hyprland and
+**Automatic (highest resolution)**. Automatic lets Hyprland select from the
+display's current modes, including after docking or changing picture-by-picture
+inputs. Existing automatic choices, such as the display's preferred mode,
+remain available. Choose a specific resolution and refresh rate to keep a
+fixed mode or refresh-rate cap. Moving, scaling, or rotating a screen preserves
+its mode choice; saving an automatic mode never pins its current pixel size.
+The automatic mode's displayed size is an estimate. Preview checks the mode and
+scale Hyprland actually selects, including a supported fallback, and reverts if
+the resulting arrangement overlaps. Keep saves the automatic choice and the
+resolved preview. If the mode changes again before Keep, start a fresh preview.
+
+Displays whose edges touch keep that relationship when their logical size
+changes outside the editor, including full-width/PBP input switches. Top,
+bottom and center alignment are retained; a staggered edge keeps its offset.
+The display service waits for the outputs to settle before moving them. It
+keeps intentional gaps fixed, excludes disabled and mirrored outputs, and
+retains missing displays' relationships for reconnect. If resizing an uneven
+grid creates a conflict, it uses the closest free position. Only a display with
+its own connector rule in `monitors.lua` is moved: Hyprland can change a
+position alone only in such a rule. A display placed by a `desc:` or fallback
+rule stays where that rule puts it, and its neighbours follow it. An output
+with a matching rule in another loaded module also stays fixed, so a position
+adjustment cannot revive a shadowed mode or scale. The diagram refreshes
+automatically while there are no unsaved edits and no field or list
+is in use.
+
+Saved screens that are disconnected remain visible, with their preferences retained.
 If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a
 saved configuration.
+
+To forget a disconnected screen, select it and choose **Forget this display**.
+Removal saves immediately and refreshes the list; there is no preview or
+confirmation countdown. Unrelated unsaved edits remain in the pane.
+Connected screens, including disabled or sleeping outputs,
+must be disconnected before their saved profile can be removed; use **Use as →
+Disabled** to turn off a connected screen.
+
+Disabling a display moves all its workspaces and their windows to an awake
+extended display before turning it off, including named workspaces and
+scratchpads. Saved workspace preferences remain intact. Revert returns the
+workspaces to their previous displays; Keep leaves them on the enabled display.
+
+Removal clears the screen's saved settings, startup workspace, monitor layout
+default, and workspace placement preferences. Workspace layouts, windows, scenes,
+and separately saved wallpaper groups remain. Its specific declarations in
+`monitors.lua` are removed, preserving the fallback rule and unrelated settings.
+Shared description rules and remaining mirror dependencies block removal with an
+explanation. Choose another mirror source first. When a connected display is
+being saved as Extended but its connector rule still mirrors the absent screen,
+removal clears that stale reference and keeps its current position in the same
+save. If the screen or another screen using its connector reconnects before
+saving, removal is rejected. Reconnecting
+after removal discovers the screen again using the remaining monitor rules.
 
 Choose **Preview changes**, then **Keep changes** within 15 seconds. The
 countdown starts once every display has settled on the new settings, not when
@@ -33,6 +90,14 @@ restores the previous arrangement and workspace placement where possible. A sepa
 outside the overlay and display watcher. Confirmation is required even when
 only workspace or layout preferences change. Unsupported modes and overlapping
 independent screens produce an error before application.
+
+Unchanged displays are left alone during preview. If a display disconnects,
+is replaced, or reports different available modes during the operation,
+Hypertile stops and asks you to refresh before trying again. Revert restores
+settings only to displays whose identity and modes still match; it does not
+send an old full-screen mode to a display that has switched to picture-by-picture.
+These checks reduce unnecessary mode changes, but cannot recover a graphics
+driver that stops responding while a mode change is already in progress.
 
 ## Mirroring
 
@@ -57,12 +122,47 @@ changes. Keep writes the `mirror` field into the existing Lua declaration.
 Returning to Extended explicitly clears that field. Recovery establishes source
 displays first and keeps a remaining output usable if a source disappears.
 
+### Size the shared desktop for another display
+
+Once a mirror group is set up, select one of its physical displays in the list
+and choose **Use this display**. The same windows and workspaces move to that
+display and fit its configured resolution and scale. Each output keeps its own
+resolution, refresh rate, scale, and rotation. The other group members receive
+a scaled copy; they do not render an independent desktop at their own resolution.
+Different aspect ratios may stretch the mirrored image.
+
+**Desktop sized for display …** and **in use** identify the active source.
+Selecting a display in the diagram or list only opens its settings. Group
+members keep their relative numbering when switching its source.
+
+Switching applies and saves immediately, without another Keep prompt.
+**Switch back to …** returns to the previous source. The same recoverable
+transaction and independent watchdog protect application and saving; a failure
+restores the previous arrangement where possible. Complete or reset pending
+display and wallpaper edits first. Sleeping outputs must be woken before using
+them as the active display.
+
+All workspaces currently on the old source follow it, including workspaces
+without saved placement preferences. The visible workspace and focused window
+are retained. Explicit layouts and scene assignments travel with their workspace;
+inheriting workspaces use the active monitor's layout default. Other extended
+displays keep their content and positions. If the larger desktop would overlap
+one, the mirror group moves to the nearest free position. Saved placement and
+Extended-position preferences are retained.
+
+For keyboard use, `hypertile-ctl display use-display next` cycles the focused
+mirror group through its awake members. Bind this command to a shortcut if
+desired. `hypertile-ctl display use-display DP-2` selects a specific connector.
+Both commands save immediately; run the command again with the previous
+connector to switch back. An extended display outside a mirror group cannot be
+selected with this command.
+
 ## Sleep and disable
 
-**Sleep display** turns off the output using DPMS without changing its workspace
-placement. If the overlay is on that display it moves to another awake display
-first, so its Wake button stays visible. The same button reads **Wake display**
-while the output is asleep;
+**Sleep**, beside the display's name, turns off the output using DPMS without
+changing its workspace placement. If the overlay is on that display it moves to
+another awake display first, so its Wake button stays visible. The same button
+reads **Wake** while the output is asleep;
 it follows the compositor's power state, not unsaved edits, so it is only
 offered for a connected, enabled output. Sleeping displays are marked in the
 diagram and the display list, and **Wake all** appears in the header only while
@@ -79,32 +179,38 @@ saved as a disabled display.
 **Disable display** removes an output from the desktop after other destinations
 are enabled. Its workspaces remain accessible on another output. Disabling the
 last usable output is rejected. Re-enabling uses the saved settings, subject to
-hardware availability.
+hardware availability. Displays disabled at startup retain their saved mode,
+scale, rotation, and position; a newly discovered disabled output starts with
+an advertised mode. Re-enabling a previously sleeping output also wakes it.
+Wake an already enabled sleeping destination before disabling the last awake
+extended display, so the preview controls remain accessible. If the awake
+output disappears while another sleeps, keyboard wake is enabled automatically.
 
-## Apply a workspace
+## Show a workspace
 
-Select an extended display, then choose **Workspace → Apply** below **Use as**.
+Select an extended display, open **Workspaces**, and choose a workspace under
+**Show a workspace here**, then **Show**.
 The picker lists workspaces 1–10 and existing or saved workspaces, with the current
 connector beside live workspaces. **Other workspace…** accepts a new number or a
-name such as `name:research`. Apply switches immediately, moving an existing
+name such as `name:research`. Show switches immediately, moving an existing
 workspace and its windows to this display if necessary. The previously visible
 workspace remains available. This does not change saved placement preferences.
-Apply is unavailable during a display preview or for sleeping, disabled,
+Show is unavailable during a display preview or for sleeping, disabled,
 disconnected, or mirrored outputs.
 
-Check **Use this workspace at startup**, then **Preview changes → Keep changes**
-to save the startup preference. Uncheck it while that workspace is selected to
+Turn on **Start on this workspace**, then **Preview changes → Keep changes**
+to save the startup preference. Turn it off while that workspace is selected to
 clear it. Startup workspaces must be unique across displays and cannot conflict
 with a saved workspace assignment.
 
-## Workspace preferences
+## Workspaces that live on a display
 
-Expand **Workspace preferences** in the selected display’s settings to adjust
-optional layout defaults and workspace assignments. This section starts collapsed.
+The same **Workspaces** group (collapsed until opened) sets the display's
+default layout and lists **Workspaces that live here**.
 
-Add a numbered workspace, or a named workspace using `name:research`, and choose
-its preferred screen. The Add button waits until the entry is a valid selector
-and says why otherwise. The workspace need not exist yet. Apply moves an existing
+Add a numbered workspace, or a named workspace using `name:research`, to place
+it on the selected screen. The Add button waits until the entry is a valid
+selector and says why otherwise. The workspace need not exist yet. Keep moves an existing
 workspace immediately; the preference also applies at startup and when the
 preferred output returns. Moving a workspace normally does not rewrite this
 preference or cause Hypertile to move it back continuously.
@@ -115,24 +221,27 @@ is explicitly reapplied or a new compositor session begins. Reconnect does not
 select the returning workspace or relaunch scene applications.
 
 Initial workspace preferences apply at startup and are coordinated with session
-restoration. Set them using the Workspace control above. Config reload and monitor reconnect preserve the user's focus.
+restoration. Set them with **Start on this workspace** above. Config reload and
+monitor reconnect preserve the user's focus.
 
 ## Layout inheritance
 
-The **Default layout for this monitor** applies to inheriting workspaces,
-including future ones. An explicit workspace layout takes precedence and follows
-that workspace when moved. **Monitor default** clears the explicit override; a
-monitor without a default uses the existing global layout fallback.
+The **Default layout on this display** applies to inheriting workspaces,
+including future ones; **The default layout** (the global one) is its own
+fallback. An explicit workspace layout takes precedence and follows that
+workspace when moved. **Display default** in a workspace's row clears the
+explicit override.
 
-The Layouts rail shows both the effective layout and its source. Cycling or
-choosing a layout makes the choice explicit. Existing saved workspace layouts
-remain explicit on upgrade. **Use on all of …** remains a one-time assignment to
-current workspaces; it does not set a persistent monitor default.
+The Layouts rail's **Apply to** section shows both the effective layout and
+its source, and does the same for open workspaces at once. Cycling or choosing
+a layout makes the choice explicit. Existing saved workspace layouts remain
+explicit on upgrade. **Every workspace on …** remains a one-time assignment to
+current workspaces; it does not set a persistent display default.
 
 An active scene retains its required layout. To replace it with a conflicting
 layout, use the Layouts view's existing replacement confirmation first. Moving
 a scene workspace does not replace its layout or launch its apps again.
-Renaming layouts updates display references. Deleting a monitor default is
+Renaming layouts updates display references. Deleting a display default is
 refused until another default is chosen.
 
 ## Configuration ownership and recovery
@@ -153,11 +262,18 @@ The first save keeps `monitors.lua.hypertile.bak`; each preview also journals th
 exact pre-save content for crash recovery. External edits during preview cause
 the save to stop and ask you to refresh, rather than overwrite them.
 
-Configuration reloads and reconnects use Hyprland's saved monitor rules directly;
-Hypertile no longer reapplies a competing geometry snapshot. Disabling or
-uninstalling Hypertile leaves the saved monitor configuration usable, including
-on purge. Existing saved preferences from the earlier display implementation
-are migrated once on upgrade before the old replay behavior is retired.
+Configuration reloads and reconnects use Hyprland's saved mode, scale, rotation,
+power and mirroring rules. Hypertile remembers the confirmed adjoining edges
+in a separate placement journal and adjusts positions using the current sizes;
+it never replays old resolutions during this adjustment. A position you edit
+in the configuration moves that display in the remembered arrangement; the
+other displays keep their edges. Keep saves the positions shown in the preview,
+adjusted ones included, so its reload does not move a display back.
+Display previews suspend this adjustment until Keep or Revert finishes.
+Disabling or uninstalling Hypertile leaves the last saved monitor configuration
+usable, including on purge; automatic edge adjustment requires its service.
+Existing saved preferences from the earlier display implementation are migrated
+once on upgrade before the old mode replay behavior is retired.
 
 Supported edits are literal `hl.monitor({ ... })` declarations in `monitors.lua`.
 The declaration edited for an output is the one Hyprland applies: a `desc:`
@@ -204,6 +320,9 @@ hypertile-ctl display preview --json - < settings.json
 hypertile-ctl display keep TOKEN
 hypertile-ctl display revert TOKEN
 hypertile-ctl display show-workspace HDMI-A-1 1
+hypertile-ctl display use-display DP-2
+hypertile-ctl display use-display next
+hypertile-ctl display remove-display SAVED_DISPLAY_ID
 hypertile-ctl display sleep DP-1
 hypertile-ctl display wake DP-1
 hypertile-ctl display wake
@@ -233,20 +352,33 @@ use selectors as keys and `{ "monitor": "saved-display-id", "layout": null }`
 as values; `null` inherits, while a layout string is explicit. Custom layouts
 use the `lua:` prefix. Display transforms use Hyprland's values 0–7.
 
+Use `display remove-display SAVED_DISPLAY_ID` to forget a disconnected profile
+immediately. The service reads current settings, clears its workspace placement
+references, and saves without previewing geometry. Save failures restore the
+profile and its configuration; reconnecting before the save rejects removal.
+
+For scripted settings transactions, add disconnected display
+IDs to `removed_displays` and omit them from `displays`. Clear their workspace
+`monitor` references to `null`, retaining each workspace's `layout`. Resolve any
+`mirror_of` references first. Removal uses the same preview/keep/revert transaction;
+omitting a display alone does not delete its Lua declarations.
+
 See [display validation](diagnostics/displays/README.md) for the tested software,
 hardware, and remaining physical verification limits.
 
 ## Wallpaper groups
 
-Open **Displays → Wallpaper groups…** below the arrangement diagram. Select a
-screen, check **Span wallpaper across a group**, and check the other displays
-that should share that image. Group members are highlighted in the diagram.
-Select a third screen and leave spanning off for an independent wallpaper.
-Independent screens following the theme repeat the image on each screen.
+Choose **Wallpaper** in the **Display | Wallpaper** switch at the top of the
+inspector. Select a screen, choose **Span displays**, and pick the other
+displays that should share that image. Group members are highlighted in the
+diagram. Select a third screen and keep **This display** for an independent
+wallpaper. Independent screens following the theme repeat the image on each
+screen.
 
-Each group can use **the current theme wallpaper** or **Choose image…** for a
-fixed image that does not change with the theme. Crop fills the screen/group;
-**Fit entire image** preserves the entire image with black borders as needed.
+Each group can use **Theme wallpaper** or **Custom image** (type a path or
+**Choose…**) for a fixed image that does not change with the theme. **Fill**
+covers the screen or group, cropping the edges; **Fit** preserves the entire
+image with black borders as needed.
 **Apply wallpaper** saves all wallpaper edits immediately, once a spanning
 group has at least two displays and a custom image has a file. This is separate
 from display geometry's Preview/Keep. Unsaved wallpaper edits are retained while
@@ -270,6 +402,11 @@ changes before applying wallpaper.
 Hypertile refuses to overwrite an existing custom clone or locally edited
 renderer. Subsequent Apply operations update an unmodified managed clone when
 needed. The original renderer is retained as `Background.omarchy.qml.bak`.
+The adapter supports both the original image renderer and the newer
+`BackgroundMedia` renderer. On the newer renderer, images wait for their native
+dimensions and decode for the display or span; small images are not enlarged
+in memory. Temporary transition images are released even when a group keeps
+the same custom image through a theme change.
 
 The clone and wallpaper preferences are independent user customizations and
 remain usable if Hypertile is disabled or uninstalled. To return to stock

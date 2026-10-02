@@ -82,7 +82,7 @@ end
 
 -- A reader never sees a half-written file: the content lands in a sibling
 -- and is renamed into place.
-local function write_file_atomic(path, content)
+local function write_file_atomic(path, content, exclusive)
   local handle = io.popen("mktemp -- " .. shell_quote(path .. ".tmp.XXXXXX"))
   if not handle then return nil, "cannot create temporary file for " .. path end
   local temporary = handle:read("l")
@@ -92,6 +92,14 @@ local function write_file_atomic(path, content)
   if not ok then
     os.remove(temporary)
     return nil, err
+  end
+  -- Publishing with a hard link is atomic and refuses even a dangling
+  -- symlink at the destination. Imports must never replace another layout.
+  if exclusive then
+    local linked = os.execute("ln -T -- " .. shell_quote(temporary) .. " " .. shell_quote(path) .. " 2>/dev/null")
+    os.remove(temporary)
+    if not linked then return nil, "cannot create " .. path .. " (destination exists or is not writable)" end
+    return true
   end
   local renamed, rerr = os.rename(temporary, path)
   if not renamed then
@@ -264,6 +272,10 @@ function M.from_json(text)
     return nil, 'expected {"name": ..., "spec": {...}}'
   end
   local spec = plain(doc.spec)
+  -- A valid JSON document cannot contain infinities (including overflowed
+  -- numeric literals). Reject them before Lua serialization loses the value.
+  local encodable, encoding_error = pcall(json.encode, spec)
+  if not encodable then return nil, encoding_error end
   local valid, err = M.validate(doc.name, spec)
   if not valid then
     return nil, err
@@ -433,14 +445,14 @@ function M.layout_path(name)
 end
 
 -- Validates, serializes, and round-trips the written file before returning.
-function M.save(name, spec)
+function M.save(name, spec, exclusive)
   local valid, err = M.validate(name, spec)
   if not valid then
     return nil, err
   end
   ensure_dir(M.paths.layouts_dir)
   local path = M.layout_path(name)
-  local ok, werr = write_file_atomic(path, M.serialize(name, spec))
+  local ok, werr = write_file_atomic(path, M.serialize(name, spec), exclusive)
   if not ok then
     return nil, werr
   end
@@ -449,6 +461,49 @@ function M.save(name, spec)
     return nil, "written file failed to load back: " .. tostring(lerr)
   end
   return path
+end
+
+-- Portable layouts use the same data-only JSON document as the editor.
+function M.export_layout(name, path, overwrite)
+  local spec, err = M.load(name)
+  if not spec then return nil, err end
+  local text = M.to_json(name, spec) .. "\n"
+  if not path or path == "-" then return text end
+  local ok, werr = write_file_atomic(path, text, not overwrite)
+  if not ok then return nil, werr end
+  return path
+end
+
+function M.import_layout(text, requested_name)
+  local name, spec = M.from_json(text)
+  if not name then return nil, spec end
+  if requested_name ~= nil then
+    if not M.valid_name(requested_name) then return nil, invalid_name(requested_name) end
+    name = requested_name
+  end
+  local taken = {}
+  for _, stem in ipairs(lua_files(M.paths.layouts_dir)) do taken[stem] = true end
+  for _, entry in ipairs(M.list()) do taken[entry.name] = true end
+  local base, suffix = name, 2
+  while taken[name] do
+    name = base .. "-" .. suffix
+    suffix = suffix + 1
+  end
+  -- Imported layouts are independent copies. Reusing a scene's identities
+  -- would make its original layout ambiguous; editing/Scenes assigns new IDs.
+  spec.layout_id = nil
+  local function clear_ids(node)
+    node.id = nil
+    for _, child in ipairs(node.columns or node.rows or {}) do clear_ids(child) end
+  end
+  clear_ids(spec)
+  local serializable, source = pcall(M.serialize, name, spec)
+  if not serializable then return nil, source end
+  local chunk, syntax_error = load(source, "=imported layout", "t", {})
+  if not chunk then return nil, "layout cannot be saved: " .. tostring(syntax_error) end
+  local path, err = M.save(name, spec, true)
+  if not path then return nil, err end
+  return name, path
 end
 
 -- Display preferences are owned and atomically written by the display service.
@@ -1013,7 +1068,7 @@ end
 function M.notify_shell(layout, osd)
   local quiet = " >/dev/null 2>&1"
   if osd then
-    local payload = json.encode({ icon = "\u{F1CAC}", message = M.display_name(layout), duration = 1200 })
+    local payload = json.encode({ icon = "\u{F0575}", message = M.display_name(layout), duration = 1200 })
     os.execute(shell_quote(M.shell_bin) .. " -q osd show " .. shell_quote(payload) .. quiet)
   end
   os.execute(shell_quote(M.shell_bin) .. " -q hypertile-bar refresh" .. quiet)

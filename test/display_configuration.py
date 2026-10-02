@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
 from configuration import Configuration, declarations
 from adapter import DisplayError, bounds
@@ -49,6 +49,192 @@ class ConfigurationTests(unittest.TestCase):
 
     def plan(self):
         return self.config.plan(self.before, self.doc)
+
+    def removal(self):
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "DP-2", mode = "preferred", position = "1920x0" }); -- spare screen\n')
+        self.saved = copy.deepcopy(self.doc)
+        atomic(self.service.confirmed_path, self.saved)
+        self.adapter.current.pop()
+        self.doc['removed_displays'] = [self.doc['displays'].pop()['id']]
+
+    def test_removal_deletes_only_specific_declaration_on_keep(self):
+        self.removal()
+        source = self.config.path.read_text()
+        result = self.service.preview(self.doc, watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), SOURCE + ' -- spare screen\n')
+        self.assertEqual(self.config.path.with_name('monitors.lua.hypertile.bak').read_text(), source)
+        self.assertEqual(len(read(self.service.confirmed_path)['displays']), 1)
+
+    def test_removal_failed_reload_restores_configuration_and_profile(self):
+        self.removal()
+        source = self.config.path.read_text()
+        self.adapter.reload = Mock(side_effect=[DisplayError('reload failed'), None])
+        result = self.service.preview(self.doc, watchdog=False)
+        with self.assertRaisesRegex(DisplayError, 'reload failed'):
+            self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_removal_rejects_external_config_edits_without_overwriting(self):
+        self.removal()
+        result = self.service.preview(self.doc, watchdog=False)
+        external = self.config.path.read_text() + '-- edited elsewhere\n'
+        self.config.path.write_text(external)
+        with self.assertRaisesRegex(DisplayError, 'changed during preview'):
+            self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), external)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def test_removal_rechecks_reconnect_just_before_configuration_write(self):
+        self.removal()
+        source = self.config.path.read_text()
+        result = self.service.preview(self.doc, watchdog=False)
+        commit = self.config.commit
+        def reconnect(plan, before_write=None):
+            self.adapter.current.append(self.saved['displays'][1])
+            commit(plan, before_write)
+        self.config.commit = reconnect
+        with self.assertRaisesRegex(DisplayError, 'connected display'):
+            self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def test_removal_preserves_fallback_and_deletes_full_description_rules(self):
+        self.removal()
+        self.before[1]['description'] = 'Spare panel ABC123'
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "desc:Spare panel ABC123", vrr = 1 })\n')
+        self.assertEqual(self.plan()['after'], SOURCE + '\n')
+
+    def test_removal_refuses_shared_description_and_config_mirror_dependencies(self):
+        self.removal()
+        self.before[1]['description'] = 'Spare panel ABC123'
+        for rule, error in [
+                ('hl.monitor({ output = "desc:Spare panel", vrr = 1 })', 'shared description'),
+                ('hl.monitor({ output = "DP-3", mirror = "DP-2" })', 'mirror rule'),
+                ('hl.monitor({ output = "DP-3", mirror = source_output })', 'mirror rule')]:
+            with self.subTest(rule=rule), self.assertRaisesRegex(DisplayError, error):
+                self.config.path.write_text(SOURCE + rule + '\n')
+                self.plan()
+        self.before[0]['description'] = self.before[1]['description']
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "desc:Spare panel ABC123" })\n')
+        with self.assertRaisesRegex(DisplayError, 'shared description'):
+            self.plan()
+
+    def test_removal_with_no_specific_rule_keeps_configuration_untouched(self):
+        self.removal()
+        self.config.path.write_text(SOURCE)
+        self.assertIsNone(self.plan())
+
+    def test_removal_allows_clearing_existing_mirror_rule_in_same_transaction(self):
+        self.removal()
+        source = SOURCE.replace('vrr = 1,', 'vrr = 1, mirror = "DP-2",')
+        self.config.path.write_text(source)
+        self.before[0]['mirror_connector'] = 'DP-2'
+        self.doc['displays'][0]['mirror_of'] = None
+        self.assertIn('mirror = ""', self.plan()['after'])
+
+    def test_interrupted_removal_save_recovers_configuration_and_profile(self):
+        self.removal()
+        source = self.config.path.read_text()
+        result = self.service.preview(self.doc, watchdog=False)
+        pending = read(self.service.pending_path)
+        pending.update(phase='committing', config_touched=True)
+        atomic(self.service.pending_path, pending)
+        self.config.commit(pending['config_plan'])
+        self.assertNotIn('output = "DP-2"', self.config.path.read_text())
+        self.service.revert(result['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def stale_mirror_removal(self):
+        self.removal()
+        source = self.config.path.read_text().replace('vrr = 1,', 'vrr = 1, mirror = "DP-2",')
+        # Runtime is already independent because the mirror source is absent.
+        self.assertFalse(self.adapter.current[0].get('mirror_connector'))
+        self.adapter.current[0]['mirror_of'] = None
+        self.config.path.write_text(source)
+        self.doc['displays'][0]['mirror_of'] = None
+        return source
+
+    def test_removal_clears_stale_mirror_dependency_only_on_keep(self):
+        source = self.stale_mirror_removal()
+        pending = self.service.preview(self.doc, watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.service.keep(pending['token'])
+        self.assertEqual(self.config.path.read_text(), SOURCE.replace('vrr = 1,', 'vrr = 1, mirror = "",') + ' -- spare screen\n')
+        self.assertEqual(self.config.path.with_name('monitors.lua.hypertile.bak').read_text(), source)
+        self.assertEqual(len(read(self.service.confirmed_path)['displays']), 1)
+
+    def test_stale_mirror_removal_revert_preserves_original_configuration(self):
+        source = self.stale_mirror_removal()
+        pending = self.service.preview(self.doc, watchdog=False)
+        self.service.revert(pending['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def test_stale_mirror_removal_failed_save_restores_dependency_and_profile(self):
+        source = self.stale_mirror_removal()
+        self.adapter.reload = Mock(side_effect=[DisplayError('reload failed'), None])
+        pending = self.service.preview(self.doc, watchdog=False)
+        with self.assertRaisesRegex(DisplayError, 'reload failed'):
+            self.service.keep(pending['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def test_immediate_removal_clears_stale_reference_without_preview_modeset(self):
+        source = self.stale_mirror_removal()
+        self.service.remove_display(self.saved['displays'][1]['id'], watchdog=False)
+        self.assertIn('mirror = ""', self.config.path.read_text())
+        self.assertNotIn('output = "DP-2"', self.config.path.read_text())
+        self.assertEqual(self.adapter.calls, [])
+        self.assertEqual(self.config.path.with_name('monitors.lua.hypertile.bak').read_text(), source)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_immediate_removal_reload_failure_restores_profile_and_configuration(self):
+        source = self.stale_mirror_removal()
+        self.adapter.reload = Mock(side_effect=[DisplayError('reload failed'), None])
+        with self.assertRaisesRegex(DisplayError, 'reload failed'):
+            self.service.remove_display(self.saved['displays'][1]['id'], watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_immediate_removal_rechecks_reconnect_before_configuration_write(self):
+        source = self.stale_mirror_removal()
+        commit = self.config.commit
+        def reconnect(plan, before_write=None):
+            self.adapter.current.append(self.saved['displays'][1])
+            commit(plan, before_write)
+        self.config.commit = reconnect
+        with self.assertRaisesRegex(DisplayError, 'connected display'):
+            self.service.remove_display(self.saved['displays'][1]['id'], watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_stale_mirror_removal_pins_live_position(self):
+        source = self.stale_mirror_removal()
+        self.config.path.write_text(source.replace('position = "0x0"', 'position = "1920x0"'))
+        self.assertIn('position = "0x0"', self.plan()['after'])
+
+    def test_stale_mirror_removal_preserves_unresolved_dependencies(self):
+        source = self.stale_mirror_removal()
+        for edits in ({'connected': False}, {'enabled': False}, {'mirror_of': 'other-source'}):
+            with self.subTest(edits=edits), self.assertRaisesRegex(DisplayError, 'mirror rule'):
+                before = copy.deepcopy(self.before)
+                document = copy.deepcopy(self.doc)
+                before[0].update(edits)
+                document['displays'][0].update(edits)
+                self.config.plan(before, document)
+        for mirror_rule in (source.replace('mirror = "DP-2"', 'mirror = source_output'),
+                            source.replace('output = "DP-1"', 'output = "desc:Native"')):
+            with self.subTest(source=mirror_rule), self.assertRaisesRegex(DisplayError, 'mirror rule'):
+                self.before[0]['description'] = self.doc['displays'][0]['description'] = 'Native panel'
+                self.config.path.write_text(mirror_rule)
+                self.plan()
 
     def test_only_adjusted_fields_are_replaced(self):
         self.doc['displays'][0]['refresh'] = 75
@@ -126,6 +312,21 @@ class ConfigurationTests(unittest.TestCase):
         self.doc['displays'][0]['refresh'] += .001
         self.doc['displays'][0]['scale'] += .0000001
         self.assertIsNone(self.plan())
+
+    def test_keep_saves_the_scale_used_by_preview(self):
+        # A 6144x2560 mode cannot use 1.4; validation selects 4/3. Saving
+        # the original request would disagree with preview and fail reload.
+        self.adapter.current[0].update(width=6144, height=2560, modes=['6144x2560@60.00Hz'])
+        self.adapter.current[1]['x'] = 6144
+        doc = dict(version=1, displays=self.adapter.displays(), workspaces={})
+        doc['displays'][0]['scale'] = 1.4
+        doc['displays'][1]['x'] = 4608
+        pending = self.service.preview(doc, watchdog=False)
+        plan = read(self.service.pending_path)['config_plan']
+        self.assertIn('scale = ' + str(4 / 3), plan['after'])
+        self.assertNotIn('scale = 1.4,', plan['after'])
+        self.service.keep(pending['token'])
+        self.assertAlmostEqual(read(self.service.confirmed_path)['displays'][0]['scale'], 4 / 3)
 
     def test_long_comments_and_strings_are_not_rules(self):
         self.config.path.write_text(SOURCE + '\n--[=[ hl.monitor({output="DP-1"}) ]=]\nlocal text = "hl.monitor"\n')
@@ -261,6 +462,15 @@ class ConfigurationTests(unittest.TestCase):
         self.doc['displays'][1]['mirror_of'] = None
         plan = self.plan()
         self.assertIn('mirror=""', plan['after'])
+
+    def test_promoted_mirror_pins_anchor_even_when_runtime_position_is_unchanged(self):
+        self.config.path.write_text(SOURCE + '\nhl.monitor({output="DP-2",position="1920x0",mirror="DP-1"})\n')
+        self.before[1].update(x=0, y=0, mirror_of=self.before[0]['id'], mirror_connector='DP-1')
+        self.doc['displays'][1].update(x=0, y=0, mirror_of=None)
+        self.doc['displays'][0]['mirror_of'] = self.doc['displays'][1]['id']
+        plan = self.plan()
+        self.assertIn('position="0x0",mirror=""', plan['after'])
+        self.assertIn('mirror = "DP-2"', plan['after'])
 
     def test_description_prefix_rules_are_edited_like_hyprland(self):
         # Hyprland matches desc: by prefix, so a partial description rule owns

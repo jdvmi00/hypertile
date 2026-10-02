@@ -6,6 +6,41 @@ function canArrange(displays) {
     }).length > 1
 }
 
+function removalError(document, display) {
+    if (!display) return "Select a saved display to remove."
+    if (display.connected) return "Connected displays can be disabled under Use as. Disconnect a display before removing its saved settings."
+    if (document.displays.some(function(d) { return d.mirror_of === display.id }))
+        return "Remove saved mirrors first, or choose another source for connected mirrors before removing this screen."
+    return ""
+}
+
+// Explicit removal intent also supports scripted settings transactions.
+function removeDisplay(document, index) {
+    var display = document.displays[index]
+    var error = removalError(document, display)
+    if (error) throw new Error(error)
+    var next = clone(document)
+    next.displays.splice(index, 1)
+    next.removed_displays = (next.removed_displays || []).concat([display.id])
+    Object.keys(next.workspaces || {}).forEach(function(key) {
+        if (next.workspaces[key].monitor === display.id)
+            next.workspaces[key].monitor = null
+    })
+    return next
+}
+
+// Reflect a completed immediate removal without committing unrelated edits.
+function forgetDisplay(document, identity) {
+    var next = clone(document)
+    next.displays = next.displays.filter(function(d) { return d.id !== identity })
+    next.removed_displays = (next.removed_displays || []).filter(function(id) { return id !== identity })
+    if (!next.removed_displays.length) delete next.removed_displays
+    Object.keys(next.workspaces || {}).forEach(function(key) {
+        if (next.workspaces[key].monitor === identity) next.workspaces[key].monitor = null
+    })
+    return next
+}
+
 // The diagram uses compositor logical coordinates: rotate before scaling.
 function bounds(display) {
     var rotated = Number(display.transform || 0) % 2 === 1
@@ -13,8 +48,8 @@ function bounds(display) {
     return {
         x: Number(display.x) || 0,
         y: Number(display.y) || 0,
-        w: (rotated ? display.height : display.width) / scale,
-        h: (rotated ? display.width : display.height) / scale
+        w: Math.round((rotated ? display.height : display.width) / scale),
+        h: Math.round((rotated ? display.width : display.height) / scale)
     }
 }
 
@@ -71,6 +106,25 @@ function modeLabel(mode) {
     return parsed.width + '×' + parsed.height + ' @ ' + parsed.refresh.toFixed(2) + ' Hz'
 }
 
+// Keep automatic intent distinct from its currently resolved pixel size.
+function modeChoices(display) {
+    if (!display) return []
+    var automatic = (display.automatic_modes || []).map(clone)
+    var fixed = (display.modes || []).map(function(raw) {
+        var mode = parseMode(raw)
+        return mode ? Object.assign(mode, {mode_policy: "fixed", label: modeLabel(raw)}) : null
+    }).filter(function(mode) { return mode !== null })
+    return automatic.concat(fixed)
+}
+
+function currentModeLabel(display) {
+    if (!display) return ""
+    var option = modeChoices(display).find(function(mode) {
+        return mode.mode_policy !== "fixed" && mode.mode_policy === display.mode_policy
+    })
+    return option ? option.label : modeLabel(display)
+}
+
 function parseMode(mode) {
     if (typeof mode !== 'string') {
         return {
@@ -108,6 +162,8 @@ function matchSavedDisplay(document, index, connector) {
         connector: live.connector,
         connected: true,
         modes: clone(live.modes || []),
+        capability_signature: live.capability_signature,
+        automatic_modes: clone(live.automatic_modes || []),
         awake: live.awake,
         ambiguous: live.ambiguous,
         explicit_match: true
@@ -152,7 +208,7 @@ function numbering(displays) {
         if (!p.shown) return p.index - q.index
         if (p.x !== q.x) return p.x - q.x
         if (p.y !== q.y) return p.y - q.y
-        if (p.mirror !== q.mirror) return p.mirror - q.mirror
+        // Physical numbers within a group stay put when its source changes.
         return p.index - q.index
     })
     var out = []
@@ -175,8 +231,29 @@ function groupLabel(displays, index, numbers) {
     }).filter(function(x) { return x !== null }).sort(function(p, q) { return p - q }).join(" + ")
 }
 
+function mirrorSource(displays, selected) {
+    if (!selected || !selected.connected || !selected.enabled) return null
+    var source = selected.mirror_of ? displays.find(function(d) { return d.id === selected.mirror_of }) : selected
+    if (!source || !source.connected || !source.enabled || source.mirror_of) return null
+    return displays.some(function(d) { return d.connected && d.enabled && d.mirror_of === source.id }) ? source : null
+}
+
+function canUseDisplay(displays, selected) {
+    var source = mirrorSource(displays, selected)
+    return !!source && source.id !== selected.id && selected.awake !== false
+}
+
+function mirrorStatus(displays, selected, numbers) {
+    var source = mirrorSource(displays, selected)
+    if (!source) return ""
+    var index = displays.findIndex(function(d) { return d.id === source.id })
+    return "Desktop sized for display " + (numbers || numbering(displays))[index] + " · " + source.connector
+        + " · " + source.width + "×" + source.height
+}
+
 function usageOptions(displays, selected) {
-    var options = [{label: "Extended display", value: "extended"}, {label: "Disabled", value: "disabled"}]
+    var source = mirrorSource(displays, selected)
+    var options = [{label: source && source.id === selected.id ? "Shared desktop source" : "Extended display", value: "extended"}, {label: "Disabled", value: "disabled"}]
     var numbers = numbering(displays)
     displays.forEach(function(d, i) {
         if (d.id !== selected.id && d.connected && d.enabled && !d.mirror_of)
@@ -200,6 +277,7 @@ function setUsage(document, index, value) {
         d.enabled = value === "extended"
         if (value === "extended" && (wasMirror || wasDisabled)) {
             d.mirror_of = null
+            d.scale = cleanScale(d.width, d.height, d.scale)
             if (d.extended_position) {
                 d.x = d.extended_position.x
                 d.y = d.extended_position.y
@@ -208,7 +286,82 @@ function setUsage(document, index, value) {
                 d.x = Math.round(rect.x + rect.w)
                 d.y = Math.round(rect.y)
             }
+            placeWithoutOverlap(next.displays, index)
         }
+    }
+    return next
+}
+
+function overlaps(a, b) {
+    return Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x)
+        && Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y)
+}
+
+// Retain a returning display's position when free. Otherwise find the nearest
+// free edge position, considering the entire layout rather than just a neighbour.
+function placeWithoutOverlap(displays, index) {
+    var d = displays[index], rect = bounds(d)
+    if (!d.connected || !d.enabled || d.mirror_of) return false
+    var others = displays.filter(function(other, i) {
+        return i !== index && other.connected && other.enabled && !other.mirror_of
+    }).map(bounds)
+    function free(x, y) {
+        return !others.some(function(other) { return overlaps({x:x, y:y, w:rect.w, h:rect.h}, other) })
+    }
+    if (free(rect.x, rect.y)) return false
+    var xs = [rect.x], ys = [rect.y], best = null
+    others.forEach(function(other) {
+        xs.push(other.x - rect.w, other.x + other.w)
+        ys.push(other.y - rect.h, other.y + other.h)
+    })
+    xs.forEach(function(x) {
+        ys.forEach(function(y) {
+            if (Math.abs(x) > 100000 || Math.abs(y) > 100000 || !free(x, y)) return
+            var distance = (x - rect.x) * (x - rect.x) + (y - rect.y) * (y - rect.y)
+            if (!best || distance < best.distance) best = {x:x, y:y, distance:distance}
+        })
+    })
+    if (!best) return false // Service validation still prevents an unsafe preview.
+    d.x = best.x
+    d.y = best.y
+    return true
+}
+
+function cleanScale(width, height, scale) {
+    function clean(value) {
+        return value > 0 && [width, height].every(function(size) {
+            return Math.abs(size / value - Math.round(size / value)) < 0.000001
+        })
+    }
+    if (width <= 0 || height <= 0 || clean(scale)) return scale
+    var base = Math.round(scale * 120)
+    for (var step = 0; step < 90; step++) {
+        var up = (base + step) / 120, down = (base - step) / 120
+        if (clean(up)) return up
+        if (clean(down)) return down
+    }
+    // If Hyprland's bounded search has no suggestion, choose a compatible
+    // preset explicitly rather than leaving a mode edit with an invalid scale.
+    var best = 1
+    scaleOptions({width:width, height:height}).forEach(function(option) {
+        if (Math.abs(option.value - scale) < Math.abs(best - scale)) best = option.value
+    })
+    return best
+}
+
+// A mode is one edit: normalize its scale before computing the final logical
+// size, then reflow once. Intermediate width/height pairs can have other divisors.
+function updateDisplay(document, index, fields) {
+    var original = document.displays[index]
+    if (!original || !Object.keys(fields).some(function(key) {
+        return original[key] !== fields[key] && !(fields[key] === null && original[key] === undefined)
+    })) return null
+    var next = clone(document), d = next.displays[index], before = bounds(d)
+    Object.keys(fields).forEach(function(key) { d[key] = fields[key] })
+    if ("mode_policy" in fields) d.mode_available = true
+    if (["width", "height", "scale", "transform"].some(function(key) { return key in fields })) {
+        d.scale = cleanScale(d.width, d.height, d.scale)
+        reflow(next.displays, index, before)
     }
     return next
 }
@@ -228,6 +381,35 @@ function scaleOptions(display) {
         values.push({value: value, label: String(Math.round(value * 100) / 100) + "x"})
     })
     return values
+}
+
+// A display's name for people: "Dell U5226KW" from the make and model, or
+// from the description when the catalog has no make (a display saved by an
+// older version). Company suffixes are dropped, and a model that repeats
+// the brand keeps it once ("LG Electronics" + "LG ULTRAGEAR" is "LG
+// ULTRAGEAR"). The connector stands in when there is nothing else, and is
+// always what tells two identical displays apart.
+var COMPANY_WORD = /^(inc|corp|corporation|co|company|ltd|limited|llc|gmbh|ag|bv|plc|unknown)\.?,?$/i
+function nameWords(text) {
+    var words = []
+    String(text || "").split(/\s+/).forEach(function(word) {
+        if (!word || COMPANY_WORD.test(word)) return
+        if (words.length && words[words.length - 1].toLowerCase() === word.toLowerCase()) return
+        words.push(word)
+    })
+    return words
+}
+function displayName(display) {
+    if (!display) return ""
+    var make = nameWords(display.make), model = nameWords(display.model), words
+    if (make.length || model.length) {
+        words = make.length && model.length && make[0].toLowerCase() === model[0].toLowerCase()
+            ? [make[0]].concat(model.slice(1)) : make.concat(model)
+    } else {
+        words = nameWords(display.description)
+    }
+    var name = words.join(" ")
+    return name !== "" ? name : String(display.connector || "")
 }
 
 function nearestStop(stops, value) {
@@ -278,6 +460,12 @@ function reflow(displays, index, before) {
         var rect = bounds(display)
         if (dw && rect.x >= before.x + before.w - 1) { display.x = Math.round(rect.x + dw); moved = true }
         if (dh && rect.y >= before.y + before.h - 1) { display.y = Math.round(rect.y + dh); moved = true }
+    })
+    // A staggered layout can have a neighbour spanning both rows. Moving all
+    // bottom/right edges may then collide with that neighbour; clear those
+    // collisions while keeping the edited display anchored.
+    displays.forEach(function(display, otherIndex) {
+        if (otherIndex !== index && placeWithoutOverlap(displays, otherIndex)) moved = true
     })
     return moved
 }

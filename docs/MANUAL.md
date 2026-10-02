@@ -90,6 +90,15 @@ when there are none. Browsing previews it; Escape restores the previous
 layout. You can also use dwindle as the default. As a built-in layout, it
 cannot be edited, renamed, deleted, or removed from the cycle here.
 
+### Move Hypertile on the menu bar
+
+Right-click Hypertile’s bar widget, or click the gear (**Settings**) in the
+overlay header. The **Menu bar** cards show three small screen previews:
+**Left**, **Middle**, and **Right**. Select one to move the widget immediately on every screen.
+The checkmark follows its current position, which Omarchy remembers after
+restarts and updates. For a vertical bar, the choices are **Top**, **Middle**,
+and **Bottom**. Escape closes Settings without closing the overlay.
+
 ### Your first layout
 
 A fresh install includes **welcome**, a four-zone layout with horizontal
@@ -148,18 +157,21 @@ windows, each zone carrying its fill number and pixel size, and the
   windows underneath.
 - `?` shows every key in the rail.
 
-The rail's **Fill order** section spells out the order in words ("1 top
-left, 2 top right…"), which is the quickest way to understand a layout you
-did not write.
+Under the layout's name, the rail says where it is in use and how windows
+fill it ("Windows fill zones 1 to 4 in order, then start again at 1"); the
+numbers on the zones show where each one lands. A **Getting started** card
+explains the basics until you choose **Got it**.
 
 ### Where the rail's switches live
 
-- **Cycle → In the SUPER+L cycle**: turn it off for layouts you only use
-  through the overlay or a scene, so the everyday cycle stays short.
-- **Startup → Save windows for startup**: session recovery on or off
-  (section 9).
-- **Workspaces**: put the viewed layout on another workspace, on every
-  workspace of a monitor, or make it the default (section 7).
+- **⋯** next to Edit: Rename, Duplicate, Export…, **In the SUPER+L cycle**
+  (turn it off for layouts you only use through the overlay or a scene, so the
+  everyday cycle stays short), and Delete.
+- **+ New** on the LAYOUTS heading: a blank layout, a copy, or an import.
+- **Apply to** (collapsed): put the viewed layout on another workspace, on
+  every workspace of a display, or make it the default (section 7).
+- **Settings** (the gear): saving windows for startup (section 9), the rail's
+  side, the key list, the menu bar position, and the desktop text size.
 
 ## 4. Moving windows around a layout
 
@@ -202,42 +214,46 @@ app in a zone; pins are for the moment.
 ## 5. Designing layouts
 
 Open the overlay on the workspace whose windows you want to design around,
-view the layout to change and press `e`, or press `n` for a new one (`b`
-blank, `c` a copy of the viewed layout). Edits preview live: the workspace
-re-tiles as you go, and nothing is written until you save.
+view the layout to change and press `e`, or press `n` (or **+ New**) for a
+new one (`b` blank, `c` a copy of the viewed layout, or **Import…**). Edits
+preview live: the workspace re-tiles as you go, and nothing is written until
+you save.
 
 ### The moves
 
 | Do | With |
 |---|---|
 | select a zone | click it, arrows / `hjkl`, or `Tab` |
-| split it into columns / rows | `c` / `r`, or the buttons on the zone |
+| split it into columns / rows | `c` / `r`, or the buttons on the zone (in the rail for a zone too small for them) |
 | delete it (the neighbour takes the space) | `x`, `Delete`, or right-click |
 | resize | drag a divider; `Shift+Arrow` nudges the selected zone's edge by 1% |
 | set an exact size | **Zone → Size** in the rail, in percent of the screen |
-| renumber | `f`, then click zones in the order windows should fill them; click a zone again to give it a second position; `Backspace` undoes a click, `Enter` finishes. Zones you skip follow at the end |
+| set the fill order | `f` or **Fill order**, then click zones in the order windows should fill them; click a zone again to give it a second position; `Backspace` undoes a click, `Enter` finishes. Zones you skip follow at the end |
 | undo | `u` |
 | save | `w` or `Ctrl+S`; a new layout asks for a name |
-| leave | `Esc`; with unsaved changes it offers Discard, Save, or Keep editing |
+| finish | `Esc` or **Done**; with unsaved changes it offers Discard, Save, or Keep editing |
 
 ### Zone settings that change how a layout feels
 
-All in the rail's **Zone** section for the selected zone:
+The rail's **Zone** section shows the selected zone's name, size and what it
+holds; **More options** (collapsed) holds the rest:
 
 - **Name.** Names are how rules, scenes, pins, and scripts refer to a zone.
   View mode hides them (the fill summary speaks in positions), but give
   important zones real names ("editor", "terms") before writing rules.
-- **Spacer** (`s`). A hole that never takes a window. Split around the area
-  you want to leave empty and mark the rest as spacers to place a single
-  window off-centre, or to keep a strip of wallpaper visible.
-- **Never split.** The zone holds one window at most and is never an
-  overflow target while any other zone exists. Use it for the "main" zone
-  of a layout so a fourth window never halves your editor.
+- **Holds → Nothing** (`s` toggles it). A spacer: a hole that never takes a
+  window. Split around the area you want to leave empty and mark the rest as
+  spacers to place a single window off-centre, or to keep a strip of
+  wallpaper visible.
+- **Holds → One window.** The zone holds one window at most (more overlap it
+  at full size) and is never an overflow target while any other zone exists.
+  Use it for the "main" zone of a layout so a fourth window never halves your
+  editor. **Windows**, the default, lets more windows split the zone.
 - **Stack.** Vertical or horizontal for windows sharing the zone. A wide
   bottom strip stacks better horizontally.
 - **Capacity.** How many windows the zone takes before overflow spills to
-  the next zone in fill order. A terminal column with capacity 3 stays
-  readable.
+  the next zone in fill order; 0 is no limit. A terminal column with capacity
+  3 stays readable.
 - **Aspect and Scale.** The zone fits the largest box of that ratio inside
   itself, shrinks it by the scale, and centres it. One zone with 1:1 at 70%
   is a square in the middle of the screen with nothing around it: a focus
@@ -245,8 +261,9 @@ All in the rail's **Zone** section for the selected zone:
 
 ### Layout settings
 
-The **Layout** section applies to the whole layout and rides along as
-workspace and window rules when the layout is in use:
+**Appearance** and **Behaviour** (both collapsed; the heading lists what is
+not the default) apply to the whole layout and ride along as workspace and
+window rules when the layout is in use:
 
 - **Gutter** and **Edge gap**: the gap between windows and around the layout.
   Zero both, with **Border** 0, for edge-to-edge tiling.
@@ -257,7 +274,9 @@ workspace and window rules when the layout is in use:
   the gap, so windows never move as others open and close.
 - **A lone window**: *Fills the area* or *Stays in its zone*. Keep it in its
   zone when the zone's size or aspect is the point of the layout.
-- **In the SUPER+L cycle**: see section 3.
+
+Whether the layout is in the `SUPER+L` cycle is in the Layouts tab's **⋯**
+menu (section 3).
 
 **Opens here** lists the apps pinned to the selected zone as rules. Pick from
 the windows open right now; an app allowed in several zones fills the
@@ -367,6 +386,11 @@ hypertile.layout("code", {
 
 `class` and `title` are Lua patterns: anchor them with `^` and `$`, and
 escape dots as `%.`. Find a window's class with `hypertile-ctl windows`.
+Matching has a work limit so an expensive rule cannot stall the desktop.
+An over-budget match is skipped; windows without another matching rule use
+normal fill order. The compositor logs a warning once per loaded layout.
+Patterns are limited to 1,024 bytes, and a class or title longer than 8,192
+bytes does not match. Each placement calculation gets a fresh work allowance.
 
 ### Focus: one window, centred, with breathing room
 
@@ -411,19 +435,24 @@ Every workspace has its own layout, remembered across reloads and logins in
 `~/.local/state/hypertile/workspace-rules/`. Workspaces without a rule use
 the **default** layout, which is `general.layout` in `looknfeel.lua`.
 
-From the overlay's **Workspaces** section, with the layout you want viewed:
+From the Layouts tab's **Apply to** section (open it from its heading; the
+heading names the workspaces already using the viewed layout), with the layout
+you want viewed:
 
-- click a workspace row to use the viewed layout there (the row shows how
+- **Use** on a workspace row puts the viewed layout there (the row shows how
   many windows it holds and marks the one in use);
-- **Use on all of <monitor>** applies it to every workspace currently on
-  that monitor (Hyprland binds layouts to workspaces, not monitors);
-- the default control makes it the layout for every workspace that has no
-  rule of its own;
-- **Follow monitor default** drops the layout chosen for the current
-  workspace so it inherits its monitor's default layout (set under
-  Displays → Workspace preferences). Each row says where its layout comes
-  from: chosen for the workspace, its monitor default, the default layout,
-  or a scene.
+- **Every workspace on <display>** applies it to every workspace currently on
+  that display (Hyprland binds layouts to workspaces, not displays);
+- **Make it the default** makes it the layout for every workspace that has
+  no rule of its own and no display default;
+- **Follow the display default** drops the layout chosen for the current
+  workspace so it inherits its display's default layout (set under
+  Displays → Workspaces). Each row says where its layout comes from: chosen
+  for the workspace, its display's default, the default layout, or a scene.
+
+**Displays → Workspaces** covers the same choices from the display's side,
+including workspaces that are not open yet, and saves them with Preview and
+Keep.
 
 The overlay stays open, so you can browse to another layout and assign it
 elsewhere. From a script, `hypertile-ctl apply <name> --workspace N` does the
@@ -437,7 +466,7 @@ layout on the one or two workspaces where you build things.
 
 A layout says where windows go. A **scene** says which windows: for each
 zone of a workspace, an installed app to launch or reuse, one particular
-open window, ordinary local fill, or Empty (nothing goes there, and the
+open window, any window in fill order, or Empty (nothing goes there, and the
 directional moves skip it). Using a scene launches whatever is missing,
 places each app once, and then leaves you alone: move, float, or close the
 app and Scenes will not pull it back or open a second copy.
@@ -446,7 +475,7 @@ app and Scenes will not pull it back or open a second copy.
 
 1. Open the overlay on the workspace and click the **Scenes** tab.
 2. Click a zone, or press its fill number, or `Tab` through them. The
-   picker under the zone lists **Local windows** and **Empty** as chips,
+   picker under the zone lists **Any window** and **Empty** as chips,
    then **Open here** (windows on this workspace), **Remote desktops** (if
    the Remote Desktops app is installed), and **Apps** (installed desktop
    entries).
@@ -536,7 +565,7 @@ hypertile-ctl session restore @previous-1  # the checkpoint before the latest (-
 hypertile-ctl session status               # mode, matched and unmatched windows
 ```
 
-Turn recovery off with **Startup → Save windows for startup** in the
+Turn recovery off with **Settings → Save windows for startup** in the
 overlay or `hypertile-ctl session disable`; snapshots are kept, nothing is
 restored at login, and the guarded menu actions pass straight through to
 Omarchy. Custom launch recipes for apps the service does not know go in
@@ -557,7 +586,9 @@ scriptable from keybinds, shell aliases, and other tools.
 | next / previous layout | `hypertile-ctl cycle`, `hypertile-ctl cycle --reverse` |
 | try a layout without persisting | `hypertile-ctl apply quad --no-persist` |
 | set the default | `hypertile-ctl default quad` |
-| export, edit, re-import | `hypertile-ctl dump quad > quad.json`, then `hypertile-ctl save quad.json` |
+| export a layout | `hypertile-ctl export quad quad.json` (also **⋯ → Export…** in the Layouts tab) |
+| import a layout as a new copy | `hypertile-ctl import quad.json` (also **+ New → Import…**); existing names gain `-2`, `-3`, etc. |
+| edit an existing layout through JSON | `hypertile-ctl dump quad > quad.json`, then `hypertile-ctl save quad.json` |
 | preview a JSON layout live, no disk write | `hypertile-ctl preview quad.json --workspace 9` |
 | rename or delete | `hypertile-ctl rename quad grid`, `hypertile-ctl remove grid` |
 | scenes | `hypertile-ctl scene list`, `scene apply work --workspace 1`, `scene current` |
@@ -651,7 +682,7 @@ Monitor settings and unrelated desktop customizations are retained.
 | layouts, one Lua file each | `~/.config/hypr/layouts/<name>.lua` |
 | the default layout | `general.layout` in `~/.config/hypr/looknfeel.lua` |
 | each workspace's layout | `~/.local/state/hypertile/workspace-rules/` |
-| overlay preferences (dock side, open sections) | `~/.local/state/hypertile/overlay.json` |
+| overlay preferences (rail side, key list, open sections, the Getting started card) | `~/.local/state/hypertile/overlay.json` |
 | saved scenes | `~/.config/hypertile/scenes/<name>.json` |
 | session settings and app recipes | `~/.config/hypertile/session.json` |
 | session snapshots and named sessions | `~/.local/state/hypertile/sessions/` |
@@ -698,11 +729,11 @@ Monitor settings and unrelated desktop customizations are retained.
 | `c` / `r` | split into columns / rows |
 | `x`, `Delete`, right-click | delete the zone |
 | drag a divider, `Shift+Arrow` | resize; nudge an edge by 1% |
-| `s` | toggle spacer |
-| `f` | renumber by clicking; `Backspace` undoes a click, `Enter` finishes |
+| `s` | toggle between holding nothing (a spacer) and holding windows |
+| `f` | set the fill order by clicking; `Backspace` undoes a click, `Enter` finishes |
 | `u` | undo |
 | `w`, `Ctrl+S` | save |
-| `Esc` | leave; `d` discard, `w` save, `Enter` keep editing when asked |
+| `Esc` | done; `d` discard, `w` save, `Enter` keep editing when asked |
 
 ### Overlay, Scenes tab
 

@@ -20,6 +20,8 @@
 -- registration, where a live compositor is guaranteed.
 
 local M = {}
+local prefix = (... or "hypertile"):match("^(.-)hypertile$") or ""
+local patterns = require(prefix .. "hypertile-pattern")
 
 -- Per-layout runtime state: pins (window address -> slot) and size overrides.
 M.state = {}
@@ -109,61 +111,6 @@ local function collect_leaves(node, names, by_name)
   return names
 end
 
--- string.find validates only the path reached by a particular input. Check
--- the whole pattern so a bad suffix cannot first fail during recalculation.
-local function validate_pattern(pattern)
-  local i, captures, open = 1, {}, {}
-  local function bracket()
-    assert(pattern:sub(i, i) == "[", "missing '[' after '%f'")
-    i = i + 1
-    if pattern:sub(i, i) == "^" then i = i + 1 end
-    repeat
-      assert(i <= #pattern, "missing ']' in pattern")
-      i = i + (pattern:sub(i, i) == "%" and 2 or 1)
-    until pattern:sub(i, i) == "]"
-    i = i + 1
-  end
-  while i <= #pattern do
-    local c = pattern:sub(i, i)
-    if c == "[" then
-      bracket()
-    elseif c == "%" then
-      local escape = pattern:sub(i + 1, i + 1)
-      assert(escape ~= "", "pattern ends with '%'")
-      if escape == "b" then
-        assert(i + 3 <= #pattern, "missing arguments to '%b'")
-        i = i + 4
-      elseif escape == "f" then
-        i = i + 2
-        bracket()
-      else
-        if escape:match("%d") then
-          assert(captures[tonumber(escape)] == "closed", "invalid capture index %" .. escape)
-        end
-        i = i + 2
-      end
-    elseif c == "(" then
-      assert(#captures < 32, "too many captures")
-      if pattern:sub(i + 1, i + 1) == ")" then
-        captures[#captures + 1] = "closed"
-        i = i + 2
-      else
-        captures[#captures + 1] = "open"
-        open[#open + 1] = #captures
-        i = i + 1
-      end
-    elseif c == ")" then
-      assert(#open > 0, "invalid pattern capture")
-      captures[table.remove(open)] = "closed"
-      i = i + 1
-    else
-      i = i + 1
-    end
-  end
-  assert(#open == 0, "unfinished capture")
-  string.find("", pattern)
-end
-
 function M.compile(spec)
   local tree = normalize_node(spec, "")
   local leaf_opts = {}
@@ -232,14 +179,18 @@ function M.compile(spec)
   for _, name in ipairs(cycle) do
     assert_fillable(name, "cycle")
   end
+  local matchers = {}
   for _, rule in ipairs(spec.rules or {}) do
     assert_fillable(rule.slot, "rule")
     for _, field in ipairs({ "class", "title" }) do
       local pattern = rule[field]
       if pattern ~= nil then
         assert(type(pattern) == "string", "hypertile: rule " .. field .. " must be a Lua pattern string")
-        local ok, err = pcall(validate_pattern, pattern)
-        assert(ok, "hypertile: invalid rule " .. field .. " pattern: " .. tostring(err))
+        if not matchers[pattern] then
+          local ok, matcher = pcall(patterns.compile, pattern)
+          assert(ok, "hypertile: invalid rule " .. field .. " pattern: " .. tostring(matcher))
+          matchers[pattern] = matcher
+        end
       end
     end
   end
@@ -271,6 +222,7 @@ function M.compile(spec)
     fill_pos = fill_pos,
     cycle = cycle,
     rules = spec.rules or {},
+    matchers = matchers,
     capacity = spec.capacity or {},
     stack = spec.stack or "v",
     empty = spec.empty or "collapse",
@@ -285,14 +237,25 @@ end
 -- Assignment: decide which slot each target goes to.
 ---------------------------------------------------------------------------
 
-local function window_matches(rule, win)
+local function rule_matches(pattern, text, compiled, budget)
+  if not text then return false end
+  local matched, limited = patterns.matches(compiled.matchers[pattern], text, budget)
+  if limited and not compiled.match_warning then
+    compiled.match_warning = true
+    print("hypertile: rule matching limit reached for " .. string.format("%q", pattern:sub(1, 120))
+      .. "; unmatched windows use normal fill order")
+  end
+  return matched
+end
+
+local function window_matches(rule, win, compiled, budget)
   if not win then
     return false
   end
-  if rule.class and not (win.class and string.find(win.class, rule.class)) then
+  if rule.class and not rule_matches(rule.class, win.class, compiled, budget) then
     return false
   end
-  if rule.title and not (win.title and string.find(win.title, rule.title)) then
+  if rule.title and not rule_matches(rule.title, win.title, compiled, budget) then
     return false
   end
   if rule.tag then
@@ -328,6 +291,7 @@ end
 -- Returns { slotname = { target, ... } }. Windows keep their target order
 -- inside a slot regardless of whether they arrived by pin, rule, or fill.
 function M.assign(compiled, targets, state)
+  local budget = #compiled.rules > 0 and { remaining = patterns.TOTAL_LIMIT } or nil
   local pins = state and state.pins or {}
   local reserved = state and state.reserved or {}
   -- A local window exchanged with a reserved source takes one whole zone.
@@ -375,7 +339,7 @@ function M.assign(compiled, targets, state)
       -- fills them 5, 6, 7, 8 regardless of the order the rules were added.
       local best, best_pos
       for _, rule in ipairs(compiled.rules) do
-        if compiled.leaf_set[rule.slot] and window_matches(rule, win) and has_room(rule.slot) then
+        if compiled.leaf_set[rule.slot] and has_room(rule.slot) and window_matches(rule, win, compiled, budget) then
           local pos = compiled.fill_pos[rule.slot] or math.huge
           if not best or pos < best_pos then
             best, best_pos = rule.slot, pos
@@ -449,16 +413,20 @@ end
 -- Geometry: walk the tree, dropping empty subtrees when empty == "collapse".
 ---------------------------------------------------------------------------
 
-local function subtree_has_windows(node, buckets)
+local function subtree_has_windows(node, buckets, occupied)
+  if occupied[node] ~= nil then return occupied[node] end
   if node.kind == "leaf" then
     -- A spacer is a fixed hole: it is never collapsed away.
-    return node.spacer or buckets[node.name].reserved or #buckets[node.name] > 0
+    occupied[node] = node.spacer or buckets[node.name].reserved or #buckets[node.name] > 0
+    return occupied[node]
   end
   for _, child in ipairs(node.children) do
-    if subtree_has_windows(child, buckets) then
+    if subtree_has_windows(child, buckets, occupied) then
+      occupied[node] = true
       return true
     end
   end
+  occupied[node] = false
   return false
 end
 
@@ -471,15 +439,18 @@ end
 
 -- Fills `out[slot] = box` for each leaf. `empty` is the inherited policy;
 -- a container may override it for its own children and descendants.
-local function walk(node, box, compiled, buckets, overrides, out, empty)
+local function walk(node, box, compiled, buckets, overrides, out, empty, occupied)
   if node.kind == "leaf" then
     out[node.name] = box
     return
   end
   empty = node.empty or empty
+  -- Each subtree is inspected at most once per placement. Repeatedly scanning
+  -- descendants makes a deeply nested, mostly empty layout quadratic.
+  occupied = occupied or {}
   local live = {}
   for _, child in ipairs(node.children) do
-    if empty == "keep" or subtree_has_windows(child, buckets) then
+    if empty == "keep" or subtree_has_windows(child, buckets, occupied) then
       live[#live + 1] = child
     end
   end
@@ -506,7 +477,7 @@ local function walk(node, box, compiled, buckets, overrides, out, empty)
     else
       child_box = { x = box.x, y = box.y + start, w = box.w, h = length }
     end
-    walk(child, child_box, compiled, buckets, overrides, out, empty)
+    walk(child, child_box, compiled, buckets, overrides, out, empty, occupied)
     offset = offset + length
   end
 end
@@ -709,6 +680,26 @@ end
 -- editor needs to preview edits without a reload).
 M.live = {}
 
+local function same_sizes(a, b)
+  for key, value in pairs(a) do if b[key] ~= value then return false end end
+  for key, value in pairs(b) do if a[key] ~= value then return false end end
+  return true
+end
+
+local function navigation_boxes(live, workspace, area)
+  local previous = live.box_inputs[workspace]
+  local sizes = live.state.sizes
+  if previous and previous.x == area.x and previous.y == area.y
+    and previous.w == area.w and previous.h == area.h and same_sizes(previous.sizes, sizes) then
+    return live.boxes[workspace]
+  end
+  local copied = {}
+  for key, value in pairs(sizes) do copied[key] = value end
+  local boxes = M.slot_boxes(live.compiled, area, sizes)
+  live.box_inputs[workspace] = { x = area.x, y = area.y, w = area.w, h = area.h, sizes = copied }
+  return boxes
+end
+
 function M.provider(name, spec)
   local compiled = M.compile(spec)
   local state = M.state[name] or { pins = {}, sizes = {} }
@@ -719,6 +710,7 @@ function M.provider(name, spec)
   live.state = state
   live.orders = live.orders or {}
   live.boxes = {} -- Plain geometry only; never retain compositor targets.
+  live.box_inputs = {} -- Invalidated with the boxes on every spec hot swap.
   live.placements = {}
   live.drags = {}
   M.live[name] = live
@@ -745,7 +737,10 @@ function M.provider(name, spec)
       end
       local ok, err = pcall(M.recalculate, live.compiled, ctx, live.state)
       if workspace then
-        live.boxes[workspace] = ok and M.slot_boxes(live.compiled, ctx.area, live.state.sizes) or nil
+        -- Destination geometry depends on area and weights, not window count
+        -- or focus. Keep placement itself live on every compositor callback.
+        live.boxes[workspace] = ok and navigation_boxes(live, workspace, ctx.area) or nil
+        if not ok then live.box_inputs[workspace] = nil end
         local placements = {}
         if ok then
           for _, target in ipairs(ctx.targets) do

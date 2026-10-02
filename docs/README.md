@@ -1,5 +1,9 @@
 # Developing Hypertile live
 
+The [performance audit](PERFORMANCE.md) records runtime measurements, optimized
+paths, and remaining footguns. Run `lua test/performance.lua` for the repeatable
+layout CPU benchmark; it is separate from correctness tests.
+
 Use `~/Code/hypertile` as the authoritative checkout. Link Omarchy's plugin
 directory to it, then use the repository's `dev` helper to apply uncommitted
 changes to the running desktop. No push, pull, or second working tree is
@@ -166,9 +170,33 @@ node test/geometry.js   # overlay geometry
 node test/editor.js     # editor operations
 python3 test/session.py && lua test/session.lua       # session recovery
 python3 test/scenes.py && node test/content.js         # scenes
+python3 test/display_safety.py # mode intent, PBP/docking races, safe rollback
+python3 test/display_placement.py # external resizing, adjoining edges, restart and preview races
 ```
 
 `.github/workflows/test.yml` is the authoritative list; CI runs every suite.
+
+`python3 test/display_integration.py --placement-only` checks full-width/split/full-width
+placement, reloads and daemon restarts using two isolated virtual outputs.
+
+For display source switching, run `python3 test/display_integration.py --handoff-only`
+from an Omarchy Wayland session. It uses two nested outputs, disposable windows,
+and separate configuration/state to check mixed resolutions, workspace/focus
+handoff, save failures, and watchdog recovery. `python3 test/display_ui.py`
+opens a disposable QML panel with simulated outputs to check immediate switching,
+catalog refresh, and Switch back. Add `--screenshots /tmp/hypertile-display-ui`
+to save its panel images. Neither test changes physical monitor configuration.
+Use `python3 test/display_integration.py --mode-safety-only` to check partial
+monitor updates through preview, save, and reload, and virtual-output guards.
+
+For the Settings panel, run `python3 test/bar_settings.py` on a machine with
+Omarchy and Quickshell installed. It uses an offscreen shell and temporary
+configuration to exercise the real popup and shell registry: all menu bar
+positions, mouse and keyboard interaction, persistence, errors, and external
+changes, plus the rail side, key list and startup switches and both entry
+points (the gear and the bar widget's right-click).
+Add `--screenshots /tmp/hypertile-bar-settings` to save rendered previews.
+It does not change your desktop or bar configuration.
 
 See also [session recovery](SESSIONS.md), [engine internals](INTERNALS.md), and
 the [Hyprland sizing bug](HYPRLAND-SIZING-BUG.md).

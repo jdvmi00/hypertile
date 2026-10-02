@@ -11,12 +11,13 @@ def project(record):
     path = state / 'confirmed.json'
     if not path.exists():
         return record
-    # Both installed services are sibling packages under the same runtime root.
-    root = str(Path(__file__).resolve().parent.parent)
-    if root not in sys.path:
-        sys.path.insert(0, root)
-    from displays.adapter import Adapter, match, runtime_mirrors
-    from displays.policy import project_session
+    # Display modules use sibling imports, as in the display service entry point.
+    # Load them from their module directory so transitive imports also resolve.
+    displays = str(Path(__file__).resolve().parent.parent / "displays")
+    if displays not in sys.path:
+        sys.path.insert(0, displays)
+    from adapter import Adapter, match, runtime_mirrors
+    from policy import project_session
     document = json.loads(path.read_text())
     adapter = Adapter()
     current = adapter.displays()

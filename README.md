@@ -5,19 +5,22 @@ move your windows between them. Browse and edit layouts directly over your
 desktop, save app arrangements as scenes, and manage your displays from the
 same overlay.
 
+[![Watch the Hypertile explainer: design zones once and let your windows follow](docs/explainer/public/poster.jpg)](https://hypertile.jimmartin.workers.dev/)
+
+**[Watch Hypertile in two minutes](https://hypertile.jimmartin.workers.dev/)** —
+a narrated introduction with real desktop footage (1:56).
+
 - **Layouts:** split and resize zones, choose their fill order, and tune gaps,
   corners, aspect ratios, and stacking.
 - **Window movement:** move or swap windows with keyboard shortcuts, numbered
   destinations, or drag and drop.
 - **Scenes:** assign apps to zones and save arrangements you can return to.
 - **Displays:** arrange or mirror screens, adjust resolution and scale, and
-  choose workspace placement and monitor layout defaults.
+choose workspace placement and monitor layout defaults.
 - **Session recovery:** save the desktop and restore supported apps when you
   log in again.
 
-[![Hypertile highlights: layout switching, window swaps, live zone editing, and display arrangement](docs/demo.gif)](docs/media/hypertile-highlights.mp4)
-
-[Watch the full 73-second demo](docs/media/hypertile-highlights.mp4).
+[Watch the 73-second feature demo](docs/media/hypertile-highlights.mp4).
 
 [Install](#install) · [Everyday use](#using-it) · [Overlay](#overlay) ·
 [CLI](#cli) · [Update](#update) · [Uninstall](#uninstall) ·
@@ -78,10 +81,11 @@ without `--enable`, then run its `install.sh` with `--no-menu` and/or
 |---|---|
 | `SUPER+L`, `SUPER+SHIFT+L` | next or previous layout on this workspace; the name flashes in the OSD |
 | `SUPER+ALT+L`, the bar widget, `SUPER+SPACE` > Layouts | open the overlay |
-| `SUPER+ALT+T`, then a tile number | move the active window to that tile, swapping if occupied; `Esc` cancels |
-| `SUPER+Arrow` / `SUPER+SHIFT+Arrow` | focus a window / move or swap it into the next slot |
+| `SUPER+ALT+T`, then a zone number | move the active window to that zone, swapping if occupied; `Esc` cancels |
+| `SUPER+Arrow` / `SUPER+SHIFT+Arrow` | focus a window / move or swap it into the next zone |
 | `SUPER` + left mouse drag | drag a tiled window to a numbered destination |
 | bar widget | the layout on this monitor's workspace; scroll or middle-click cycles |
+| right-click bar widget | Settings, opened at Hypertile’s menu bar position: Left, Middle, or Right |
 | `hypertile-ctl list` | the layouts on disk, the one in use starred |
 
 Layouts live one per file in `~/.config/hypr/layouts/<name>.lua`. A layout
@@ -93,34 +97,52 @@ quickly flashes each name and switches once, to the layout you stop on.
 Each workspace remembers its explicit layout in
 `~/.local/state/hypertile/workspace-rules/`. Otherwise it inherits the monitor's
 default layout, falling back to `general.layout` in `looknfeel.lua`. Choose
-**Follow monitor default** in the Layouts rail, or run
+**Apply to → Follow the display default** in the Layouts rail, or run
 `hypertile-ctl apply monitor-default`, to clear a workspace override. An active
 scene keeps its required layout until you confirm a replacement.
+
+### Settings
+
+The gear in the overlay header opens **Settings**: saving windows for startup,
+the side of the screen the rail docks on, whether the rail lists the keys, the
+menu bar position, and the desktop text size. The layout, scene, and display
+settings stay in their tabs.
+
+### Menu bar position
+
+Right-click Hypertile’s bar widget, or open **Settings** from the gear, and use
+the **Menu bar** cards: **Left**, **Middle**, or **Right**. The checked card shows the current position; changes apply
+immediately on every screen and survive restarts and updates. On a vertical
+bar, the choices become **Top**, **Middle**, and **Bottom**.
+
+Use arrow keys to focus a card and Enter or Space to select it. Escape or a
+click outside closes the popover. Placement is saved by Omarchy independently
+of your layouts and scenes.
 
 ### Moving and swapping windows
 
 `SUPER+Arrow` focuses the nearest window in that direction. `SUPER+SHIFT+Arrow`
-moves to the next layout slot: an empty slot receives the active window, and an
-occupied slot swaps windows. Other apps stay in their slots; spacers and scene
-slots marked Empty are skipped. Moving into a collapsed slot reveals the full
+moves to the next zone: an empty zone receives the active window, and an
+occupied zone swaps windows. Other apps stay in their zones; spacers and zones
+a scene marked Empty are skipped. Moving into a collapsed zone reveals the full
 layout on that workspace until the layout is reset.
 
 `SUPER+ALT+T` shows numbered destinations for the active window. Release the
-modifiers and type a tile number, or click a tile, to move there (or swap with
-its occupant). `Esc` cancels; the current tile is highlighted. Numbers match
+modifiers and type a zone's number, or click a zone, to move there (or swap with
+its occupant). `Esc` cancels; the current zone is highlighted. Numbers match
 the layout's fill order, including multiple numbers for a stacked zone.
 When a number is also a prefix (for example, 1 and 10), press `Enter` to select
-the shorter number; `Backspace` corrects input. Spacers and scene slots marked
+the shorter number; `Backspace` corrects input. Spacers and zones a scene marked
 Empty are excluded. A zone without a fill number can still be clicked.
-Outlines follow each tile's fitted window area, including aspect ratio and
+Outlines follow each zone's fitted window area, including aspect ratio and
 scale, so unused space outside that area is not outlined.
 
 `SUPER` + left mouse drag also shows those destinations for a tiled window.
 The dragged window animates and follows the pointer while the other windows
 stay in place. A valid destination under the pointer gets a bright highlight
-and thicker outline. Release with the pointer inside another tile to move
-there (or swap if occupied). Releasing in the original tile or outside the
-outlined tiles leaves windows unchanged. Destinations stay on the starting
+and thicker outline. Release with the pointer inside another zone to move
+there (or swap if occupied). Releasing in the original zone or outside the
+outlined zones leaves windows unchanged. Destinations stay on the starting
 workspace and monitor. Floating
 windows and other layouts keep their normal mouse behavior.
 
@@ -129,15 +151,22 @@ windows and other layouts keep their normal mouse behavior.
 A fullscreen layer draws the viewed layout's zones at true scale over your
 windows. Each zone carries a badge with its position in the fill order (a
 slot holding several positions shows "5 · 6" and a divider per stacked
-window) and chips for its size and constraints. The inspector rail holds
-the layout's name, the actions, and the settings for the current mode. It
-docks on the left or the right and remembers that, along with which
-sections are open, in `~/.local/state/hypertile/overlay.json`.
+window) and chips for its size and constraints; a badge under the rail
+moves clear of it. The inspector rail holds the layout's name, the main
+actions, and the settings for the current mode, with the rarer ones in
+collapsed sections. It docks on the left or the right (**Settings**) and
+remembers that, along with which sections are open, in
+`~/.local/state/hypertile/overlay.json`. A **Getting started** card shows on
+the Layouts tab until you choose **Got it**.
 
 ### Layouts tab
 
-Each tile shows its width × height in pixels beneath its fill-order number,
-updating as you resize the layout.
+Each zone shows its width × height in pixels beneath its fill-order number,
+updating as you resize the layout. Under the name, the rail says where the
+layout is in use and how windows fill it, then offers **Use** (when the
+workspace is on another layout), **Edit**, and **⋯** for Rename, Duplicate,
+Export…, the `SUPER+L` cycle switch, and Delete. **+ New** on the LAYOUTS
+heading starts a blank layout, a copy, or an import.
 
 | Key | Action |
 |---|---|
@@ -147,7 +176,7 @@ updating as you resize the layout.
 | `Esc`, click outside | close; the workspace goes back to the layout it had |
 | `Space` (hold) | peek: the overlay fades to hairlines |
 | `e` | edit the viewed layout |
-| `n` | new layout, blank or a copy of the viewed one |
+| `n` | new layout: blank (`b`), a copy of the viewed one (`c`), or an import |
 | `F2` | rename (workspace rules and the default follow) |
 | `d` | delete, after a confirmation |
 | `r` | re-read the layouts and the workspace |
@@ -157,9 +186,21 @@ Browsing switches the workspace for real, without persisting: each step is
 a compositor-only switch, debounced behind the keys so a held arrow lands
 once, and the scrim lightens so the windows show through. A layout used as
 the global or a monitor default cannot be deleted until another default is
-chosen. Workspaces whose explicit layout is deleted return to inheritance. The rail's **Workspaces** section uses the viewed
-layout on any workspace, on every workspace of a monitor, or as the
-default, and keeps the overlay open.
+chosen. Workspaces whose explicit layout is deleted return to inheritance.
+**Apply to**, collapsed until you open it, uses the viewed layout on any open
+workspace, on every workspace of a display, or as the default layout, and
+keeps the overlay open; it also drops the current workspace's own choice so it
+follows its display's default. **Displays → Workspaces** sets a display's
+default layout and the layouts of workspaces that live on it, open or not.
+
+### Sharing layouts
+
+Use **⋯ → Export…** in the Layouts tab to save the selected layout as a JSON
+file. On another installation, **+ New → Import…** adds it to the layout list. Imports are
+independent copies: if the name already exists, Hypertile adds `-2`, `-3`, and
+so on. Choose **Use** to apply the imported layout. Layout files include zone
+geometry, fill order, app rules, and layout settings; scenes, open windows,
+display settings, and workspace assignments are separate.
 
 ### Edit mode
 
@@ -176,25 +217,30 @@ saving a new layout asks before using it and replacing those assignments.
 | `x`, `Delete`, right-click | delete it; the neighbour absorbs the space |
 | drag a divider | resize the two zones it separates |
 | `Shift` + arrows | move the selected zone's edge by 1% of the screen |
-| `s` | toggle spacer (an empty hole that never takes windows) |
-| `f` | renumber: click zones in fill order, `Backspace` undoes, `Enter` finishes |
+| `s` | toggle between holding nothing (a spacer) and holding windows |
+| `f` | fill order: click zones in order, `Backspace` undoes, `Enter` finishes |
 | `u` | undo |
 | `w`, `Ctrl+S` | save (a new layout asks for a name) |
-| `Esc` | leave; with unsaved changes it asks: Discard, Save, or keep editing |
+| `Esc` | done; with unsaved changes it asks: Discard, Save, or keep editing |
 
 The rail's **Zone** section names the selected zone (names matter in the
 file and for app rules, so view mode does not show them), sets its exact
-size in percent of the screen, and its options: spacer; never split (one
-window at most, never an overflow target while another zone exists);
-stack direction; capacity; aspect ratio (1:1, 4:3, 3:2, 16:9, 21:9) and
-scale, so a 1:1 aspect ratio at 70% fits a smaller square inside the zone. **Opens here** lists the apps pinned to the zone, picked from the
-windows open now; an app allowed in several zones fills them lowest number
-first. **Layout** sets the gutters (the gap between windows, the gap
-around the layout, the border), the window corner radius for the layout's
-workspaces, the empty and lone-window policies, and whether the layout is
-in the `SUPER+L` cycle.
+size in percent of the screen, and what it **Holds**: **Windows** (more
+windows split it), **One window** (never split: more overlap it at full size,
+and it is never an overflow target while another zone exists), or **Nothing**
+(a spacer). The split and delete buttons sit on the zone's card; the rail
+shows them only for zones too small to carry them. The collapsed sections
+below hold the rest. **More options**: stack direction, capacity (No limit, or
+a number of windows), aspect ratio (1:1, 4:3, 3:2, 16:9, 21:9) and scale, so a
+1:1 aspect ratio at 70% fits a smaller square inside the zone. **Opens here**
+lists the apps pinned to the zone, picked from the windows open now; an app
+allowed in several zones fills them lowest number first. **Appearance** sets
+the gutters (the gap between windows, the gap around the layout, the border)
+and the window corner radius for the layout's workspaces. **Behaviour** sets
+the empty-zone and lone-window policies. A collapsed section's heading lists
+its settings that differ from the default.
 
-Zones you did not click while renumbering follow the clicked ones in tree
+Zones you did not click while setting the fill order follow the clicked ones in tree
 order. Discarding an unmanaged edit previews the saved layout back onto the
 workspace; nothing reloads. Discarding managed edits leaves the workspace
 as it was. Gutters and rounding travel with the layout as workspace and
@@ -202,9 +248,10 @@ window rules. See [engine internals](docs/INTERNALS.md) for switch behavior.
 
 ### Scenes tab
 
-Switch to **Scenes** to choose what each zone holds: **Local windows**, **Empty**,
-an open window, or an installed app. Click a zone, press its fill number outside
-the search field, or use `Tab` to select it. Type to search; app names can start
+Switch to **Scenes** to choose what each zone holds: **Any window** (whatever
+opens, in fill order), **Empty**, an open window, or an installed app. The app
+list starts short; **Show all** or a search reaches every app. Click a zone,
+press its fill number outside the search field, or use `Tab` to select it. Type to search; app names can start
 with digits. `↑`/`↓` select a match, `Enter` assigns it, and `Tab` moves to the
 next zone while keeping the query. `Esc` clears a query first, then closes;
 `?` shows the keys. Ordinary letters, including `hjkl`, remain search text.
@@ -239,14 +286,26 @@ their old runtime files; saved configuration and journals are preserved.
 ### Displays tab
 
 Choose **Displays** to arrange or mirror screens, change resolution, refresh
-rate, scale and rotation, or sleep and wake outputs. Select a display and use
-**Workspace → Apply** to switch its workspace immediately; **Use this workspace at
-startup** saves a starting workspace through Preview/Keep. Expand **Workspace
-preferences** to assign workspaces and choose a default layout for a monitor.
+rate, scale and rotation, or sleep and wake outputs. The pane opens from the
+rail's corner. Select a display: its name, **Use as**, resolution, scale and
+rotation come first, with **Sleep** beside the name. **Position** (exact X and
+Y) and **Workspaces** are collapsed. Under **Workspaces**, **Show** switches the
+display's workspace immediately; **Start on this workspace** saves a starting
+workspace through Preview/Keep; the display's default layout and the
+workspaces that live on it are set there too. **Forget this display** removes
+a disconnected display's saved settings immediately, without Preview or Keep,
+and preserves unrelated unsaved edits.
 
-**Wallpaper groups…** spans an image across selected displays while keeping
-others independent. Each group can follow the theme or use a fixed custom image.
-Apply wallpaper saves immediately.
+The **Display | Wallpaper** switch at the top of the inspector shows the
+selected display's wallpaper: **This display** or **Span displays** (an image
+across the displays you pick), **Theme wallpaper** or **Custom image**, and
+**Fill** or **Fit**. **Apply wallpaper** saves immediately.
+
+In a mirror group, **Use this display** fits the shared desktop to the selected
+monitor while every output retains its own resolution and refresh rate.
+Switching saves immediately; **Switch back to …** returns to the previous
+source. The active display renders the desktop and the others show a scaled
+copy. `hypertile-ctl display use-display next` cycles the focused mirror group.
 
 Arrangement and workspace preference changes use a 15-second **Keep/Revert**
 preview with an independent rollback watchdog. **Keep changes** saves adjusted
@@ -254,8 +313,9 @@ monitor fields to `~/.config/hypr/monitors.lua`, preserving unrelated and
 unchanged automatic settings. Existing monitor configuration is adopted
 automatically; setup does not rearrange your screens.
 
-**Desktop text size** applies immediately to every display and is separate
-from Preview and Keep. Sleep/wake is also immediate and temporary.
+**Desktop text size** lives in **Settings**; it applies immediately to every
+display and is separate from Preview and Keep. Sleep/wake is also immediate
+and temporary.
 See [Displays and workspace placement](docs/DISPLAYS.md) for mirroring,
 configuration ownership, reconnect behavior, and the shared UI/CLI workflow.
 
@@ -280,7 +340,7 @@ on the next Hyprland session. It restores zone layouts, native window order,
 pins, runtime sizing, workspaces, floating geometry, and focus. Applications
 restore their own tabs/documents; terminal commands are not replayed.
 
-Turn this on or off with **Startup → Save windows for startup** in the
+Turn this on or off with **Settings → Save windows for startup** in the
 overlay, or `hypertile-ctl session enable|disable`. The choice takes effect
 immediately and persists across reboots. Enabling saves the current desktop.
 
@@ -328,6 +388,10 @@ from this checkout with `HYPERTILE_SRC=$PWD bin/hypertile-ctl help`.
 ```text
 hypertile-ctl list [--json]            layouts on disk, the one in use starred; --json includes each spec
 hypertile-ctl dump <name>              layout as JSON  {"name":..., "spec":{...}}
+hypertile-ctl export <name> [file|-] [--force]
+                                       export JSON to a file or stdout; --force allows overwrite
+hypertile-ctl import [file|-] [--name NAME] [--no-reload] [--json]
+                                       import as a new layout; duplicate names gain -2, -3, ...
 hypertile-ctl validate [file|-]        check JSON, silent on success
 hypertile-ctl save [file|-] [--no-reload]
                                        write layouts/<name>.lua, reload
@@ -363,6 +427,19 @@ hypertile-ctl path [name]              layouts dir or a layout's file
 Reading a layout back executes its file with a recording stub in place of
 the engine, so hand-edited files round-trip as long as they are valid Lua.
 
+Share layouts without copying executable Lua:
+
+```bash
+hypertile-ctl export quad ~/quad.json
+hypertile-ctl import ~/quad.json
+hypertile-ctl import ~/quad.json --name work
+```
+
+Import validates the JSON before saving a new layout and reloading Hyprland;
+it does not apply the layout. It clears scene identities so copies can be used
+independently. Export refuses an existing destination unless `--force` is
+provided. The overlay's Save dialog asks before replacing an export file.
+
 ### Scenes, displays, and sessions
 
 | Command | Purpose | Reference |
@@ -387,6 +464,7 @@ it:
 | `next`, `prev`, `view <name>` | browse |
 | `use`, `apply`, `applyTo <ws>`, `applyMonitor <mon>`, `setDefault` | use the viewed layout (`use` closes) |
 | `inCycle <bool>`, `rename <name>`, `deleteLayout` | layout housekeeping |
+| `importLayout <path>`, `exportLayout <path>` | import a JSON layout, or export the viewed layout (existing export files are refused) |
 | `edit`, `newLayout`, `newBlank` | enter edit mode (copy or blank) |
 | `select <zone>`, `move <dir>`, `split <zone> <columns\|rows>`, `remove <zone>` | zones |
 | `nudge <w\|h> <delta>`, `size <zone> <w\|h> <fraction>`, `resize <path> <index> <ratio>` | sizes |
@@ -551,11 +629,12 @@ Run the tests from the repository root:
 shellcheck install.sh uninstall.sh
 python3 test/dev.py && python3 test/upgrade.py   # deployment helper: preservation, restarts, failures
 python3 test/install.py                          # installer and uninstaller
-python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_policy.py && node test/displays.js
+python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_safety.py && python3 test/display_placement.py && python3 test/display_policy.py && node test/displays.js
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
-lua test/harness.lua && lua test/loader.lua      # engine: placement, rules, capacity, messages, hot swap
+lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
+                                                 # engine, bounded Lua patterns, capacity, hot swap
 lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
 lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl
 python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lua && node test/session.js
@@ -564,6 +643,7 @@ python3 test/scenes.py && python3 test/apps.py && lua test/scenes.lua && lua tes
 node test/content.js && node test/content_keys.js  # scenes, app catalog, placement, the Scenes tab
 python3 test/browse.py && node test/browse.js    # managed layout browsing
 node test/wallpaper.js && python3 test/wallpaper.py # wallpaper groups and settings
+python3 test/wallpaper_integration.py             # opt-in installed Omarchy renderer in isolated compositor
 node test/geometry.js                            # overlay drawing math
 node test/editor.js && node test/overlay.js && node test/readability.js
                                                  # editor operations (validated by the engine), overlay, contrast
@@ -592,11 +672,14 @@ plugin/                the shell plugin: Overlay.qml, Rail.qml (inspector), Zone
                        Divider.qml, Thumb.qml, Card.qml, Chip.qml, Geometry.js (drawing),
                        Editor.js (edits); DisplaysPane.qml and Displays.js (display settings);
                        ContentPane.qml and Content.js (the Scenes tab);
+                       SettingsPanel.qml (the gear); KitButton.qml (the button
+                       every surface uses);
                        TilePicker.qml and TilePicker.js (numbered tile destinations);
                        LayoutWidget.qml (bar widget); SessionStatus.qml and Session.js
                        (session status); Service.qml (automatic setup on enable and
                        update); Readability.js (text contrast)
 hypertile.lua          engine: spec -> layout provider (hot-swappable)
+hypertile-pattern.lua  bounded Lua-pattern compiler and matcher for placement rules
 hypertile-bridge.lua   bridge: load/serialize/JSON/save/preview/apply
 hypertile-json.lua     JSON encode/decode (pure Lua)
 hypertile-layouts.lua  loader: requires every ~/.config/hypr/layouts/*.lua
