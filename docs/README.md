@@ -171,9 +171,13 @@ node test/editor.js     # editor operations
 python3 test/session.py && lua test/session.lua       # session recovery
 python3 test/scenes.py && node test/content.js         # scenes
 python3 test/display_safety.py # mode intent, PBP/docking races, safe rollback
+python3 test/display_placement.py # external resizing, adjoining edges, restart and preview races
 ```
 
 `.github/workflows/test.yml` is the authoritative list; CI runs every suite.
+
+`python3 test/display_integration.py --placement-only` checks full-width/split/full-width
+placement, reloads and daemon restarts using two isolated virtual outputs.
 
 For display source switching, run `python3 test/display_integration.py --handoff-only`
 from an Omarchy Wayland session. It uses two nested outputs, disposable windows,
