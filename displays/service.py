@@ -138,7 +138,9 @@ class Service:
             if status.get('mode') == 'restoring':
                 raise DisplayError('Wait for session restoration to finish before changing displays.')
             before = self.adapter.displays()
-            desired = validate(document, before, known=read(self.confirmed_path, {}).get('displays', []))
+            known = read(self.confirmed_path, {}).get('displays', [])
+            desired = validate(document, before, known=known)
+            removed = self.validate_removals(document, before, known)
             remaining = {d['connector']: d for d in before}
             remaining.update({d['connector']: d for d in desired})
             # Newly enabled destinations are explicitly woken below. An already
@@ -165,7 +167,7 @@ class Service:
             config_plan = self.configuration.plan([] if migrate else baseline, document) if self.configuration else None
             if self.configuration:
                 document['configuration_backed'] = True
-            pending = dict(config_plan=config_plan, token=uuid.uuid4().hex, deadline=time.time() + self.PREVIEW_SECONDS, phase='applying',
+            pending = dict(config_plan=config_plan, removed=removed, token=uuid.uuid4().hex, deadline=time.time() + self.PREVIEW_SECONDS, phase='applying',
                            before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
                            expected={d['connector']: d for d in before}, touched=[],
                            policy_state=copy.deepcopy(self.policy.state) if self.policy else None,
@@ -205,6 +207,28 @@ class Service:
             except Exception:
                 self._rollback(pending)
                 raise
+
+    def validate_removals(self, document, current, known):
+        ids = document.get('removed_displays', [])
+        if not isinstance(ids, list) or any(not isinstance(identity, str) for identity in ids) or len(set(ids)) != len(ids):
+            raise DisplayError('Removed displays must be a list of unique saved display ids.')
+        saved = {d['id']: d for d in known}
+        remaining = {d['id'] for d in document['displays']}
+        removed = []
+        for identity in ids:
+            d = saved.get(identity)
+            if not d or identity in remaining:
+                raise DisplayError('Removed display is no longer available for removal. Reset the draft and try again.')
+            if match(d, current) or any(m['connector'] == d['connector'] for m in current):
+                raise DisplayError('Cannot remove a connected display or a connector now in use: ' + d['connector'] + '. Reset the draft; use Disable to turn it off.')
+            if any(m['connector'] == d['connector'] for m in document['displays']):
+                raise DisplayError('Another saved display uses ' + d['connector'] + '. Match or remove that stale entry first.')
+            if any(m.get('mirror_of') == identity for m in document['displays']):
+                raise DisplayError('Remove saved mirrors first or choose another mirror source before removing ' + d['connector'] + '.')
+            if any(p.get('monitor') == identity for p in document.get('workspaces', {}).values()):
+                raise DisplayError('Clear workspace placement references before removing ' + d['connector'] + '; preserve their layouts.')
+            removed.append(d)
+        return removed
 
     def _rollback(self, pending):
         current = self.adapter.displays()
@@ -317,6 +341,9 @@ class Service:
             if pending['phase'] != 'preview':
                 raise DisplayError('Display changes are still being applied.')
             try:
+                # A screen can reconnect while the user inspects the preview.
+                # Recheck immediately before any durable preferences/config writes.
+                self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
                 self.adapter.verify([d for d in pending['expected'].values() if d['connector'] in pending['touched']])
             except Exception:
                 self._rollback(pending)
@@ -336,13 +363,16 @@ class Service:
                 sync_rules(pending.get('rule_files', []))
                 if self.configuration and pending.get('config_plan'):
                     def before_config():
+                        self.validate_removals(pending['document'], self.adapter.displays(), pending.get('removed', []))
                         pending['config_touched'] = True
                         atomic(self.pending_path, pending)
                     self.configuration.commit(pending['config_plan'], before_write=before_config)
                     self.adapter.reload()
                     self.adapter.verify([d for d in pending['expected'].values() if d['connector'] in pending['touched']])
                     self.reconcile(pending['document'], 'keep')
-                atomic(self.confirmed_path, dict(pending['document'], _transaction=token))
+                confirmed = dict(pending['document'], _transaction=token)
+                confirmed.pop('removed_displays', None)
+                atomic(self.confirmed_path, confirmed)
             except Exception:
                 # An fsync failure may occur after replace; inspect the durable
                 # marker before deciding whether rollback is still permissible.

@@ -6,6 +6,30 @@ function canArrange(displays) {
     }).length > 1
 }
 
+function removalError(document, display) {
+    if (!display) return "Select a saved display to remove."
+    if (display.connected) return "Connected displays can be disabled under Use as. Disconnect a display before removing its saved settings."
+    if (document.displays.some(function(d) { return d.mirror_of === display.id }))
+        return "Remove saved mirrors first, or choose another source for connected mirrors before removing this screen."
+    return ""
+}
+
+// Removal is a draft edit. Keep explicit removal intent so a stale draft or a
+// partial CLI document cannot silently delete configuration declarations.
+function removeDisplay(document, index) {
+    var display = document.displays[index]
+    var error = removalError(document, display)
+    if (error) throw new Error(error)
+    var next = clone(document)
+    next.displays.splice(index, 1)
+    next.removed_displays = (next.removed_displays || []).concat([display.id])
+    Object.keys(next.workspaces || {}).forEach(function(key) {
+        if (next.workspaces[key].monitor === display.id)
+            next.workspaces[key].monitor = null
+    })
+    return next
+}
+
 // The diagram uses compositor logical coordinates: rotate before scaling.
 function bounds(display) {
     var rotated = Number(display.transform || 0) % 2 === 1

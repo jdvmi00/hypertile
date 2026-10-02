@@ -100,7 +100,10 @@ def declarations(source):
         selector = selector[1:-1]
         if selector in rules:
             raise DisplayError('Multiple monitor declarations for ' + (selector or 'the fallback'))
-        rules[selector] = dict(fields=fields, close=ts[j][1], last=values[j - 1])
+        end = j + 2
+        if values[end:end + 1] == [';']:
+            end += 1
+        rules[selector] = dict(fields=fields, close=ts[j][1], last=values[j - 1], span=(ts[i][1], ts[end - 1][2]))
         i = j + 2
     return rules
 
@@ -169,6 +172,7 @@ class Configuration:
 
     def plan(self, before, document):
         baseline = {d['connector']: d for d in before}
+        removed = [d for d in before if d['id'] in document.get('removed_displays', [])]
         changes = []
         for d in document['displays']:
             old = baseline.get(d['connector'], {})
@@ -188,7 +192,7 @@ class Configuration:
                 fields['mirror'] = lua_string(mirror)
             if fields:
                 changes.append((d, fields))
-        if not changes:
+        if not changes and not removed:
             return None
         sources = self.sources()
         if str(self.path) not in sources:
@@ -227,6 +231,30 @@ class Configuration:
                 changed[d['connector']]['position'] = lua_string(f"{d['x']}x{d['y']}")
         edits = []
         additions = []
+        removed_selectors = set()
+        for d in removed:
+            for selector, rule in rules.items():
+                description_match = selector.startswith('desc:') and d.get('description', '').startswith(selector[5:].strip())
+                if selector != d['connector'] and not description_match:
+                    continue
+                # Prefixes may control other (including absent/future) screens.
+                # Even a full description can be shared by identical displays.
+                if description_match and (selector[5:].strip() != d.get('description') or d.get('ambiguous')
+                        or any(other['id'] != d['id'] and other.get('description', '').startswith(selector[5:].strip()) for other in before)):
+                    raise DisplayError(f'{self.path}: shared description rule {selector} prevents safe removal of {d["connector"]}. Use connector-specific rules first.')
+                a, b = rule['span']
+                edits.append((a, b, ''))
+                removed_selectors.add(selector)
+        if removed:
+            mirror_updates = {rule_for(rules, d): fields['mirror'] for d, fields in changes if 'mirror' in fields}
+            for selector, rule in rules.items():
+                if selector in removed_selectors or 'mirror' not in rule['fields']:
+                    continue
+                a, b = rule['fields']['mirror']
+                value = mirror_updates.get(selector, source[a:b])
+                literal = re.fullmatch(r"([\"'])([^\"'\\]*)\1", value)
+                if not literal or any(literal[2] == d['connector'] for d in removed):
+                    raise DisplayError(f'{self.path}: mirror rule for {selector or "the fallback"} must be cleared or assigned another source before removing a display.')
         for d, fields in changes:
             connector = d['connector']
             selector = rule_for(rules, d)
@@ -258,6 +286,8 @@ class Configuration:
             updated = updated[:a] + value + updated[b:]
         if additions:
             updated = updated.rstrip() + '\n\n-- Display settings saved by Hypertile.\n' + '\n'.join(additions) + '\n'
+        if updated == source:
+            return None
         check = subprocess.run(['lua', '-e', 'local s=io.read("*a"); local f,e=load(s); if not f then io.stderr:write(e); os.exit(1) end'],
                                input=updated, text=True, capture_output=True, timeout=5)
         if check.returncode:

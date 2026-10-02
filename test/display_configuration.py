@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'displays'))
 from configuration import Configuration, declarations
 from adapter import DisplayError, bounds
@@ -49,6 +49,105 @@ class ConfigurationTests(unittest.TestCase):
 
     def plan(self):
         return self.config.plan(self.before, self.doc)
+
+    def removal(self):
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "DP-2", mode = "preferred", position = "1920x0" }); -- spare screen\n')
+        self.saved = copy.deepcopy(self.doc)
+        atomic(self.service.confirmed_path, self.saved)
+        self.adapter.current.pop()
+        self.doc['removed_displays'] = [self.doc['displays'].pop()['id']]
+
+    def test_removal_deletes_only_specific_declaration_on_keep(self):
+        self.removal()
+        source = self.config.path.read_text()
+        result = self.service.preview(self.doc, watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), SOURCE + ' -- spare screen\n')
+        self.assertEqual(self.config.path.with_name('monitors.lua.hypertile.bak').read_text(), source)
+        self.assertEqual(len(read(self.service.confirmed_path)['displays']), 1)
+
+    def test_removal_failed_reload_restores_configuration_and_profile(self):
+        self.removal()
+        source = self.config.path.read_text()
+        self.adapter.reload = Mock(side_effect=[DisplayError('reload failed'), None])
+        result = self.service.preview(self.doc, watchdog=False)
+        with self.assertRaisesRegex(DisplayError, 'reload failed'):
+            self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_removal_rejects_external_config_edits_without_overwriting(self):
+        self.removal()
+        result = self.service.preview(self.doc, watchdog=False)
+        external = self.config.path.read_text() + '-- edited elsewhere\n'
+        self.config.path.write_text(external)
+        with self.assertRaisesRegex(DisplayError, 'changed during preview'):
+            self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), external)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def test_removal_rechecks_reconnect_just_before_configuration_write(self):
+        self.removal()
+        source = self.config.path.read_text()
+        result = self.service.preview(self.doc, watchdog=False)
+        commit = self.config.commit
+        def reconnect(plan, before_write=None):
+            self.adapter.current.append(self.saved['displays'][1])
+            commit(plan, before_write)
+        self.config.commit = reconnect
+        with self.assertRaisesRegex(DisplayError, 'connected display'):
+            self.service.keep(result['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def test_removal_preserves_fallback_and_deletes_full_description_rules(self):
+        self.removal()
+        self.before[1]['description'] = 'Spare panel ABC123'
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "desc:Spare panel ABC123", vrr = 1 })\n')
+        self.assertEqual(self.plan()['after'], SOURCE + '\n')
+
+    def test_removal_refuses_shared_description_and_config_mirror_dependencies(self):
+        self.removal()
+        self.before[1]['description'] = 'Spare panel ABC123'
+        for rule, error in [
+                ('hl.monitor({ output = "desc:Spare panel", vrr = 1 })', 'shared description'),
+                ('hl.monitor({ output = "DP-3", mirror = "DP-2" })', 'mirror rule'),
+                ('hl.monitor({ output = "DP-3", mirror = source_output })', 'mirror rule')]:
+            with self.subTest(rule=rule), self.assertRaisesRegex(DisplayError, error):
+                self.config.path.write_text(SOURCE + rule + '\n')
+                self.plan()
+        self.before[0]['description'] = self.before[1]['description']
+        self.config.path.write_text(SOURCE + 'hl.monitor({ output = "desc:Spare panel ABC123" })\n')
+        with self.assertRaisesRegex(DisplayError, 'shared description'):
+            self.plan()
+
+    def test_removal_with_no_specific_rule_keeps_configuration_untouched(self):
+        self.removal()
+        self.config.path.write_text(SOURCE)
+        self.assertIsNone(self.plan())
+
+    def test_removal_allows_clearing_existing_mirror_rule_in_same_transaction(self):
+        self.removal()
+        source = SOURCE.replace('vrr = 1,', 'vrr = 1, mirror = "DP-2",')
+        self.config.path.write_text(source)
+        self.before[0]['mirror_connector'] = 'DP-2'
+        self.doc['displays'][0]['mirror_of'] = None
+        self.assertIn('mirror = ""', self.plan()['after'])
+
+    def test_interrupted_removal_save_recovers_configuration_and_profile(self):
+        self.removal()
+        source = self.config.path.read_text()
+        result = self.service.preview(self.doc, watchdog=False)
+        pending = read(self.service.pending_path)
+        pending.update(phase='committing', config_touched=True)
+        atomic(self.service.pending_path, pending)
+        self.config.commit(pending['config_plan'])
+        self.assertNotIn('output = "DP-2"', self.config.path.read_text())
+        self.service.revert(result['token'])
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
 
     def test_only_adjusted_fields_are_replaced(self):
         self.doc['displays'][0]['refresh'] = 75
