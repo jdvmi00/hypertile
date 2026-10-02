@@ -66,6 +66,34 @@ class SessionTests(unittest.TestCase):
         notification.start()
         self.addCleanup(notification.stop)
 
+    def test_display_recovery_imports_in_a_fresh_session_process(self):
+        confirmed = self.root / "hypertile/displays/confirmed.json"
+        confirmed.parent.mkdir(parents=True)
+        confirmed.write_text('{"displays": [], "workspaces": {}}')
+        # Existing display tests add displays/ to sys.path, masking this startup
+        # failure. A fresh interpreter must resolve the real transitive imports.
+        code = """
+import json
+import subprocess
+import sys
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+import display_recovery
+record = {"desktop": {"windows": [], "workspaces": [], "monitors": []}}
+def query(argv, **kwargs):
+    output = [] if "monitors" in argv else {"str": "dwindle"}
+    return subprocess.CompletedProcess(argv, 0, json.dumps(output), "")
+with patch("subprocess.run", side_effect=query):
+    projected = display_recovery.project(record)
+assert projected == record
+assert projected is not record
+"""
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", code,
+             str(Path(__file__).resolve().parents[1] / "session")],
+            capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_restore_publishes_its_marker_under_display_guard(self):
         daemon = Service(self.store, FakeCompositor(record()["desktop"]), Launchers())
         def project(saved):
