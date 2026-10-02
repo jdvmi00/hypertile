@@ -1,0 +1,8 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline'; img-src 'self' data:; media-src 'self'; frame-ancestors 'self' https://plugins.omarchy.org https://omarchyplugins.com https://www.omarchyplugins.com
+
+/poster.jpg
+  Cache-Control: public, max-age=3600
+  Access-Control-Allow-Origin: *

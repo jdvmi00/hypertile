@@ -60,6 +60,8 @@ jobs:
         run: node test/geometry.js
       - name: Overlay editor
         run: node test/editor.js && node test/overlay.js && node test/readability.js
+      - name: Hosted explainer
+        run: node --test docs/explainer/worker.test.mjs
       - name: Installable tree excludes agent instructions
         run: test -z "$(git ls-files | grep -Ei '(^|/)(AGENTS|CLAUDE|GEMINI)\.md$' || true)"
       - name: Plugin manifest
