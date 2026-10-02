@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## 1.5.0 (2026-10-02)
+
+Hypertile 1.5.0 adds layout sharing, menu bar settings, and immediate mirror
+switching, simplifies the overlay, and improves display recovery and placement.
+
+- Layout placement caches repeated geometry and subtree scans; the bar and
+  display policy avoid redundant queries. Rule matching has bounded work so
+  pathological patterns cannot stall the compositor. Closed-window pins are
+  pruned from session snapshots.
+
+- Wallpaper groups support Omarchy's newer sized background renderer while
+  retaining asynchronous decoding, theme transitions, and custom-image fallback.
+
+- Fresh session processes can restore display settings without import failures.
+
+- A narrated two-minute explainer introduces Hypertile from the README.
 
 - Displays keep adjoining edges together when an input switch, PBP mode,
   scaling or rotation changes their logical size. Placement survives reloads
