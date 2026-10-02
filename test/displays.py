@@ -183,6 +183,112 @@ class Tests(unittest.TestCase):
         doc = self.doc()
         for d in doc['displays']: d['enabled'] = False
         with self.assertRaisesRegex(DisplayError, 'last usable'): validate(doc, self.adapter.displays())
+    def test_one_pixel_overlap_is_rejected(self):
+        doc = self.doc()
+        doc['displays'][1]['x'] = 1919
+        with self.assertRaisesRegex(DisplayError, 'overlap'):
+            validate(doc, self.adapter.displays())
+
+    def test_disabled_at_startup_gets_an_editable_advertised_mode(self):
+        self.adapter.current[1].update(enabled=False, width=0, height=0, x=-1, y=-1)
+        doc = dict(version=1, displays=self.service.catalog()['displays'], workspaces={})
+        d = doc['displays'][1]
+        self.assertEqual((d['width'], d['height'], d['refresh']), (1920, 1080, 60))
+        d.update(enabled=True, x=1920, y=0)
+        pending = self.service.preview(doc, watchdog=False)
+        self.service.keep(pending['token'])
+        self.assertTrue(self.adapter.current[1]['enabled'])
+
+    def test_disabled_catalog_retains_saved_mode_scale_and_position(self):
+        saved = dict(self.doc(), configuration_backed=True)
+        saved['displays'][1].update(enabled=False, scale=1.5, transform=1, x=1920, y=-200)
+        atomic(self.service.confirmed_path, saved)
+        self.adapter.current[1].update(enabled=False, width=0, height=0, scale=1, transform=0, x=-1, y=-1)
+        d = self.service.catalog()['displays'][1]
+        self.assertEqual((d['width'], d['height'], d['scale'], d['transform'], d['x'], d['y']),
+                         (1920, 1080, 1.5, 1, 1920, -200))
+        self.assertFalse(d['enabled'])
+
+    def test_disabled_virtual_output_can_reenable_its_confirmed_unadvertised_mode(self):
+        saved = self.doc()
+        saved['displays'][1]['enabled'] = False
+        atomic(self.service.confirmed_path, saved)
+        self.adapter.current[1].update(enabled=False, width=0, height=0, modes=[])
+        doc = dict(version=1, displays=self.service.catalog()['displays'], workspaces={})
+        doc['displays'][1]['enabled'] = True
+        with self.assertRaisesRegex(DisplayError, 'Unsupported mode'):
+            validate(doc, self.adapter.displays())
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertTrue(self.adapter.current[1]['enabled'])
+        self.service.revert(pending['token'])
+        doc['displays'][1]['width'] = 3840
+        with self.assertRaisesRegex(DisplayError, 'Unsupported mode'):
+            self.service.preview(doc, watchdog=False)
+
+    def test_preview_records_normalized_scale(self):
+        self.adapter.current[0].update(width=6144, height=2560, modes=['6144x2560@60.00Hz'])
+        self.adapter.current[1]['x'] = 6144
+        doc = self.doc()
+        doc['displays'][0]['scale'] = 1.4
+        doc['displays'][1]['x'] = 4608
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertAlmostEqual(read(self.service.pending_path)['document']['displays'][0]['scale'], 4 / 3)
+        self.service.keep(pending['token'])
+        self.assertAlmostEqual(read(self.service.confirmed_path)['displays'][0]['scale'], 4 / 3)
+
+    def test_revert_disables_new_mirror_without_disabling_its_source(self):
+        self.adapter.current[1]['enabled'] = False
+        self.adapter.workspaces = lambda: [dict(name='1', monitor='DP-1')]
+        doc = self.doc()
+        doc['displays'][1].update(enabled=True, mirror_of=doc['displays'][0]['id'])
+        pending = self.service.preview(doc, watchdog=False)
+        result = self.service.revert(pending['token'])
+        self.assertFalse(result['fallback'])
+        self.assertFalse(result['errors'])
+        self.assertTrue(self.adapter.current[0]['enabled'])
+        self.assertFalse(self.adapter.current[1]['enabled'])
+
+    def test_disabling_last_awake_output_requires_waking_destination(self):
+        self.service.power('DP-2', False)
+        doc = self.doc()
+        doc['displays'][0]['enabled'] = False
+        with self.assertRaisesRegex(DisplayError, 'Wake an extended display'):
+            self.service.preview(doc, watchdog=False)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertTrue(self.adapter.current[0]['enabled'])
+        self.service.power('DP-2', True)
+        pending = self.service.preview(doc, watchdog=False)
+        self.service.revert(pending['token'])
+
+    def test_reenabling_previously_sleeping_output_wakes_it_before_source_disable(self):
+        self.service.power('DP-2', False)
+        self.adapter.current[1]['enabled'] = False
+        doc = self.doc()
+        doc['displays'][0]['enabled'] = False
+        doc['displays'][1]['enabled'] = True
+        pending = self.service.preview(doc, watchdog=False)
+        self.assertTrue(self.awake('DP-2'))
+        self.assertLess(self.adapter.calls.index(('power', 'DP-2', True)),
+                        self.adapter.calls.index(('apply', 'DP-1', False)))
+        self.service.revert(pending['token'])
+
+    def test_unplugging_awake_output_restores_keyboard_wake(self):
+        self.adapter.options = dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False)
+        self.service.power('DP-2', False)
+        self.adapter.current = self.adapter.current[1:]
+        self.service.settle_power()
+        self.assertTrue(self.adapter.options['key_press_enables_dpms'])
+        self.adapter.current.append(display())
+        self.service.settle_power()
+        self.assertFalse(self.adapter.options['key_press_enables_dpms'])
+        self.service.power('DP-2', True)
+        self.assertFalse(self.adapter.options['key_press_enables_dpms'])
+
+    def test_sleep_all_keeps_keyboard_wake(self):
+        self.adapter.options = dict(key_press_enables_dpms=False, mouse_move_enables_dpms=False)
+        self.service.power('', False)
+        self.assertFalse(self.awake('DP-1') or self.awake('DP-2'))
+        self.assertTrue(self.adapter.options['key_press_enables_dpms'])
     def test_rotation_and_fractional_bounds(self):
         d = dict(display(), scale=1.25, transform=1)
         self.assertEqual(bounds(d), (0, 0, 864, 1536))
@@ -232,6 +338,17 @@ class Tests(unittest.TestCase):
         self.service.preview(doc, watchdog=False)
         self.service.restore()
         self.assertEqual(self.adapter.current[1]['x'], 1920)
+    def test_rollback_skips_empty_workspaces_destroyed_by_evacuation(self):
+        self.adapter.workspaces = lambda: [dict(id=1, name='1', monitor='DP-1'),
+                                           dict(id=2, name='2', monitor='DP-2')]
+        doc = self.doc()
+        doc['displays'][1]['mirror_of'] = doc['displays'][0]['id']
+        pending = self.service.preview(doc, watchdog=False)
+        self.adapter.workspaces = lambda: [dict(id=1, name='1', monitor='DP-1')]
+        result = self.service.revert(pending['token'])
+        self.assertFalse(result['errors'])
+        self.assertNotIn(('move', '2', 'DP-2'), self.adapter.calls)
+        self.assertIn(('move', '1', 'DP-1'), self.adapter.calls)
     def test_destinations_enabled_first(self):
         self.adapter.current[1]['enabled'] = False
         doc = self.doc(); doc['displays'][0]['enabled'] = False; doc['displays'][1]['enabled'] = True
@@ -528,6 +645,22 @@ class Tests(unittest.TestCase):
         self.assertGreaterEqual(pending['deadline'], start + Service.PREVIEW_SECONDS + .25)
         self.assertEqual(read(self.service.pending_path)['deadline'], pending['deadline'])
         self.assertGreater(pending['seconds'], Service.PREVIEW_SECONDS - 1)
+
+    def test_watchdog_rechecks_extended_deadline_under_lock(self):
+        doc = self.doc()
+        doc['displays'][1]['x'] = 2000
+        pending = self.service.preview(doc, watchdog=False)
+        # The watchdog saw the applying deadline expire while the writer held
+        # the lock. By the time it gets the lock, application has reset it.
+        result = self.service.revert(pending['token'], expired_only=True)
+        self.assertEqual(result['reason'], 'not-expired')
+        self.assertTrue(self.service.pending_path.exists())
+        self.assertEqual(self.adapter.current[1]['x'], 2000)
+        record = read(self.service.pending_path)
+        record['deadline'] = time.time() - 1
+        atomic(self.service.pending_path, record)
+        self.assertEqual(self.service.revert(pending['token'], expired_only=True)['reason'], 'reverted')
+        self.assertEqual(self.adapter.current[1]['x'], 1920)
 
     def test_watcher_idles_until_events_or_safety_poll(self):
         from service import Watcher

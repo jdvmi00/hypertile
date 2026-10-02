@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Displays disabled at startup retain usable saved settings or an advertised
+  mode. Returning to Extended finds free space when the old position is occupied;
+  staggered arrangements remain separate after resizing or rotation. Logical
+  bounds match Hyprland's rounding, and one-pixel overlaps are rejected.
+- Mode changes normalize scale and rearrange neighbours as one edit. Keep saves
+  the normalized scale used by preview. Revert correctly disables a mirror that
+  was previously disabled, and the watchdog rechecks the deadline under the
+  display lock so slow application does not consume the confirmation countdown.
+  Rollback skips empty workspaces removed during monitor evacuation.
+- Re-enabling a sleeping output wakes it before disabling its source. Disabling
+  the last awake extended display requires an awake destination. Keyboard wake
+  remains available when the awake output disappears or all outputs are slept.
+
 ## 1.4.2 (2026-09-20)
 
 - Displays: the preview countdown starts after every output has settled;

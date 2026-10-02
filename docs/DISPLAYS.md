@@ -4,7 +4,10 @@ Open Hypertile and choose **Displays**. The diagram uses logical desktop
 coordinates: resolution, rotation, and scale all affect a screen's size. Drag a
 screen to align its edges, or enter its X and Y position. Changing a screen's
 scale, rotation, or resolution moves the screens attached to its right and
-bottom edges by the same amount, so they stay attached instead of overlapping.
+bottom edges by the same amount. In a staggered arrangement, remaining
+collisions move to the nearest free edge while the edited screen stays in place.
+Returning a disabled or mirrored screen to Extended keeps its previous position
+when free, or finds free space if another display now occupies that position.
 
 ![Displays arrangement and settings](screenshots/displays.png)
 
@@ -79,7 +82,12 @@ saved as a disabled display.
 **Disable display** removes an output from the desktop after other destinations
 are enabled. Its workspaces remain accessible on another output. Disabling the
 last usable output is rejected. Re-enabling uses the saved settings, subject to
-hardware availability.
+hardware availability. Displays disabled at startup retain their saved mode,
+scale, rotation, and position; a newly discovered disabled output starts with
+an advertised mode. Re-enabling a previously sleeping output also wakes it.
+Wake an already enabled sleeping destination before disabling the last awake
+extended display, so the preview controls remain accessible. If the awake
+output disappears while another sleeps, keyboard wake is enabled automatically.
 
 ## Apply a workspace
 

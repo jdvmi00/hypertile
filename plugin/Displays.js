@@ -13,8 +13,8 @@ function bounds(display) {
     return {
         x: Number(display.x) || 0,
         y: Number(display.y) || 0,
-        w: (rotated ? display.height : display.width) / scale,
-        h: (rotated ? display.width : display.height) / scale
+        w: Math.round((rotated ? display.height : display.width) / scale),
+        h: Math.round((rotated ? display.width : display.height) / scale)
     }
 }
 
@@ -200,6 +200,7 @@ function setUsage(document, index, value) {
         d.enabled = value === "extended"
         if (value === "extended" && (wasMirror || wasDisabled)) {
             d.mirror_of = null
+            d.scale = cleanScale(d.width, d.height, d.scale)
             if (d.extended_position) {
                 d.x = d.extended_position.x
                 d.y = d.extended_position.y
@@ -208,7 +209,81 @@ function setUsage(document, index, value) {
                 d.x = Math.round(rect.x + rect.w)
                 d.y = Math.round(rect.y)
             }
+            placeWithoutOverlap(next.displays, index)
         }
+    }
+    return next
+}
+
+function overlaps(a, b) {
+    return Math.min(a.x + a.w, b.x + b.w) > Math.max(a.x, b.x)
+        && Math.min(a.y + a.h, b.y + b.h) > Math.max(a.y, b.y)
+}
+
+// Retain a returning display's position when free. Otherwise find the nearest
+// free edge position, considering the entire layout rather than just a neighbour.
+function placeWithoutOverlap(displays, index) {
+    var d = displays[index], rect = bounds(d)
+    if (!d.connected || !d.enabled || d.mirror_of) return false
+    var others = displays.filter(function(other, i) {
+        return i !== index && other.connected && other.enabled && !other.mirror_of
+    }).map(bounds)
+    function free(x, y) {
+        return !others.some(function(other) { return overlaps({x:x, y:y, w:rect.w, h:rect.h}, other) })
+    }
+    if (free(rect.x, rect.y)) return false
+    var xs = [rect.x], ys = [rect.y], best = null
+    others.forEach(function(other) {
+        xs.push(other.x - rect.w, other.x + other.w)
+        ys.push(other.y - rect.h, other.y + other.h)
+    })
+    xs.forEach(function(x) {
+        ys.forEach(function(y) {
+            if (Math.abs(x) > 100000 || Math.abs(y) > 100000 || !free(x, y)) return
+            var distance = (x - rect.x) * (x - rect.x) + (y - rect.y) * (y - rect.y)
+            if (!best || distance < best.distance) best = {x:x, y:y, distance:distance}
+        })
+    })
+    if (!best) return false // Service validation still prevents an unsafe preview.
+    d.x = best.x
+    d.y = best.y
+    return true
+}
+
+function cleanScale(width, height, scale) {
+    function clean(value) {
+        return value > 0 && [width, height].every(function(size) {
+            return Math.abs(size / value - Math.round(size / value)) < 0.000001
+        })
+    }
+    if (width <= 0 || height <= 0 || clean(scale)) return scale
+    var base = Math.round(scale * 120)
+    for (var step = 0; step < 90; step++) {
+        var up = (base + step) / 120, down = (base - step) / 120
+        if (clean(up)) return up
+        if (clean(down)) return down
+    }
+    // If Hyprland's bounded search has no suggestion, choose a compatible
+    // preset explicitly rather than leaving a mode edit with an invalid scale.
+    var best = 1
+    scaleOptions({width:width, height:height}).forEach(function(option) {
+        if (Math.abs(option.value - scale) < Math.abs(best - scale)) best = option.value
+    })
+    return best
+}
+
+// A mode is one edit: normalize its scale before computing the final logical
+// size, then reflow once. Intermediate width/height pairs can have other divisors.
+function updateDisplay(document, index, fields) {
+    var original = document.displays[index]
+    if (!original || !Object.keys(fields).some(function(key) {
+        return original[key] !== fields[key] && !(fields[key] === null && original[key] === undefined)
+    })) return null
+    var next = clone(document), d = next.displays[index], before = bounds(d)
+    Object.keys(fields).forEach(function(key) { d[key] = fields[key] })
+    if (["width", "height", "scale", "transform"].some(function(key) { return key in fields })) {
+        d.scale = cleanScale(d.width, d.height, d.scale)
+        reflow(next.displays, index, before)
     }
     return next
 }
@@ -278,6 +353,12 @@ function reflow(displays, index, before) {
         var rect = bounds(display)
         if (dw && rect.x >= before.x + before.w - 1) { display.x = Math.round(rect.x + dw); moved = true }
         if (dh && rect.y >= before.y + before.h - 1) { display.y = Math.round(rect.y + dh); moved = true }
+    })
+    // A staggered layout can have a neighbour spanning both rows. Moving all
+    // bottom/right edges may then collide with that neighbour; clear those
+    // collisions while keeping the edited display anchored.
+    displays.forEach(function(display, otherIndex) {
+        if (otherIndex !== index && placeWithoutOverlap(displays, otherIndex)) moved = true
     })
     return moved
 }

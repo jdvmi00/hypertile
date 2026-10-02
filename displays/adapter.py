@@ -91,7 +91,9 @@ def bounds(d):
     w, h = d['width'], d['height']
     if d['transform'] % 2:
         w, h = h, w
-    return d['x'], d['y'], w / d['scale'], h / d['scale']
+    # CMonitor stores rounded logical dimensions, including fractional scales
+    # represented with limited precision in IPC.
+    return d['x'], d['y'], round(w / d['scale']), round(h / d['scale'])
 
 
 def match(saved, current):
@@ -118,7 +120,7 @@ def runtime_mirrors(document, current):
     return dict(document, displays=displays)
 
 
-def validate(document, current):
+def validate(document, current, known=()):
     if not isinstance(document, dict) or document.get('version') != 1 or not isinstance(document.get('displays'), list):
         raise DisplayError('Expected version 1 settings with a displays array.')
     result, seen, connectors = [], set(), set()
@@ -161,9 +163,19 @@ def validate(document, current):
             raise DisplayError('Identical displays require an explicit connector match: ' + actual['connector'])
         d['connector'] = actual['connector']
         if d['enabled']:
+            if d['width'] <= 0 or d['height'] <= 0 or d['refresh'] <= 0:
+                raise DisplayError('Select a supported resolution and refresh rate before enabling ' + d['connector'] + '.')
+            if not .25 <= d['scale'] <= 8 or any(abs(size / d['scale'] - round(size / d['scale'])) > 1e-6 for size in (d['width'], d['height'])):
+                raise DisplayError('Select a scale that divides the resolution into whole logical pixels.')
             modes = [re.fullmatch(r'(\d+)x(\d+)@([\d.]+)Hz', m) for m in actual['modes']]
             current_mode = d['width'] == actual['width'] and d['height'] == actual['height'] and abs(d['refresh'] - actual['refresh']) < .1 and d['width'] > 0 and d['height'] > 0
-            if not current_mode and not any(m and int(m[1]) == d['width'] and int(m[2]) == d['height'] and abs(float(m[3]) - d['refresh']) < .1 for m in modes):
+            # Virtual backends can advertise no modes and initialize none while
+            # disabled. A previously confirmed mode is still safe to preview;
+            # arbitrary unadvertised modes remain rejected.
+            known_mode = not actual['enabled'] and not actual['modes'] and any(
+                match(saved, current) == actual and saved['width'] == d['width'] and saved['height'] == d['height']
+                and abs(saved['refresh'] - d['refresh']) < .1 for saved in known)
+            if not current_mode and not known_mode and not any(m and int(m[1]) == d['width'] and int(m[2]) == d['height'] and abs(float(m[3]) - d['refresh']) < .1 for m in modes):
                 raise DisplayError('Unsupported mode for ' + d['connector'] + '; select an advertised resolution and refresh rate.')
         result.append(d)
     merged = {d['connector']: d for d in current}
@@ -187,7 +199,7 @@ def validate(document, current):
         ax, ay, aw, ah = bounds(a)
         for b in active[i + 1:]:
             bx, by, bw, bh = bounds(b)
-            if min(ax + aw, bx + bw) - max(ax, bx) > 1 and min(ay + ah, by + bh) - max(ay, by) > 1:
+            if min(ax + aw, bx + bw) > max(ax, bx) and min(ay + ah, by + bh) > max(ay, by):
                 raise DisplayError('Displays overlap; move their edges apart or choose a mirror source.')
     return result
 

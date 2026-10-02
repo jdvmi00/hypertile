@@ -201,16 +201,19 @@ Card {
     function setDisplay(key, value) {
         if (!selectedDisplay || pending || busy)
             return;
+        var fields = {};
+        fields[key] = value;
+        var next = Displays.updateDisplay(draft, selectedIndex, fields);
+        if (!next) return;
         confirmingDiscard = false;
-        var previous = selectedDisplay[key];
-        if (previous === value || (value === null && previous === undefined))
-            return;
-        var next = Displays.clone(draft);
-        var before = Displays.bounds(next.displays[selectedIndex]);
-        next.displays[selectedIndex][key] = value;
-        // A resized screen keeps its neighbours attached instead of overlapping them.
-        if (["scale", "transform", "width", "height"].indexOf(key) >= 0 && Displays.canArrange(next.displays))
-            Displays.reflow(next.displays, selectedIndex, before);
+        draft = next;
+        dirty = true;
+    }
+    function setMode(mode) {
+        if (!selectedDisplay || pending || busy || !mode) return;
+        var next = Displays.updateDisplay(draft, selectedIndex, mode);
+        if (!next) return;
+        confirmingDiscard = false;
         draft = next;
         dirty = true;
     }
@@ -1118,11 +1121,7 @@ Card {
                         displayText: pane.selectedDisplay ? pane.selectedDisplay.width + "×" + pane.selectedDisplay.height + " @ " + Number(pane.selectedDisplay.refresh).toFixed(2) + " Hz" : ""
                         onActivated: function (index) {
                             var mode = Displays.parseMode(pane.selectedDisplay.modes[index]);
-                            if (mode) {
-                                pane.setDisplay("width", mode.width);
-                                pane.setDisplay("height", mode.height);
-                                pane.setDisplay("refresh", mode.refresh);
-                            }
+                            pane.setMode(mode);
                         }
                     }
                     Label {
