@@ -29,6 +29,10 @@ inputs. Existing automatic choices, such as the display's preferred mode,
 remain available. Choose a specific resolution and refresh rate to keep a
 fixed mode or refresh-rate cap. Moving, scaling, or rotating a screen preserves
 its mode choice; saving an automatic mode never pins its current pixel size.
+The automatic mode's displayed size is an estimate. Preview checks the mode and
+scale Hyprland actually selects, including a supported fallback, and reverts if
+the resulting arrangement overlaps. Keep saves the automatic choice and the
+resolved preview. If the mode changes again before Keep, start a fresh preview.
 Saved screens that are disconnected remain visible, with their preferences retained.
 If screens report the same identity, explicitly match each connector before
 applying. Hypertile does not guess which identical screen should inherit a

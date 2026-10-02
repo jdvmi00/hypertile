@@ -15,10 +15,10 @@ import sys
 import time
 import uuid
 
-from adapter import Adapter, DisplayError, match, same, validate, independent, apply_order, lua_string
+from adapter import Adapter, DisplayError, automatic_readback, match, same, validate, independent, apply_order, lua_string
 from policy import WorkspacePolicy, snapshot_rules, restore_rules, sync_rules, valid_workspace, selector
 from configuration import Configuration
-from modes import automatic_options, same_mode, signature
+from modes import AUTOMATIC, automatic_options, same_mode, signature
 
 
 def atomic(path, value):
@@ -99,7 +99,7 @@ class Service:
                         and display.get('mode_policy', 'fixed') == previous.get('mode_policy', 'fixed')
                         and self.configuration)
         if preserve:
-            if display['connector'] in self.configuration.explicit_outputs():
+            if self.configuration.uses_connector_rule(display):
                 self.adapter.apply(display, preserve_mode=True)
             else:
                 mode = self.configuration.mode_values([display]).get(display['connector'])
@@ -108,6 +108,30 @@ class Service:
                 self.adapter.apply(display, mode=mode)
         else:
             self.adapter.apply(display)
+
+    def _preview_apply(self, pending, display, previous, *, repeat=False, wake=False):
+        name = display['connector']
+        if name not in pending['touched']:
+            pending['touched'].append(name)
+        pending['expected'][name] = display
+        automatic = display['enabled'] and display.get('mode_policy') in AUTOMATIC
+        # Recovery can recognize an automatic fallback even if the process
+        # dies between the modeset and journalling its resolved geometry.
+        pending['resolving'] = name if automatic else None
+        atomic(self.pending_path, pending)
+        self.apply(display, previous)
+        if repeat:
+            self.check_capabilities(pending['before'], self.adapter.displays())
+            self.apply(display, previous)
+        if wake:
+            self.adapter.power(name, True)
+        current = self.adapter.verify([display], resolve_modes=True) if automatic else self.adapter.verify([display])
+        self.check_capabilities(pending['before'], current)
+        actual = next(d for d in current if d['connector'] == name)
+        pending['expected'][name] = dict(actual, mode_policy=display.get('mode_policy', 'fixed'))
+        pending['resolving'] = None
+        atomic(self.pending_path, pending)
+        return actual
 
     @staticmethod
     def check_capabilities(before, current):
@@ -235,6 +259,7 @@ class Service:
                              if not any(m['connector'] == d['connector'] for m in before)]
         config_plan = self.configuration.plan([] if migrate else baseline, document) if self.configuration else None
         if self.configuration:
+            config_sources = config_plan['sources'] if config_plan else self.configuration.sources()
             document['configuration_backed'] = True
         pending = dict(config_plan=config_plan, removed=removed, token=uuid.uuid4().hex, deadline=time.time() + self.PREVIEW_SECONDS, phase='applying',
                        before=before, workspaces=self.policy.capture_workspaces() if self.policy else self.adapter.workspaces(), document=document,
@@ -251,6 +276,7 @@ class Service:
                 self.pending_path.unlink(missing_ok=True)
                 raise
         try:
+            resolved_geometry = False
             # Establish destinations first, move assigned workspaces, disable sources last.
             for d in sorted(desired, key=apply_order) if not save_only else []:
                 old = next((m for m in before if m['connector'] == d['connector']), None)
@@ -267,29 +293,33 @@ class Service:
                     self._evacuate_disabled(remaining)
                     self.reconcile(document, 'handoff' if handoff else 'preview')
                     pending['placed'] = True
-                pending['touched'].append(d['connector'])
-                pending['expected'][d['connector']] = application
-                atomic(self.pending_path, pending)  # journal before each compositor mutation
-                self.apply(application, old)
-                if handoff and independent(d) and old and not independent(old):
-                    self.check_capabilities(before, self.adapter.displays())
-                    self.apply(application, old)
-                if independent(d) and old and not old['enabled'] and not old.get('awake', True):
-                    self.adapter.power(d['connector'], True)
-                self.adapter.verify([application])
+                actual = self._preview_apply(pending, application, old,
+                    repeat=bool(handoff and independent(d) and old and not independent(old)),
+                    wake=bool(independent(d) and old and not old['enabled'] and not old.get('awake', True)))
+                if d['enabled'] and d.get('mode_policy') in AUTOMATIC:
+                    fields = {key: actual[key] for key in ('width', 'height', 'refresh', 'scale')}
+                    resolved_geometry |= any(d[key] != value for key, value in fields.items())
+                    d.update(fields)
+                    next(saved for saved in document['displays'] if saved['id'] == d['id']).update(fields)
+                    # A larger fallback or a normalized scale can change the
+                    # arrangement. Reject overlap before disabling any source.
+                    validate(document, before, known=known)
             if not save_only and not pending.get('placed'):
                 self.reconcile(document, 'preview')
             if handoff:
                 target = next(d for d in desired if d['connector'] == handoff['target'])
-                pending['expected'][target['connector']] = target
-                atomic(self.pending_path, pending)
                 # Both displays cannot occupy the group's anchor while they are
                 # independent. Anchor the new source after demoting the old one.
                 self.check_capabilities(before, self.adapter.displays())
-                self.apply(target, target)
-                self.adapter.verify([target])
+                self._preview_apply(pending, target, target)
             actual = self.adapter.verify(desired)
             self.check_capabilities(before, actual)
+            if resolved_geometry and self.configuration:
+                plan = self.configuration.plan([] if migrate else baseline, document)
+                sources = plan['sources'] if plan else self.configuration.sources()
+                if sources != config_sources:
+                    raise DisplayError('Hyprland configuration changed during preview. Refresh and preview again.')
+                pending['config_plan'] = plan
             if not save_only:
                 self._settle_power(actual)
             if handoff:
@@ -464,7 +494,10 @@ class Service:
                 report['fallback'] = True
                 continue
             expected = pending['expected'].get(name)
-            if expected and not same(actual, expected) and not same(actual, old):
+            resolving = name == pending.get('resolving') and expected and automatic_readback(expected, actual)
+            if resolving:
+                pending['expected'][name] = dict(actual, mode_policy=expected['mode_policy'])
+            if expected and not resolving and not same(actual, expected) and not same(actual, old):
                 report['external'].append(name)
                 continue
             restore.append(old)

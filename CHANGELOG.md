@@ -7,6 +7,9 @@
   picker offers Automatic (highest resolution). Changed connections or mode
   lists stop stale previews and saves; rollback avoids replaying old modes after
   docking, monitor replacement, or picture-by-picture changes.
+  Geometry edits preserve the winning description rule's mode even when an
+  older connector rule exists. Automatic previews accept Hyprland's resolved
+  mode, check its resulting arrangement, and retain recovery after a fallback.
 
 - Window drag and drop and numbered tile outlines work on displays positioned
   above, below, or beside the desktop origin.

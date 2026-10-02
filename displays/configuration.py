@@ -171,11 +171,12 @@ class Configuration:
         visit(self.root / 'hyprland.lua')
         return seen
 
-    def explicit_outputs(self):
+    def uses_connector_rule(self, display):
+        """Only the winning rule can supply omitted fields in a partial update."""
         try:
-            return set(declarations(self.path.read_text()))
+            return rule_for(declarations(self.path.read_text()), display) == display['connector']
         except (OSError, DisplayError):
-            return set()
+            return False
 
     def mode_values(self, displays):
         """Read literal modes without evaluating user Lua or changing its source."""
