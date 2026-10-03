@@ -38,6 +38,7 @@ class Fake:
         self.fail = False
     def displays(self): return copy.deepcopy(self.current)
     def workspaces(self): return copy.deepcopy(self.live)
+    def verify_outputs(self, displays): pass
     def conflicts(self): return []
     def apply(self, d, *, preserve_mode=False, mode=None):
         self.calls.append(('apply', d['connector'], d['enabled']))
@@ -968,6 +969,49 @@ class MirrorHandoffTests(unittest.TestCase):
         self.saved = dict(version=1, displays=self.adapter.displays(),
                           workspaces={'3': dict(monitor='connector:DP-1', layout=None)})
         atomic(self.service.confirmed_path, self.saved)
+
+    def test_unregistered_promotion_keeps_original_source_and_workspaces(self):
+        def verify(displays):
+            from adapter import independent
+            if any(d['connector'] == 'DP-2' and independent(d) for d in displays):
+                raise DisplayError('Missing Wayland output: DP-2')
+        self.adapter.verify_outputs = verify
+        original = self.adapter.workspaces()
+        with self.assertRaisesRegex(DisplayError, 'Missing Wayland output'):
+            self.service.use_display('DP-2', watchdog=False)
+        self.assertFalse(any(c[:2] == ('apply', 'DP-1') for c in self.adapter.calls))
+        self.assertFalse(any(c[0] == 'move' and c[2] == 'DP-2' for c in self.adapter.calls))
+        self.assertEqual(self.adapter.workspaces(), original)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertFalse(self.adapter.current[0].get('mirror_of'))
+        self.assertEqual(self.adapter.current[1]['mirror_connector'], 'DP-1')
+
+    def test_lost_output_before_keep_restores_previous_arrangement(self):
+        from handoff import plan
+        document, _ = plan(self.saved, 'DP-2')
+        pending = self.service.preview(document, watchdog=False)
+        def verify(displays):
+            from adapter import independent
+            if any(d['connector'] == 'DP-2' and independent(d) for d in displays):
+                raise DisplayError('Missing Wayland output: DP-2')
+        self.adapter.verify_outputs = verify
+        with self.assertRaisesRegex(DisplayError, 'Missing Wayland output'):
+            self.service.keep(pending['token'])
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertFalse(self.adapter.current[0].get('mirror_of'))
+
+    def test_failed_output_recovery_retains_journal_without_power_cycling(self):
+        document = copy.deepcopy(self.saved)
+        document['displays'][0]['scale'] = 2
+        pending = self.service.preview(document, watchdog=False)
+        self.adapter.verify_outputs = Mock(side_effect=DisplayError('Wayland unavailable'))
+        result = self.service.revert(pending['token'])
+        self.assertTrue(any('Wayland unavailable' in error for error in result['errors']))
+        self.assertEqual(read(self.service.pending_path)['phase'], 'recovery-needed')
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(any(c[0] == 'power' for c in self.adapter.calls))
 
     def test_switch_carries_all_workspaces_preserves_modes_and_unrelated_output(self):
         original_modes = [(d['width'], d['height'], d['refresh'], d['scale'], d['transform']) for d in self.adapter.current]
