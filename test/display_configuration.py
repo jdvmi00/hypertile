@@ -50,6 +50,24 @@ class ConfigurationTests(unittest.TestCase):
     def plan(self):
         return self.config.plan(self.before, self.doc)
 
+    def test_missing_wayland_output_after_reload_rolls_back_config_and_preferences(self):
+        self.doc['displays'][0]['x'] = -1920
+        pending = self.service.preview(self.doc, watchdog=False)
+        registered = True
+        def reload():
+            nonlocal registered
+            registered = self.config.path.read_text() == SOURCE
+        def verify(displays):
+            if not registered:
+                raise DisplayError('Missing Wayland output after reload')
+        self.adapter.reload = reload
+        self.adapter.verify_outputs = verify
+        with self.assertRaisesRegex(DisplayError, 'Missing Wayland output'):
+            self.service.keep(pending['token'])
+        self.assertEqual(self.config.path.read_text(), SOURCE)
+        self.assertFalse(self.service.confirmed_path.exists())
+        self.assertFalse(self.service.pending_path.exists())
+
     def removal(self):
         self.config.path.write_text(SOURCE + 'hl.monitor({ output = "DP-2", mode = "preferred", position = "1920x0" }); -- spare screen\n')
         self.saved = copy.deepcopy(self.doc)

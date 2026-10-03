@@ -29,12 +29,14 @@ choose workspace placement and monitor layout defaults.
 ## Requirements
 
 Requires Omarchy 4 with its Lua Hyprland config and Omarchy shell. Development
-and local validation use Hyprland 0.56.2 / Omarchy 4.0.3, with the separately
-installed `0.56.2-2.1` compositor backport described in the
-[sizing diagnostics](docs/HYPRLAND-SIZING-BUG.md).
+and local validation use Hyprland 0.56.2 / Omarchy 4.0.3. The separately
+installed compositor backports address [window sizing](docs/HYPRLAND-SIZING-BUG.md)
+and [mirror-source output registration](docs/diagnostics/mirror-outputs/README.md).
 
 Runtime and setup use the Omarchy shell (Quickshell), Bash, `lua`, `jq`,
-Python 3, coreutils, and `flock` from util-linux, included with Omarchy.
+Python 3, coreutils, `flock` from util-linux, and `systemd-run` from systemd,
+included with Omarchy. Setup uses a user service to restart a running shell
+after plugin updates.
 Setup runs as your user; it does not install packages or patch the compositor.
 
 ## Install
@@ -561,11 +563,13 @@ is installed automatically:
 ## Update
 
 ```bash
-omarchy plugin update jmartin.hypertile
+omarchy plugin update jmartin.hypertile --yes
 ```
 
 Enabled plugins apply runtime updates automatically; disabled plugins apply
-them when next enabled. Shell restarts skip setup when the runtime is current.
+them when next enabled. Updates that change shell plugin files restart the
+shell once after successful setup, including UI-only updates. Unchanged
+reloads skip setup and do not restart the shell.
 If setup fails, the widget points to `~/.local/state/hypertile/install.log`
 (`$XDG_STATE_HOME/hypertile/install.log` when set). Resolve the reported issue,
 then disable and re-enable Hypertile to retry.
@@ -629,9 +633,10 @@ Run the tests from the repository root:
 shellcheck install.sh uninstall.sh
 python3 test/dev.py && python3 test/upgrade.py   # deployment helper: preservation, restarts, failures
 python3 test/install.py                          # installer and uninstaller
-python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_safety.py && python3 test/display_placement.py && python3 test/display_policy.py && node test/displays.js
+python3 test/wayland.py && python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_safety.py && python3 test/display_placement.py && python3 test/display_policy.py && node test/displays.js
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
+python3 test/mirror_outputs_integration.py --fixed # opt-in with the mirror-output compositor fix installed
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
 lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
                                                  # engine, bounded Lua patterns, capacity, hot swap

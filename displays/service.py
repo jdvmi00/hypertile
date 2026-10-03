@@ -244,6 +244,9 @@ class Service:
         pending['expected'][name] = dict(actual, mode_policy=display.get('mode_policy', 'fixed'))
         pending['resolving'] = None
         atomic(self.pending_path, pending)
+        # A promoted mirror can have valid IPC geometry but no wl_output.
+        # Refuse the handoff before moving workspaces or removing the old source.
+        self.adapter.verify_outputs([actual])
         return actual
 
     @staticmethod
@@ -343,6 +346,7 @@ class Service:
                 d['mode_policy'] = old['mode_policy']
         known = read(self.confirmed_path, {}).get('displays', [])
         desired = validate(document, before, known=known)
+        self.adapter.verify_outputs(before)
         removed = self.validate_removals(document, before, known)
         remaining = {d['connector']: d for d in before}
         remaining.update({d['connector']: d for d in desired})
@@ -400,6 +404,10 @@ class Service:
                 if handoff and d['connector'] == handoff['target']:
                     from handoff import promotion
                     application = promotion(d, before)
+                if not independent(d):
+                    # Recheck destinations immediately before surrendering an
+                    # existing source, including unchanged destination outputs.
+                    self.adapter.verify_outputs(list(remaining.values()))
                 if not independent(d) and not pending.get('placed'):
                     if handoff:
                         self._move_handoff(pending)
@@ -426,6 +434,7 @@ class Service:
                 self.check_capabilities(before, self.adapter.displays())
                 self._preview_apply(pending, target, target)
             actual = self.adapter.verify(desired)
+            self.adapter.verify_outputs(actual)
             self.check_capabilities(before, actual)
             if resolved_geometry and self.configuration:
                 plan = self.configuration.plan([] if migrate else baseline, document)
@@ -635,11 +644,15 @@ class Service:
                 if d.get('mirror_connector') and not any(x['connector'] == d['mirror_connector'] and independent(x) for x in live):
                     d = dict(d, mirror_of=None, mirror_connector=None)
                     report['fallback'] = True
+                if not independent(d):
+                    # Do not remove recovery controls until a real output exists.
+                    self.adapter.verify_outputs([x for x in live if x['connector'] != d['connector']])
                 self.apply(d, pending['expected'].get(d['connector']))
                 if pending.get('handoff') and independent(d) and was_mirror:
                     self.check_capabilities(live, self.adapter.displays())
                     self.apply(d, pending['expected'].get(d['connector']))
                 self.adapter.verify([d])
+                self.adapter.verify_outputs([d])
             except Exception as error:
                 report['errors'].append(str(error))
         for d in anchors:
@@ -694,6 +707,11 @@ class Service:
                 self._focus_handoff(pending['handoff'], pending['handoff']['source'])
             except Exception as error:
                 report['errors'].append(str(error))
+        try:
+            self.adapter.verify_outputs(self.adapter.displays())
+        except DisplayError as error:
+            report['errors'].append(str(error))
+            rule_errors.append(str(error))  # Retain the journal for explicit recovery.
         atomic(self.directory / 'recovery.json', report)
         if rule_errors:
             pending['phase'] = 'recovery-needed'
@@ -740,6 +758,7 @@ class Service:
             self.validate_removals(pending['document'], current, pending.get('removed', []))
             self.check_capabilities(pending['before'], current)
             self.adapter.verify(list(pending['expected'].values()))
+            self.adapter.verify_outputs(list(pending['expected'].values()))
         except Exception:
             self._rollback(pending)
             raise
@@ -770,6 +789,7 @@ class Service:
                 if not pending.get('save_only'):
                     self.reconcile(pending['document'], 'keep')
             self.check_capabilities(pending['before'], self.adapter.displays())
+            self.adapter.verify_outputs(list(pending['expected'].values()))
             confirmed = dict(pending['document'], _transaction=token)
             confirmed.pop('removed_displays', None)
             if self.configuration:

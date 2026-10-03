@@ -78,7 +78,15 @@ def main():
                         ctl('output', 'create', 'wayland', name)
                 # Parent tiling otherwise resizes nested output windows behind
                 # the test's back. Float only windows owned by this test process.
-                clients = json.loads(subprocess.check_output(['hyprctl', '-j', 'clients'], text=True))
+                # output.create returns before the second host window maps.
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    clients = json.loads(subprocess.check_output(['hyprctl', '-j', 'clients'], text=True))
+                    if sum(c.get('pid') == process.pid for c in clients) >= 2:
+                        break
+                    time.sleep(.05)
+                else:
+                    raise AssertionError('Nested output windows did not map')
                 for client in clients:
                     if client.get('pid') == process.pid:
                         selector = json.dumps('address:' + client['address'])

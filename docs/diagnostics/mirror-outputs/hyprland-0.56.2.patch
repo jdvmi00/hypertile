@@ -1,0 +1,30 @@
+--- a/src/managers/ProtocolManager.cpp
++++ b/src/managers/ProtocolManager.cpp
+@@ -138,8 +138,9 @@
+ 
+     // Outputs are a bit dumb, we have to agree.
+     static auto P = Event::bus()->m_events.monitor.added.listen([this](PHLMONITOR M) {
+-        // ignore mirrored outputs. I don't think this will ever be hit as mirrors are applied after
+-        // this event is emitted iirc.
++        // Mirrors can be connected before they become independent. Keep listening
++        // so promotion can create their wl_output global.
++        m_modeChangeListeners[M->m_name] = M->m_events.modeChanged.listen([this, M] { onMonitorModeChange(M); });
+         if (M->isMirror())
+             return;
+ 
+@@ -149,14 +150,13 @@
+         PROTO::outputs.emplace(M->m_name, ref);
+         ref->m_self = ref;
+ 
+-        m_modeChangeListeners[M->m_name] = M->m_events.modeChanged.listen([this, M] { onMonitorModeChange(M); });
+     });
+ 
+     static auto P2 = Event::bus()->m_events.monitor.removed.listen([this](PHLMONITOR M) {
++        m_modeChangeListeners.erase(M->m_name);
+         if (!PROTO::outputs.contains(M->m_name))
+             return;
+         PROTO::outputs.at(M->m_name)->remove();
+-        m_modeChangeListeners.erase(M->m_name);
+     });
+ 
+     // Core

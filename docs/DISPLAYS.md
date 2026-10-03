@@ -99,6 +99,14 @@ send an old full-screen mode to a display that has switched to picture-by-pictur
 These checks reduce unnecessary mode changes, but cannot recover a graphics
 driver that stops responding while a mode change is already in progress.
 
+Hypertile also checks that independent displays are available to Wayland apps.
+A display can appear correct in Hyprland's monitor list while being unavailable
+to the shell, wallpaper, and new windows. A promoted mirror must pass this check
+before Hypertile moves workspaces or turns the previous source into a mirror.
+Preview, Keep, and the saved configuration reload are checked too. Failed checks
+revert the transaction; Hypertile does not power-cycle displays automatically.
+See the [mirror-output diagnosis and local fix](diagnostics/mirror-outputs/README.md).
+
 ## Mirroring
 
 Select a display and choose **Use as → Mirror display …** to duplicate an
