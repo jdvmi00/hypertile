@@ -34,7 +34,9 @@ installed compositor backports address [window sizing](docs/HYPRLAND-SIZING-BUG.
 and [mirror-source output registration](docs/diagnostics/mirror-outputs/README.md).
 
 Runtime and setup use the Omarchy shell (Quickshell), Bash, `lua`, `jq`,
-Python 3, coreutils, and `flock` from util-linux, included with Omarchy.
+Python 3, coreutils, `flock` from util-linux, and `systemd-run` from systemd,
+included with Omarchy. Setup uses a user service to restart a running shell
+after plugin updates.
 Setup runs as your user; it does not install packages or patch the compositor.
 
 ## Install
