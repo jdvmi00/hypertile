@@ -2,9 +2,16 @@
 
 ## Unreleased
 
+## 1.5.1 (2026-10-02)
+
+Hypertile 1.5.1 improves plugin updates and protects display-source handoffs.
+
 - Plugin updates restart the Omarchy shell once after successful setup when
   shell plugin files change, including UI-only updates. Unchanged reloads skip
   the restart, and automatic setup preserves the widget’s placement.
+
+- Manual and automatic setup succeed while the shell is offline, without
+  attempting an unnecessary restart.
 
 - Display changes verify that independent outputs are visible to Wayland apps.
   On affected Hyprland versions, switching to a mirror that cannot become a
