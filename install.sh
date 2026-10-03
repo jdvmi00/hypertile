@@ -99,7 +99,38 @@ runtime_hash="$(
 )"
 runtime_hash="$(printf '%s' "$runtime_hash" | sha256sum | cut -d' ' -f1)"
 runtime_receipt="$state/installed-runtime.sha256"
+# Track the shell separately: a QML-only update leaves the runtime unchanged.
+plugin_hash="$(cat "$src/manifest.json" "$src"/plugin/* | sha256sum | cut -d' ' -f1)"
+plugin_receipt="$state/installed-plugin.sha256"
+
+refresh_shell() {
+  [[ -f "$plugin_receipt" && "$(cat "$plugin_receipt")" == "$plugin_hash" ]] && return 0
+
+  # Commit before queuing the restart so the new service cannot restart again.
+  printf '%s\n' "$plugin_hash" >"$plugin_receipt"
+  if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
+    # A Quickshell Process owns automatic setup; restarting its parent directly
+    # can kill the installer and restart command halfway through. Let the user
+    # manager own the restart, waiting for this install to release its lock.
+    # shellcheck disable=SC2016 # Positional arguments belong to the new shell.
+    if ! systemd-run --user --collect --no-block --quiet \
+      --description="Hypertile shell refresh" --setenv="PATH=$PATH" \
+      "$(command -v bash)" -c '
+        exec 8>"$1"
+        flock -x 8
+        exec 8>&-
+        exec "$2" restart shell
+      ' hypertile-shell-refresh "$state/install.lock" "$(command -v omarchy)"; then
+      rm -f "$plugin_receipt"
+      echo "install.sh: could not schedule shell restart; run: omarchy restart shell" >&2
+      return 1
+    fi
+    echo "scheduled shell restart to load the updated plugin"
+  fi
+}
+
 if (( automatic )) && [[ -f "$runtime_receipt" && "$(cat "$runtime_receipt")" == "$runtime_hash" && -x "$bin/hypertile-ctl" ]]; then
+  refresh_shell
   exit 0
 fi
 # Failed or interrupted installs must be retried on the next enable/reload.
@@ -259,19 +290,6 @@ if (( ! automatic )); then
     echo "shell not running; enable the plugin later with: omarchy plugin enable $plugin_id --section left --after omarchy.workspaces"
   fi
 
-  # The shell caches compiled QML for on-demand panels; a rescan does not
-  # refresh it, so changed overlay code needs a shell restart to take effect.
-  # A hash of the plugin files, kept in the state directory, says whether
-  # anything changed since the last install.
-  plugin_hash="$(cat "$src/manifest.json" "$src"/plugin/* | sha256sum | cut -d' ' -f1)"
-  hash_file="$state/installed-plugin.sha256"
-  if [[ ! -e "$hash_file" || "$(cat "$hash_file")" != "$plugin_hash" ]]; then
-    if (( shell_up )); then
-      omarchy restart shell >/dev/null 2>&1 7>&- 8>&- || true
-      echo "restarted the shell to load the updated plugin"
-    fi
-    echo "$plugin_hash" >"$hash_file"
-  fi
   echo "installed shell plugin $plugin_id (toggle: omarchy-shell shell toggle $plugin_id)"
 fi
 
@@ -436,3 +454,5 @@ fi
 printf '%s %s\n' "$want_keybinds" "$want_menu" >"$options_file"
 printf '%s\n' "$runtime_hash" >"$runtime_receipt"
 echo "installed. try: hypertile-ctl list"
+# All setup and validation must succeed before any shell restart is queued.
+refresh_shell

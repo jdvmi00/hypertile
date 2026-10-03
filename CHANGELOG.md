@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Plugin updates restart the Omarchy shell once after successful setup when
+  shell plugin files change, including UI-only updates. Unchanged reloads skip
+  the restart, and automatic setup preserves the widget’s placement.
+
 - Display changes verify that independent outputs are visible to Wayland apps.
   On affected Hyprland versions, switching to a mirror that cannot become a
   usable source now restores the previous arrangement before moving the desktop.

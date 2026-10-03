@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 
@@ -91,10 +92,11 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         plugin = self.plugin_checkout()
         shell = self.config / "omarchy/shell.json"
         shell.write_text('{"bar":{"layout":{"right":[{"id":"jmartin.hypertile"}]}}}\n')
-        # Any attempt to manage the shell during automatic setup is a bug.
+        # Automatic setup may check whether the shell is running, but must
+        # never change placement. This shell is offline.
         for name in ("omarchy", "omarchy-shell", "omarchy-plugin-enable", "omarchy-plugin-disable"):
             command = self.tools / name
-            command.write_text('#!/usr/bin/env bash\necho unexpected-shell-call >>"$HOME/shell-calls"\nexit 1\n')
+            command.write_text('#!/usr/bin/env bash\n[[ "$*" != "-q shell ping" ]] || exit 1\necho unexpected-shell-call >>"$HOME/shell-calls"\nexit 1\n')
             command.chmod(0o755)
         original = shell.read_bytes()
         self.run_script(plugin / "install.sh", "--automatic")
@@ -110,6 +112,136 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         self.assertFalse((self.home / "shell-calls").exists())
         self.assertFalse((self.home / "service-calls").exists())
         self.assertFalse(list(plugin.rglob("__pycache__")))
+
+    def mock_shell_restart(self, plugin, queue_failure=False):
+        shell = self.tools / "omarchy-shell"
+        shell.write_text('#!/usr/bin/env bash\n[[ "$*" == "-q shell ping" ]]\n')
+        shell.chmod(0o755)
+        manager = self.tools / "systemd-run"
+        manager.write_text('''#!/usr/bin/env python3
+import os
+from pathlib import Path
+import subprocess
+import sys
+assert sys.argv[1:5] == ["--user", "--collect", "--no-block", "--quiet"]
+assert sys.argv[5] == "--description=Hypertile shell refresh"
+assert sys.argv[6].startswith("--setenv=PATH=")
+state = Path(os.environ["XDG_STATE_HOME"]) / "hypertile"
+assert (state / "installed-runtime.sha256").exists()
+assert (state / "installed-plugin.sha256").exists()
+with (Path(os.environ["HOME"]) / "queued").open("a") as stream:
+    stream.write("queued\\n")
+if %r:
+    sys.exit(1)
+subprocess.Popen(sys.argv[7:], stdin=subprocess.DEVNULL,
+                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                 start_new_session=True, close_fds=True)
+''' % queue_failure)
+        manager.chmod(0o755)
+        restart = self.tools / "omarchy"
+        restart.write_text('''#!/usr/bin/env python3
+import fcntl
+import os
+from pathlib import Path
+import subprocess
+import sys
+assert sys.argv[1:] == ["restart", "shell"]
+state = Path(os.environ["XDG_STATE_HOME"]) / "hypertile"
+# The restart must inherit no installer locks and start only after setup.
+for path in ("install.lock", "displays/daemon.lock", "streams/writer.lock"):
+    with (state / path).open("a") as stream:
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        fcntl.flock(stream, fcntl.LOCK_UN)
+# Simulate the new shell mounting Service.qml again. No further restart or
+# runtime rewrite should be triggered.
+plugin = Path(os.environ["TEST_SOURCE"])
+result = subprocess.run([str(plugin / "install.sh"), "--automatic"],
+                        capture_output=True, timeout=15)
+assert result.returncode == 0, result.stderr
+with (Path(os.environ["HOME"]) / "restarted").open("a") as stream:
+    stream.write("restarted\\n")
+''')
+        restart.chmod(0o755)
+
+    def wait_for_restarts(self, count):
+        marker = self.home / "restarted"
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if marker.exists() and len(marker.read_text().splitlines()) == count:
+                return
+            time.sleep(0.02)
+        self.fail(f"expected {count} completed shell restarts")
+
+    def test_automatic_update_restarts_once_and_handles_ui_only_changes(self):
+        plugin = self.plugin_checkout()
+        shell = self.config / "omarchy/shell.json"
+        placement = '{"bar":{"layout":{"right":[{"id":"jmartin.hypertile"}]}}}\n'
+        shell.write_text(placement)
+        self.mock_shell_restart(plugin)
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.wait_for_restarts(1)
+        runtime = self.hypr / "hypertile.lua"
+        stamp = runtime.stat().st_mtime_ns
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.assertEqual((self.home / "queued").read_text(), 'queued\n')
+        self.assertEqual(runtime.stat().st_mtime_ns, stamp)
+
+        # Only panel code changes: the unchanged runtime must not hide it.
+        overlay = plugin / "plugin/Overlay.qml"
+        overlay.write_text(overlay.read_text() + '\n// updated UI\n')
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.wait_for_restarts(2)
+        self.assertEqual(runtime.stat().st_mtime_ns, stamp)
+        self.assertEqual(shell.read_text(), placement)
+        self.assertEqual((self.home / "queued").read_text(), 'queued\n' * 2)
+
+        # An engine-only update installs without restarting the shell.
+        engine = plugin / "hypertile.lua"
+        engine.write_text(engine.read_text() + '\n-- updated engine\n')
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.assertEqual(runtime.read_bytes(), engine.read_bytes())
+        self.assertEqual((self.home / "queued").read_text(), 'queued\n' * 2)
+
+    def test_failed_automatic_setup_does_not_queue_restart(self):
+        plugin = self.plugin_checkout()
+        self.mock_shell_restart(plugin)
+        # Exercise an error at the end of setup, after runtime files were copied.
+        command = self.tools / "hyprctl"
+        command.write_text('#!/usr/bin/env bash\n[[ "$1" != configerrors ]] || echo "bad config"\n')
+        command.chmod(0o755)
+        self.run_script(plugin / "install.sh", "--automatic", success=False)
+        self.assertFalse((self.home / "queued").exists())
+        self.assertFalse((self.state / "hypertile/installed-plugin.sha256").exists())
+        command.unlink()
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.wait_for_restarts(1)
+
+    def test_failed_restart_queue_can_retry_without_reinstalling_runtime(self):
+        plugin = self.plugin_checkout()
+        self.mock_shell_restart(plugin, queue_failure=True)
+        result = self.run_script(plugin / "install.sh", "--automatic", success=False)
+        self.assertIn("could not schedule shell restart", result.stderr)
+        self.assertFalse((self.state / "hypertile/installed-plugin.sha256").exists())
+        stamp = (self.hypr / "hypertile.lua").stat().st_mtime_ns
+        self.mock_shell_restart(plugin)
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.wait_for_restarts(1)
+        self.assertEqual((self.hypr / "hypertile.lua").stat().st_mtime_ns, stamp)
+
+    def test_concurrent_automatic_ui_updates_queue_one_restart(self):
+        plugin = self.plugin_checkout()
+        self.run_script(plugin / "install.sh", "--automatic")
+        self.mock_shell_restart(plugin)
+        overlay = plugin / "plugin/Overlay.qml"
+        overlay.write_text(overlay.read_text() + '\n// updated UI\n')
+        command = [str(plugin / "install.sh"), "--automatic"]
+        processes = [subprocess.Popen(command, env=self.env, stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, text=True) for _ in range(2)]
+        for process in processes:
+            stdout, stderr = process.communicate(timeout=30)
+            self.assertEqual(process.returncode, 0, stdout + stderr)
+        self.wait_for_restarts(1)
+        self.assertEqual((self.home / "queued").read_text(), 'queued\n')
 
     def test_automatic_update_preserves_layouts_and_manual_opt_outs(self):
         plugin = self.plugin_checkout()

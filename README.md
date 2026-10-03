@@ -561,11 +561,13 @@ is installed automatically:
 ## Update
 
 ```bash
-omarchy plugin update jmartin.hypertile
+omarchy plugin update jmartin.hypertile --yes
 ```
 
 Enabled plugins apply runtime updates automatically; disabled plugins apply
-them when next enabled. Shell restarts skip setup when the runtime is current.
+them when next enabled. Updates that change shell plugin files restart the
+shell once after successful setup, including UI-only updates. Unchanged
+reloads skip setup and do not restart the shell.
 If setup fails, the widget points to `~/.local/state/hypertile/install.log`
 (`$XDG_STATE_HOME/hypertile/install.log` when set). Resolve the reported issue,
 then disable and re-enable Hypertile to retry.
