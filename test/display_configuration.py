@@ -85,6 +85,123 @@ class ConfigurationTests(unittest.TestCase):
         self.assertEqual(self.config.path.with_name('monitors.lua.hypertile.bak').read_text(), source)
         self.assertEqual(len(read(self.service.confirmed_path)['displays']), 1)
 
+    def duplicate_profiles(self):
+        self.adapter.current = copy.deepcopy(self.before)
+        self.doc = dict(version=1, displays=copy.deepcopy(self.before), workspaces={})
+        self.removal()
+        first = self.saved['displays'][1]
+        first.update(id='old-panel', identity='old-panel', description='Old panel', connected=False)
+        other = dict(first, id='other-panel', identity='other-panel', description='Other panel',
+                     x=3000, width=2560, scale=2)
+        self.saved['displays'].append(other)
+        self.saved['workspaces'] = {'2': dict(monitor=first['id'], layout='lua:quad'),
+                                    '3': dict(monitor=other['id'], layout='lua:columns')}
+        atomic(self.service.confirmed_path, self.saved)
+        return first, other
+
+    def test_duplicate_stale_profiles_can_be_forgotten_in_either_order(self):
+        for reverse in (False, True):
+            with self.subTest(reverse=reverse):
+                first, other = self.duplicate_profiles()
+                source = self.config.path.read_text()
+                selected, remaining = (other, first) if reverse else (first, other)
+                self.service.remove_display(selected['id'], watchdog=False)
+                self.assertEqual(self.config.path.read_text(), source)
+                confirmed = read(self.service.confirmed_path)
+                self.assertEqual({d['id'] for d in confirmed['displays']},
+                                 {self.before[0]['id'], remaining['id']})
+                for key, preference in self.saved['workspaces'].items():
+                    self.assertEqual(confirmed['workspaces'][key], dict(
+                        preference, monitor=None if preference['monitor'] == selected['id'] else preference['monitor']))
+                self.service.remove_display(remaining['id'], watchdog=False)
+                self.assertNotIn('output = "DP-2"', self.config.path.read_text())
+                self.assertIn('lua:quad', str(read(self.service.confirmed_path)['workspaces']))
+                self.assertEqual(self.adapter.calls, [])
+                self.assertFalse(self.service.pending_path.exists())
+                self.adapter.current = copy.deepcopy(self.before)
+
+    def test_duplicate_stale_removal_preserves_connector_mirror_dependency(self):
+        first, other = self.duplicate_profiles()
+        source = self.config.path.read_text().replace('vrr = 1,', 'vrr = 1, mirror = "DP-2",')
+        self.config.path.write_text(source)
+        self.adapter.current[0]['mirror_of'] = None
+        self.service.remove_display(first['id'], watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.service.remove_display(other['id'], watchdog=False)
+        self.assertIn('mirror = ""', self.config.path.read_text())
+
+    def test_duplicate_stale_removal_deletes_only_unshared_description(self):
+        first, other = self.duplicate_profiles()
+        shared = self.config.path.read_text() + 'hl.monitor({output="desc:Other panel", vrr=1})\n'
+        self.config.path.write_text(shared + 'hl.monitor({output="desc:Old panel", vrr=1})\n')
+        self.service.remove_display(first['id'], watchdog=False)
+        self.assertEqual(self.config.path.read_text(), shared + '\n')
+
+    def test_duplicate_stale_removal_preserves_shared_description_and_computed_mirror(self):
+        first, other = self.duplicate_profiles()
+        other['description'] = first['description']
+        atomic(self.service.confirmed_path, self.saved)
+        source = (SOURCE + 'hl.monitor({output="desc:Old panel", vrr=1})\n'
+                  'hl.monitor({output="DP-3", mirror=mirror_source})\n')
+        self.config.path.write_text(source)
+        self.service.remove_display(first['id'], watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+
+    def test_duplicate_stale_removal_rejects_reused_live_connector(self):
+        first, other = self.duplicate_profiles()
+        self.adapter.current.append(dict(other, id='new-panel', identity='new-panel', connected=True))
+        source = self.config.path.read_text()
+        with self.assertRaisesRegex(DisplayError, 'connector now in use'):
+            self.service.remove_display(first['id'], watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+
+    def test_duplicate_stale_removal_failed_save_restores_profiles_and_rules(self):
+        first, _ = self.duplicate_profiles()
+        source = self.config.path.read_text() + 'hl.monitor({output="desc:Old panel", vrr=1})\n'
+        self.config.path.write_text(source)
+        self.adapter.reload = Mock(side_effect=[DisplayError('reload failed'), None])
+        with self.assertRaisesRegex(DisplayError, 'reload failed'):
+            self.service.remove_display(first['id'], watchdog=False)
+        self.assertEqual(self.config.path.read_text(), source)
+        self.assertEqual(read(self.service.confirmed_path), self.saved)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_generated_headers_are_reused_and_removed_with_last_rule(self):
+        header = '-- Display settings saved by Hypertile.'
+        for cycle in range(3):
+            self.doc['displays'][1]['x'] = 2000 + cycle
+            self.config.commit(self.plan())
+            self.assertEqual(self.config.path.read_text().count(header), 1)
+            before = copy.deepcopy(self.doc['displays'])
+            self.config.commit(self.config.plan(before, dict(version=1, displays=before[:1],
+                                                             removed_displays=[before[1]['id']])))
+            self.assertNotIn(header, self.config.path.read_text())
+        self.assertEqual(self.config.path.read_text().strip(), SOURCE.strip())
+
+    def test_generated_headers_coalesce_without_changing_user_comments_or_strings(self):
+        header = '-- Display settings saved by Hypertile.'
+        literal = 'local note = [=[\n' + header + '\n]=]\n--[[\n' + header + '\n]]\n'
+        self.config.path.write_text(literal + SOURCE + '\n' + (header + '\n\n') * 3)
+        self.doc['displays'][1]['x'] = 2000
+        self.config.commit(self.plan())
+        source = self.config.path.read_text()
+        self.assertTrue(source.startswith(literal + SOURCE))
+        self.assertEqual(source.count(header), 3)  # Two inert copies, one real header.
+        extra = dict(self.doc['displays'][1], id='extra', connector='DP-3', x=4000)
+        self.config.commit(self.config.plan(self.doc['displays'], dict(displays=self.doc['displays'] + [extra])))
+        self.assertEqual(self.config.path.read_text().count(header), 3)
+
+    def test_removal_keeps_generated_header_for_remaining_rule(self):
+        header = '-- Display settings saved by Hypertile.\n'
+        self.config.path.write_text(SOURCE + header +
+                                   'hl.monitor({output="DP-2", position="1920x0"})\n' +
+                                   '-- user comment\nhl.monitor({output="DP-3", vrr=1})\n')
+        self.doc['removed_displays'] = [self.doc['displays'].pop()['id']]
+        after = self.plan()['after']
+        self.assertIn(header, after)
+        self.assertIn('-- user comment\nhl.monitor({output="DP-3", vrr=1})', after)
+
     def test_removal_failed_reload_restores_configuration_and_profile(self):
         self.removal()
         source = self.config.path.read_text()

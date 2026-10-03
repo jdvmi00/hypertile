@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Disconnected display profiles sharing a connector can be forgotten
+  individually, preserving rules needed by remaining profiles and workspace
+  layouts.
+- Display saves reuse their generated comment header and remove empty or
+  duplicate headers left by earlier add/remove cycles.
+
 ## 1.5.1 (2026-10-02)
 
 Hypertile 1.5.1 improves plugin updates and protects display-source handoffs.

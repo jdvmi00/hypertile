@@ -589,8 +589,6 @@ class Service:
                 raise DisplayError('Removed display is no longer available for removal. Reset the draft and try again.')
             if match(d, current) or any(m['connector'] == d['connector'] for m in current):
                 raise DisplayError('Cannot remove a connected display or a connector now in use: ' + d['connector'] + '. Reset the draft; use Disable to turn it off.')
-            if any(m['connector'] == d['connector'] for m in document['displays']):
-                raise DisplayError('Another saved display uses ' + d['connector'] + '. Match or remove that stale entry first.')
             if any(m.get('mirror_of') == identity for m in document['displays']):
                 raise DisplayError('Remove saved mirrors first or choose another mirror source before removing ' + d['connector'] + '.')
             if any(p.get('monitor') == identity for p in document.get('workspaces', {}).values()):
