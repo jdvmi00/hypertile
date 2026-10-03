@@ -1,5 +1,10 @@
 # Hyprland 0.56.2: content smaller than its tile
 
+For the combined `0.56.2-3.2` build based on Arch's `0.56.2-3` recipe, see
+the [mirror-output backport](diagnostics/mirror-outputs/README.md). It retains
+the sizing correction described here and adds the mirror-source fix. The
+`0.56.2-2.1` recipe below remains the historical sizing-only recipe.
+
 After changing or saving a layout, a window can have the correct frame but
 its content occupies only the upper-left part of it. This is an identified
 Hyprland size-acknowledgment bookkeeping bug, separate from directional

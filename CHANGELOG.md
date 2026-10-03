@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Display changes verify that independent outputs are visible to Wayland apps.
+  On affected Hyprland versions, switching to a mirror that cannot become a
+  usable source now restores the previous arrangement before moving the desktop.
+  Keep and saved configuration reloads receive the same check.
+
 ## 1.5.0 (2026-10-02)
 
 Hypertile 1.5.0 adds layout sharing, menu bar settings, and immediate mirror

@@ -233,6 +233,26 @@ def validate(document, current, known=()):
 
 
 class Adapter:
+    def verify_outputs(self, displays, timeout=2.0):
+        """IPC geometry alone does not prove the desktop is usable by clients."""
+        from wayland import outputs
+        required = {d['connector'] for d in displays if independent(d)}
+        if not required:
+            return
+        deadline = time.monotonic() + timeout
+        detail = ''
+        while time.monotonic() < deadline:
+            try:
+                missing = required - outputs(timeout=max(.001, deadline - time.monotonic()))
+                if not missing:
+                    return
+                detail = 'Missing: ' + ', '.join(sorted(missing)) + '.'
+            except (OSError, ValueError) as error:
+                detail = str(error)
+            time.sleep(.05)
+        raise DisplayError('Hyprland has not made the display available to desktop apps. '
+                           + detail + ' The display change cannot safely continue.')
+
     def run(self, *args):
         result = subprocess.run(['hyprctl', *args], text=True, capture_output=True, timeout=8)
         if result.returncode or result.stdout.lower().startswith(('error', 'invalid')):
