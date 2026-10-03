@@ -40,6 +40,9 @@ disable/re-enable is used as a workaround.
 
 ## Build the local package
 
+For source-disconnect protection as well, use the newer combined
+[mirror-disconnect recipe](../mirror-disconnect/README.md).
+
 The [PKGBUILD](PKGBUILD) builds `hyprland 0.56.2-3.2`, based on Arch's
 `0.56.2-3` recipe, with both this fix and the existing size-ack backport.
 It retains the separately packaged `hyprpm`, current recipe dependencies,
