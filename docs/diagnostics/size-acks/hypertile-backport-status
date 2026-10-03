@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Read-only check of the temporary Hyprland size-ack and mirror-output backports.
+# Read-only check of the temporary Hyprland size-ack and mirror backports.
 set -uo pipefail
 
 marker=/usr/share/hyprland/backports/size-acks
@@ -34,6 +34,15 @@ else
   printf 'Mirror-output marker: %s\n' "$(cat "$mirror_marker.version")"
 fi
 
+disconnect_marker=/usr/share/hyprland/backports/mirror-disconnect
+if [[ ! -r "$disconnect_marker.version" || ! -r "$disconnect_marker.patch" ]]; then
+  issues+=("The mirror-disconnect backport is absent. Check whether this package safely handles expired mirrors and source removal before rebuilding or retiring the backport.")
+elif [[ $(cat "$disconnect_marker.version") != "$installed" ]]; then
+  issues+=("Mirror-disconnect backport marker does not match the installed package; reinstall or investigate.")
+else
+  printf 'Mirror-disconnect marker: %s\n' "$(cat "$disconnect_marker.version")"
+fi
+
 if [[ -x /usr/bin/Hyprland ]]; then
   linkage=$(ldd /usr/bin/Hyprland 2>&1)
   if [[ $? != 0 || "$linkage" == *'not found'* ]]; then
@@ -53,7 +62,7 @@ fi
 if (( ${#issues[@]} )); then
   printf '\nREVIEW NEEDED:\n'
   printf -- '- %s\n' "${issues[@]}"
-  printf '\nGuides: docs/HYPRLAND-SIZING-BUG.md and docs/diagnostics/mirror-outputs/README.md in the Hypertile checkout.\n'
+  printf '\nGuides: docs/HYPRLAND-SIZING-BUG.md, docs/diagnostics/mirror-outputs/README.md and docs/diagnostics/mirror-disconnect/README.md in the Hypertile checkout.\n'
   if [[ ${1:-} == --notify ]] && command -v notify-send >/dev/null; then
     notify-send -u critical 'Hyprland backports need review' \
       'Run hypertile-backport-status. An update, library change, or pending desktop restart needs attention.' || true

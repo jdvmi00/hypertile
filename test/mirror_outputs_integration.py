@@ -2,13 +2,15 @@
 """Isolated mirror-output regression. Requires a live Wayland parent.
 
 Default: verify Hypertile rejects the bug on the installed, unpatched compositor.
---fixed --binary PATH: verify promotion/reconnect and guarded transactions succeed.
+--fixed --binary PATH: verify promotion, teardown, window placement and transactions.
+--fallback-cycle: also attempt full backend loss/recovery (see diagnostic notes).
 Only nested WAYLAND-* outputs and private config/state are modified.
 """
 import argparse
 import json
 import os
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -21,9 +23,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--binary', default='Hyprland')
     parser.add_argument('--fixed', action='store_true')
+    parser.add_argument('--disconnect-case', choices=('all', 'multiple', 'disabled', 'expired'), default='all')
+    parser.add_argument('--fallback-cycle', action='store_true', help='also test complete backend loss/reconnect')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='ht-mo-') as directory:
         root = Path(directory)
+        (root / 'cache').mkdir()
+        control_plugin = root / 'virtual-output-control.so'
+        flags = shlex.split(subprocess.check_output(['pkg-config', '--cflags', 'hyprland'], text=True))
+        subprocess.run(['g++', '-std=c++23', '-shared', '-fPIC', '-O2', *flags,
+                        str(ROOT / 'docs/diagnostics/mirror-disconnect/virtual-output-control.cpp'),
+                        '-o', str(control_plugin)], check=True)
         runtime = root / 'r'
         runtime.mkdir(mode=0o700)
         config = root / 'c/hypr'
@@ -40,8 +50,8 @@ def main():
         if not parent.is_absolute():
             parent = Path(os.environ['XDG_RUNTIME_DIR']) / parent
         env = dict(os.environ, WAYLAND_DISPLAY=str(parent), XDG_RUNTIME_DIR=str(runtime),
-                   XDG_CONFIG_HOME=str(root / 'c'), XDG_STATE_HOME=str(root / 's'), HYPERTILE_SRC=str(ROOT),
-                   HYPRLAND_NO_SD_VARS='1', HYPRLAND_NO_SD_NOTIFY='1')
+                   XDG_CONFIG_HOME=str(root / 'c'), XDG_STATE_HOME=str(root / 's'), XDG_CACHE_HOME=str(root / 'cache'), HYPERTILE_SRC=str(ROOT),
+                   HYPRLAND_NO_SD_VARS='1', HYPRLAND_NO_SD_NOTIFY='1', HYPERTILE_MIRROR_TEST='1')
         for key in ('DISPLAY', 'HYPRLAND_INSTANCE_SIGNATURE', 'NOTIFY_SOCKET', 'WAYLAND_SOCKET'):
             env.pop(key, None)
         app = None
@@ -74,6 +84,29 @@ def main():
                 def state():
                     return {d['name']: d for d in json.loads(ctl('-j', 'monitors', 'all'))}
 
+                def create_output(name, backend='wayland'):
+                    ctl('output', 'create', backend, name)
+                    deadline = time.monotonic() + 5
+                    while time.monotonic() < deadline:
+                        if name in state():
+                            return
+                        time.sleep(.05)
+                    raise AssertionError(('output was not created', name, state()))
+
+                def control(action, *names):
+                    reply = ctl('--batch', ' '.join(('hypertile-test', action, *names))).strip()
+                    assert reply == 'ok', (action, names, reply)
+
+                def remove_output(*names):
+                    control('remove', *names)
+                    current = state()
+                    assert not set(names).intersection(current), ('outputs were not removed', names, current)
+
+                def assert_client_placed():
+                    live = {d['id'] for d in state().values() if not d['disabled'] and d['mirrorOf'] == 'none'}
+                    client = next(c for c in json.loads(ctl('-j', 'clients')) if c['address'] == address)
+                    assert client['monitor'] in live, ('client stranded on removed output', client['monitor'], live)
+
                 def outputs():
                     code = 'import sys,json;sys.path.insert(0,sys.argv[1]);from wayland import outputs;print(json.dumps(sorted(outputs())))'
                     return set(json.loads(run(sys.executable, '-c', code, str(ROOT / 'displays')).stdout))
@@ -88,14 +121,17 @@ def main():
                     raise AssertionError(('outputs', expected, actual, state()))
 
                 if 'WAYLAND-2' not in state():
-                    ctl('output', 'create', 'wayland', 'WAYLAND-2')
+                    create_output('WAYLAND-2')
+                loaded = ctl('plugin', 'load', str(control_plugin))
+                assert any(p['name'] == 'hypertile-virtual-output-control'
+                           for p in json.loads(ctl('-j', 'plugin', 'list'))), loaded
                 # Parent tiling can resize nested output windows; float only ours.
-                def float_outputs():
+                def float_outputs(count=2):
                     deadline = time.monotonic() + 5
                     while time.monotonic() < deadline:
                         clients = json.loads(subprocess.check_output(['hyprctl', '-j', 'clients'], text=True))
                         owned = [c for c in clients if c.get('pid') == process.pid]
-                        if len(owned) >= 2:
+                        if len(owned) >= count:
                             break
                         time.sleep(.05)
                     else:
@@ -154,14 +190,79 @@ def main():
                         ctl('reload')
                         wait_outputs({target})
                     # Reconnect as a mirror, then promote it again.
-                    ctl('output', 'remove', 'WAYLAND-1')
-                    ctl('output', 'create', 'wayland', 'WAYLAND-1')
+                    remove_output('WAYLAND-1')
+                    create_output('WAYLAND-1')
                     float_outputs()
                     time.sleep(.5)
                     wait_outputs({'WAYLAND-2'})
                     run(str(ROOT / 'bin/hypertile-displays'), 'use-display', 'WAYLAND-1')
                     wait_outputs({'WAYLAND-1'})
                     print('PASS: fixed startup mirror, repeated guarded handoffs, saved reload, mirrored reconnect and promotion', flush=True)
+                    if args.disconnect_case in ('all', 'disabled'):
+                        # A mirror can be in a saved rule even when disabled.
+                        # Its removal must not leave a dead reference on the source.
+                        disabled = 'hl.monitor({output="WAYLAND-3",mode="1280x720@60",scale=1,disabled=true,mirror="WAYLAND-1"})\n'
+                        monitors.write_text(monitors.read_text() + disabled)
+                        ctl('reload')
+                        create_output('WAYLAND-3')
+                        ctl('reload')
+                        time.sleep(.5)
+                        control('disabled-mirror', 'WAYLAND-3', 'WAYLAND-1')
+                        disabled_state = state()['WAYLAND-3']
+                        assert disabled_state['disabled'], disabled_state
+                        assert disabled_state['mirrorOf'] != 'none', disabled_state
+                        remove_output('WAYLAND-3')
+                        assert ctl('--batch', 'hypertile-test mirrors WAYLAND-1').strip() == '1', 'disabled mirror was not detached'
+                        remove_output('WAYLAND-1')
+                        wait_outputs({'WAYLAND-2'})
+                        assert_client_placed()
+                        print('PASS: disabled mirror followed by source disconnect', flush=True)
+                        create_output('WAYLAND-1')
+                        float_outputs()
+                        wait_outputs({'WAYLAND-1'})
+                    if args.disconnect_case in ('all', 'expired'):
+                        control('null-source', 'WAYLAND-1')
+                        assert 'WAYLAND-1' not in state()
+                        wait_outputs({'WAYLAND-2'})
+                        assert_client_placed()
+                        print('PASS: source disconnect skips a null mirror reference', flush=True)
+                        create_output('WAYLAND-1')
+                        float_outputs()
+                        wait_outputs({'WAYLAND-1'})
+                    # Removing the source must promote every surviving mirror.
+                    # Two mirrors catch iterator invalidation in source teardown.
+                    if args.disconnect_case in ('all', 'multiple'):
+                        third = 'hl.monitor({output="WAYLAND-3",mode="1280x720@60",position="2560x0",scale=1,disabled=false,mirror="WAYLAND-1"})\n'
+                        monitors.write_text(monitors.read_text() + third)
+                        ctl('reload')
+                        create_output('WAYLAND-3')
+                        float_outputs(3)
+                        wait_outputs({'WAYLAND-1'})
+                        remove_output('WAYLAND-1')
+                        wait_outputs({'WAYLAND-2', 'WAYLAND-3'})
+                        assert_client_placed()
+                        current = state()
+                        assert all(current[n]['mirrorOf'] == 'none' for n in ('WAYLAND-2', 'WAYLAND-3')), current
+                        print('PASS: source disconnect promotes both mirrors', flush=True)
+                    if args.fallback_cycle:
+                        # This additionally exercises the backend's zero-output
+                        # recovery, beyond the mirror lifetime regressions.
+                        monitors.write_text(initial + 'hl.monitor({output="FALLBACK",mode="1280x720@60",position="0x0",scale=1})\n')
+                        ctl('reload')
+                        remove_output(*(name for name in state() if name.startswith('WAYLAND-')))
+                        wait_outputs({'FALLBACK'})
+                        for reconnect in [('WAYLAND-2', 'WAYLAND-1'), ('WAYLAND-1', 'WAYLAND-2')]:
+                            for name in reconnect:
+                                create_output(name)
+                            float_outputs()
+                            wait_outputs({'WAYLAND-1'})
+                            assert any(c['address'] == address for c in json.loads(ctl('-j', 'clients')))
+                            ctl('reload')
+                            wait_outputs({'WAYLAND-1'})
+                            if reconnect[0] == 'WAYLAND-2':
+                                remove_output('WAYLAND-2', 'WAYLAND-1')
+                                wait_outputs({'FALLBACK'})
+                        print('PASS: all outputs disappear; client survives fallback and both reconnect orders', flush=True)
                 assert any(c['address'] == address for c in json.loads(ctl('-j', 'clients')))
                 assert app.poll() is None, 'existing client disconnected'
                 assert not ctl('configerrors').strip()
@@ -169,6 +270,10 @@ def main():
                 log.flush()
                 log.seek(0)
                 print(log.read()[-5000:], file=sys.stderr)
+                for path in runtime.glob('hypr/*/hyprland.log'):
+                    print(path.read_text(errors='replace')[-5000:], file=sys.stderr)
+                for path in (root / 'cache/hyprland').glob('hyprlandCrashReport*'):
+                    print(path.read_text(errors='replace')[:4000], file=sys.stderr)
                 raise
             finally:
                 for child in (app, process):
