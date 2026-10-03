@@ -451,7 +451,9 @@ class Configuration:
                                input=updated, text=True, capture_output=True, timeout=5)
         if check.returncode:
             raise DisplayError('Cannot save display configuration: ' + check.stderr.strip())
-        return dict(path=str(self.path), before=source, after=updated, sources=sources)
+        return dict(path=str(self.path), before=source, after=updated, sources=sources,
+                    position_dependencies=[d['connector'] for d, fields in changes
+                                           if 'position' in fields and d['enabled'] and not d.get('mirror_of')])
 
     def commit(self, plan, before_write=None):
         if not plan:

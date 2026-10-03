@@ -637,6 +637,7 @@ python3 test/install.py                          # installer and uninstaller
 python3 test/wayland.py && python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_safety.py && python3 test/display_placement.py && python3 test/display_policy.py && node test/displays.js
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
+python3 test/display_integration.py --auto-position-only # disable next to an automatically placed display
 python3 test/mirror_outputs_integration.py --fixed # opt-in with the mirror-output compositor fix installed
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
 lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
