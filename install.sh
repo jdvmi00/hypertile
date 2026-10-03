@@ -108,7 +108,8 @@ refresh_shell() {
 
   # Commit before queuing the restart so the new service cannot restart again.
   printf '%s\n' "$plugin_hash" >"$plugin_receipt"
-  if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
+  # Quiet mode returns success even when no shell is available.
+  if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell shell ping >/dev/null 2>&1; then
     # A Quickshell Process owns automatic setup; restarting its parent directly
     # can kill the installer and restart command halfway through. Let the user
     # manager own the restart, waiting for this install to release its lock.
@@ -262,7 +263,7 @@ if (( ! automatic )); then
   fi
 
   shell_up=0
-  if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell -q shell ping 2>/dev/null; then
+  if command -v omarchy-shell >/dev/null 2>&1 && omarchy-shell shell ping >/dev/null 2>&1; then
     shell_up=1
     # The shell only learns about a new plugin directory after a rescan.
     omarchy-shell -q shell rescanPlugins || true

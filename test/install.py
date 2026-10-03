@@ -88,16 +88,35 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
         self.env["TEST_SOURCE"] = str(plugin)
         return plugin
 
+    def mock_offline_shell(self):
+        shell = self.tools / "omarchy-shell"
+        # Match Omarchy: quiet mode succeeds even when no shell is available.
+        shell.write_text('''#!/usr/bin/env bash
+[[ "$1" != "-q" ]] || exit 0
+[[ "$*" != "shell ping" ]] || exit 1
+echo unexpected-shell-call >>"$HOME/shell-calls"
+exit 1
+''')
+        shell.chmod(0o755)
+        for name in ("omarchy", "systemd-run", "omarchy-plugin-enable", "omarchy-plugin-disable"):
+            command = self.tools / name
+            command.write_text('#!/usr/bin/env bash\necho unexpected-shell-call >>"$HOME/shell-calls"\nexit 1\n')
+            command.chmod(0o755)
+
+    def test_manual_setup_without_shell_or_user_bus(self):
+        plugin = self.plugin_checkout()
+        self.mock_offline_shell()
+        self.run_script(plugin / "install.sh")
+        self.assertTrue((self.state / "hypertile/installed-runtime.sha256").exists())
+        self.assertFalse((self.home / "shell-calls").exists())
+
     def test_automatic_setup_keeps_shell_placement_and_skips_unchanged_runtime(self):
         plugin = self.plugin_checkout()
         shell = self.config / "omarchy/shell.json"
         shell.write_text('{"bar":{"layout":{"right":[{"id":"jmartin.hypertile"}]}}}\n')
         # Automatic setup may check whether the shell is running, but must
         # never change placement. This shell is offline.
-        for name in ("omarchy", "omarchy-shell", "omarchy-plugin-enable", "omarchy-plugin-disable"):
-            command = self.tools / name
-            command.write_text('#!/usr/bin/env bash\n[[ "$*" != "-q shell ping" ]] || exit 1\necho unexpected-shell-call >>"$HOME/shell-calls"\nexit 1\n')
-            command.chmod(0o755)
+        self.mock_offline_shell()
         original = shell.read_bytes()
         self.run_script(plugin / "install.sh", "--automatic")
         self.assertEqual([p.name for p in (self.hypr / "layouts").iterdir()], ["welcome.lua"])
@@ -115,7 +134,7 @@ sys.exit(subprocess.call([os.environ["TEST_INSTALL"], *sys.argv[1:]]))
 
     def mock_shell_restart(self, plugin, queue_failure=False):
         shell = self.tools / "omarchy-shell"
-        shell.write_text('#!/usr/bin/env bash\n[[ "$*" == "-q shell ping" ]]\n')
+        shell.write_text('#!/usr/bin/env bash\n[[ "$*" == "shell ping" ]]\n')
         shell.chmod(0o755)
         manager = self.tools / "systemd-run"
         manager.write_text('''#!/usr/bin/env python3
