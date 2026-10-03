@@ -331,6 +331,67 @@ class ConfigurationTests(unittest.TestCase):
         self.doc['displays'][0]['scale'] += .0000001
         self.assertIsNone(self.plan())
 
+    def automatic_neighbor(self):
+        # A monitor update re-runs Hyprland's automatic placement, even for
+        # outputs omitted from that update. Applying DP-2 pins its position.
+        pinned = set()
+        apply = self.adapter.apply
+        def update(display, **kwargs):
+            apply(display, **kwargs)
+            if display['enabled'] and not display.get('mirror_of'):
+                pinned.add(display['connector'])
+            if 'DP-2' not in pinned:
+                first, second = self.adapter.current
+                second['x'] = first['x'] + bounds(first)[2] if first['enabled'] else 0
+        self.adapter.apply = update
+
+    def test_preview_anchors_automatic_neighbor_before_topology_changes(self):
+        self.automatic_neighbor()
+        self.doc['displays'][0]['enabled'] = False
+        pending = self.service.preview(self.doc, watchdog=False)
+        self.adapter.verify(self.doc['displays'])
+        journal = read(self.service.pending_path)
+        self.assertEqual(journal['touched'], ['DP-2', 'DP-1'])
+        self.assertEqual(self.config.path.read_text(), SOURCE)
+        self.service.revert(pending['token'])
+        self.adapter.verify(self.before)
+        self.assertFalse(self.service.pending_path.exists())
+
+    def test_preview_anchors_automatic_neighbor_before_moving_first_output(self):
+        self.automatic_neighbor()
+        self.doc['displays'][0]['x'] = -1920
+        pending = self.service.preview(self.doc, watchdog=False)
+        self.adapter.verify(self.doc['displays'])
+        self.service.revert(pending['token'])
+        self.adapter.verify(self.before)
+
+    def test_noop_preview_does_not_pin_automatic_neighbor(self):
+        self.automatic_neighbor()
+        pending = self.service.preview(self.doc, watchdog=False)
+        self.assertFalse(any(call[0] == 'apply' for call in self.adapter.calls))
+        self.assertEqual(read(self.service.pending_path)['touched'], [])
+        self.service.revert(pending['token'])
+
+    def test_automatic_neighbor_keeps_native_mode_and_recovers_after_failure(self):
+        self.config.path.write_text(SOURCE + '\nlocal native_mode = "preferred"\n'
+                                    'hl.monitor({output="DP-2", mode=native_mode, position="auto"})\n')
+        self.automatic_neighbor()
+        apply = self.adapter.apply
+        applied = []
+        def fail_disable(display, **kwargs):
+            applied.append((display['connector'], kwargs))
+            if not display['enabled']:
+                raise DisplayError('Injected disable failure')
+            apply(display, **kwargs)
+        self.adapter.apply = fail_disable
+        self.doc['displays'][0]['enabled'] = False
+        with self.assertRaisesRegex(DisplayError, 'Injected disable failure'):
+            self.service.preview(self.doc, watchdog=False)
+        self.assertEqual(applied[0], ('DP-2', {'preserve_mode': True}))
+        self.adapter.verify(self.before)
+        self.assertFalse(self.service.pending_path.exists())
+        self.assertEqual(read(self.service.directory / 'recovery.json')['errors'], [])
+
     def test_keep_saves_the_scale_used_by_preview(self):
         # A 6144x2560 mode cannot use 1.4; validation selects 4/3. Saving
         # the original request would disagree with preview and fail reload.

@@ -394,6 +394,17 @@ class Service:
                 raise
         try:
             resolved_geometry = False
+            # Unchanged outputs can still move when a neighbour is resized,
+            # moved or disabled. Pin the save plan's position dependencies
+            # before any such change, even though their live geometry already
+            # matches the draft. Journal these writes like every other preview.
+            dependencies = (config_plan or {}).get('position_dependencies', [])
+            for d in desired if not save_only else []:
+                old = next((m for m in before if m['connector'] == d['connector']), None)
+                if (d['connector'] in dependencies and old and independent(d) and same(d, old)
+                        and d.get('mode_policy', 'fixed') == old.get('mode_policy', 'fixed')):
+                    self.check_capabilities(before, self.adapter.displays())
+                    self._preview_apply(pending, d, old)
             # Establish destinations first, move assigned workspaces, disable sources last.
             for d in sorted(desired, key=apply_order) if not save_only else []:
                 old = next((m for m in before if m['connector'] == d['connector']), None)

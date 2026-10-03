@@ -494,9 +494,11 @@ Card {
             waitForEnd: true
         }
         onExited: function (code) {
-            if (code !== 0)
+            if (code !== 0) {
                 pane.error = pane.serviceError(commandOutput.text, commandError.text, "The display change failed. Previous settings are being restored.");
-            else {
+                if (command[2] === "preview" && pane.dirty)
+                    pane.error = "Preview failed. The controls still show your unsaved edits. Choose Discard to show current settings.\n" + pane.error;
+            } else {
                 try {
                     var result = JSON.parse(commandOutput.text);
                     if (result.pending)

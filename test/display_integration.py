@@ -4,6 +4,7 @@ Run from a Wayland session: python3 test/display_integration.py.
 Use --workspace-only for immediate workspace switching without mode changes.
 Use --removal-only for immediate disconnected-profile removal.
 Use --disable-only for workspace/window migration and rollback.
+Use --auto-position-only for disabling a neighbour of an automatically placed output.
 Use --mode-safety-only for partial mode preservation and virtual-output guards.
 Use --placement-only for external resizing, adjoining edges and watcher restarts.
 No physical output or user configuration is changed.
@@ -99,6 +100,14 @@ def main():
                 assert all(d['connector'].startswith('WAYLAND-') for d in initial['displays'] if d['enabled']), initial
                 outputs = [d for d in initial['displays'] if d['connector'].startswith('WAYLAND-')]
                 assert len(outputs) == 2, initial
+                automatic_position = '--auto-position-only' in sys.argv
+                if automatic_position:
+                    monitors.write_text(monitors.read_text().replace('position="1280x0"', 'position="auto"'))
+                    automatic_source = monitors.read_text()
+                    ctl('reload')
+                    time.sleep(.5)
+                    outputs = display('list')['displays']
+                    assert next(d for d in outputs if d['connector'] == 'WAYLAND-2')['x'] == 1280
                 if '--placement-only' in sys.argv:
                     # Physical PBP switches change modes without a position edit.
                     # Exercise the same transition with isolated virtual outputs.
@@ -215,7 +224,7 @@ hl.monitor({output="WAYLAND-2", mode="1280x720@60", position="1280x0", scale=1})
                     assert not ctl('configerrors').strip()
                     print('PASS: native geometry updates preserve mode through Keep/reload/Revert; unsupported automatic selectors are rejected without mutation')
                     return
-                if '--disable-only' in sys.argv:
+                if '--disable-only' in sys.argv or automatic_position:
                     applications = []
                     source, target = outputs
                     try:
@@ -238,6 +247,10 @@ hl.monitor({output="WAYLAND-2", mode="1280x720@60", position="1280x0", scale=1})
                         original = json.loads(ctl('-j', 'clients'))
 
                         def check_desktop(connector):
+                            if automatic_position:
+                                actual = next(m for m in json.loads(ctl('-j', 'monitors')) if m['name'] == target['connector'])
+                                assert (actual['x'], actual['y'], actual['width'], actual['height'], actual['scale']) == (
+                                    target['x'], target['y'], target['width'], target['height'], target['scale']), actual
                             workspaces = json.loads(ctl('-j', 'workspaces'))
                             expected = {'81', 'research', 'special:scratchpad'}
                             assert {w['name'] for w in workspaces if w['name'] in expected and w['monitor'] == connector} == expected, workspaces
@@ -253,9 +266,18 @@ hl.monitor({output="WAYLAND-2", mode="1280x720@60", position="1280x0", scale=1})
                         source['enabled'] = False
                         pending = display('preview', '--json', json.dumps(disabled))
                         check_desktop(target['connector'])
+                        if automatic_position:
+                            assert monitors.read_text() == automatic_source, 'Preview must not save the anchor'
                         result = display('revert', pending['token'])
                         assert not result['errors'], result
                         check_desktop(source['connector'])
+                        if automatic_position:
+                            # Rollback restores geometry; reload also restores
+                            # the automatic rule before exercising Keep.
+                            assert monitors.read_text() == automatic_source
+                            ctl('reload')
+                            time.sleep(.5)
+                            check_desktop(source['connector'])
                         pending = display('preview', '--json', json.dumps(disabled))
                         display('keep', pending['token'])
                         check_desktop(target['connector'])
@@ -264,6 +286,8 @@ hl.monitor({output="WAYLAND-2", mode="1280x720@60", position="1280x0", scale=1})
                         assert not display('status')['pending']
                         assert display('list')['confirmed']['workspaces'] == disabled['workspaces']
                         print('PASS: disabling moves numbered, named and scratchpad workspaces with all windows; Revert restores them, Keep/reload preserves migration')
+                        if automatic_position:
+                            print('PASS: automatic neighbour retains its position and mode through Preview, Revert, Keep and reload')
                         return
                     finally:
                         for app in applications:
