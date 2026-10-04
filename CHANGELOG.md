@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 1.5.2 (2026-10-04)
+
+Hypertile 1.5.2 improves display placement previews and saved-profile cleanup.
+
+- Automatically placed displays keep their position and native mode while a
+  neighbour is moved, resized or disabled. Preview changes are journaled for
+  rollback, and Keep preserves the arrangement through configuration reloads.
+- Failed display previews explain that the controls still show unsaved edits
+  and that Discard returns them to the current settings.
+- Disconnected display profiles sharing a connector can be forgotten
+  individually, preserving rules needed by remaining profiles and workspace
+  layouts.
+- Display saves reuse their generated comment header and remove empty or
+  duplicate headers left by earlier add/remove cycles.
+- Document a separately installed Hyprland 0.56.2 mirror-disconnect backport
+  and extend isolated checks to verify actual output removal, safe mirror
+  teardown and workspace transfer. The plugin does not install or patch the
+  compositor; physical power/input-cycle validation remains outstanding.
+
 ## 1.5.1 (2026-10-02)
 
 Hypertile 1.5.1 improves plugin updates and protects display-source handoffs.

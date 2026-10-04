@@ -13,8 +13,8 @@ from adapter import DisplayError, lua_string
 from modes import AUTOMATIC, value as mode_value
 
 
-def tokens(source):
-    """Lua lexical tokens with source offsets, excluding whitespace/comments."""
+def tokens(source, *, comments=False):
+    """Lua lexical tokens with source offsets, optionally including comments."""
     result = []
     i = 0
     while i < len(source):
@@ -31,12 +31,14 @@ def tokens(source):
             if end < 0:
                 raise DisplayError('Unterminated Lua long string/comment')
             i = end + len(long[1]) + 2
-            if not comment:
+            if not comment or comments:
                 result.append((source[start:i], start, i))
             continue
         if comment:
             end = source.find('\n', i)
             i = len(source) if end < 0 else end
+            if comments:
+                result.append((source[start:i], start, i))
             continue
         if source[i] in ('"', "'"):
             quote = source[i]
@@ -107,6 +109,36 @@ def declarations(source):
         rules[selector] = dict(fields=fields, close=ts[j][1], last=values[j - 1], span=(ts[i][1], ts[end - 1][2]))
         i = j + 2
     return rules
+
+
+SAVED_HEADER = '-- Display settings saved by Hypertile.'
+
+
+def clean_saved_headers(source):
+    """Keep one marker per generated rule group, and none for empty groups."""
+    spans = [rule['span'] for rule in declarations(source).values()]
+    ts = tokens(source, comments=True)
+    code = [a for value, a, _ in ts if not value.startswith('--')]
+    starts = {a for a, _ in spans}
+    edits = []
+    in_group = False
+    for value, a, b in ts:
+        if any(start <= a < end for start, end in spans):
+            continue
+        if not value.startswith('--'):
+            in_group = False
+            continue
+        line = source.rfind('\n', 0, a) + 1
+        if value.rstrip() != SAVED_HEADER or source[line:a].strip():
+            continue
+        following = next((offset for offset in code if offset > b), None)
+        if in_group or following not in starts:
+            edits.append((line, b + (source[b:b + 1] == '\n')))
+        else:
+            in_group = True
+    for a, b in reversed(edits):
+        source = source[:a] + source[b:]
+    return source
 
 
 def declares_monitors(source):
@@ -293,10 +325,17 @@ class Configuration:
 
     def plan(self, before, document):
         baseline = {d['connector']: d for d in before}
+        # Disconnected identities can reuse a connector with different geometry.
+        # Forgetting one must not turn the other's saved values into edits.
+        identities = {d['id']: d for d in before}
         removed = [d for d in before if d['id'] in document.get('removed_displays', [])]
+        retained_connectors = {d['connector'] for d in document['displays']}
+        removed_connectors = {d['connector'] for d in removed} - retained_connectors
         changes = []
         for d in document['displays']:
             old = baseline.get(d['connector'], {})
+            if d.get('connected') is False:
+                old = identities.get(d['id'], old)
             groups = {'mode': ('width', 'height', 'refresh'), 'position': ('x', 'y'),
                       'scale': ('scale',), 'transform': ('transform',), 'disabled': ('enabled',)}
             values = dict(mode=lua_string(mode_value(d)),
@@ -336,8 +375,7 @@ class Configuration:
             rules = declarations(source)
         except DisplayError as error:
             raise DisplayError(f'{self.path}: {error}') from error
-        if removed:
-            removed_connectors = {d['connector'] for d in removed}
+        if removed_connectors:
             changed = {d['connector']: fields for d, fields in changes}
             for d in document['displays']:
                 old = baseline.get(d['connector'], {})
@@ -396,6 +434,16 @@ class Configuration:
                 description_match = selector.startswith('desc:') and d.get('description', '').startswith(selector[5:].strip())
                 if selector != d['connector'] and not description_match:
                     continue
+                # Rules belong to outputs, while Forget removes one identity.
+                # Retain declarations still needed by a saved peer.
+                if selector == d['connector'] and selector in retained_connectors:
+                    continue
+                if description_match and any(other['connector'] == d['connector']
+                        and other.get('description', '').startswith(selector[5:].strip())
+                        for other in document['displays']):
+                    continue
+                if selector in removed_selectors:
+                    continue
                 # Prefixes may control other (including absent/future) screens.
                 # Even a full description can be shared by identical displays.
                 if description_match and (selector[5:].strip() != d.get('description') or d.get('ambiguous')
@@ -404,7 +452,7 @@ class Configuration:
                 a, b = rule['span']
                 edits.append((a, b, ''))
                 removed_selectors.add(selector)
-        if removed:
+        if removed_connectors:
             mirror_updates = {rule_for(rules, d): fields['mirror'] for d, fields in changes if 'mirror' in fields}
             for selector, rule in rules.items():
                 if selector in removed_selectors or 'mirror' not in rule['fields']:
@@ -412,7 +460,7 @@ class Configuration:
                 a, b = rule['fields']['mirror']
                 value = mirror_updates.get(selector, source[a:b])
                 literal = re.fullmatch(r"([\"'])([^\"'\\]*)\1", value)
-                if not literal or any(literal[2] == d['connector'] for d in removed):
+                if not literal or literal[2] in removed_connectors:
                     raise DisplayError(f'{self.path}: mirror rule for {selector or "the fallback"} must be cleared or assigned another source before removing a display.')
         for d, fields in changes:
             connector = d['connector']
@@ -444,14 +492,17 @@ class Configuration:
         for a, b, value in sorted(edits, reverse=True):
             updated = updated[:a] + value + updated[b:]
         if additions:
-            updated = updated.rstrip() + '\n\n-- Display settings saved by Hypertile.\n' + '\n'.join(additions) + '\n'
+            updated = updated.rstrip() + '\n\n' + SAVED_HEADER + '\n' + '\n'.join(additions) + '\n'
+        updated = clean_saved_headers(updated)
         if updated == source:
             return None
         check = subprocess.run(['lua', '-e', 'local s=io.read("*a"); local f,e=load(s); if not f then io.stderr:write(e); os.exit(1) end'],
                                input=updated, text=True, capture_output=True, timeout=5)
         if check.returncode:
             raise DisplayError('Cannot save display configuration: ' + check.stderr.strip())
-        return dict(path=str(self.path), before=source, after=updated, sources=sources)
+        return dict(path=str(self.path), before=source, after=updated, sources=sources,
+                    position_dependencies=[d['connector'] for d, fields in changes
+                                           if 'position' in fields and d['enabled'] and not d.get('mirror_of')])
 
     def commit(self, plan, before_write=None):
         if not plan:

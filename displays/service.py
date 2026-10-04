@@ -394,6 +394,17 @@ class Service:
                 raise
         try:
             resolved_geometry = False
+            # Unchanged outputs can still move when a neighbour is resized,
+            # moved or disabled. Pin the save plan's position dependencies
+            # before any such change, even though their live geometry already
+            # matches the draft. Journal these writes like every other preview.
+            dependencies = (config_plan or {}).get('position_dependencies', [])
+            for d in desired if not save_only else []:
+                old = next((m for m in before if m['connector'] == d['connector']), None)
+                if (d['connector'] in dependencies and old and independent(d) and same(d, old)
+                        and d.get('mode_policy', 'fixed') == old.get('mode_policy', 'fixed')):
+                    self.check_capabilities(before, self.adapter.displays())
+                    self._preview_apply(pending, d, old)
             # Establish destinations first, move assigned workspaces, disable sources last.
             for d in sorted(desired, key=apply_order) if not save_only else []:
                 old = next((m for m in before if m['connector'] == d['connector']), None)
@@ -578,8 +589,6 @@ class Service:
                 raise DisplayError('Removed display is no longer available for removal. Reset the draft and try again.')
             if match(d, current) or any(m['connector'] == d['connector'] for m in current):
                 raise DisplayError('Cannot remove a connected display or a connector now in use: ' + d['connector'] + '. Reset the draft; use Disable to turn it off.')
-            if any(m['connector'] == d['connector'] for m in document['displays']):
-                raise DisplayError('Another saved display uses ' + d['connector'] + '. Match or remove that stale entry first.')
             if any(m.get('mirror_of') == identity for m in document['displays']):
                 raise DisplayError('Remove saved mirrors first or choose another mirror source before removing ' + d['connector'] + '.')
             if any(p.get('monitor') == identity for p in document.get('workspaces', {}).values()):

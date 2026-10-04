@@ -1,0 +1,76 @@
+--- a/src/output/Monitor.cpp
++++ b/src/output/Monitor.cpp
+@@ -403,7 +403,18 @@
+     m_frameScheduler.reset();
+     clearModeRetry();
+ 
+-    if (!m_enabled || g_pCompositor->m_isShuttingDown)
++    if (g_pCompositor->m_isShuttingDown)
++        return;
++
++    // Disabled outputs can still carry a mirror rule. Detach them before the
++    // early return so destroying one cannot leave an expired mirror behind.
++    if (const auto SOURCE = m_mirrorOf.lock()) {
++        std::erase(SOURCE->m_mirrors, m_self);
++        Pointer::mgr()->unlockSoftwareForMonitor(SOURCE);
++    }
++    m_mirrorOf.reset();
++
++    if (!m_enabled)
+         return;
+ 
+     Log::logger->log(Log::DEBUG, "onDisconnect called for {}", m_name);
+@@ -418,30 +429,26 @@
+         State::workspaceState()->rememberWorkspaceForMonitor(m_name, m_activeWorkspace->m_id);
+     }
+ 
+-    // Cleanup everything. Move windows back, snap cursor, shit.
++    if (!m_mirrors.empty()) {
++        // setMirror removes itself from m_mirrors. Traverse a snapshot and
++        // hold each surviving monitor alive while its relationship changes.
++        const auto MIRRORS = m_mirrors;
++        for (auto const& m : MIRRORS) {
++            if (const auto MIRROR = m.lock(); MIRROR && MIRROR->m_mirrorOf == m_self)
++                MIRROR->setMirror("");
++        }
++        m_mirrors.clear();
++
++        Config::monitorRuleMgr()->scheduleReload();
++    }
++
++    // Choose after promotion so a surviving mirror can receive workspaces.
+     PHLMONITOR BACKUPMON = nullptr;
+     for (auto const& m : State::monitorState()->monitors()) {
+         if (m.get() != this) {
+             BACKUPMON = m;
+             break;
+         }
+-    }
+-
+-    // remove mirror
+-    if (m_mirrorOf) {
+-        m_mirrorOf->m_mirrors.erase(std::ranges::find_if(m_mirrorOf->m_mirrors, [&](const auto& other) { return other == m_self; }));
+-
+-        // unlock software for mirrored monitor
+-        Pointer::mgr()->unlockSoftwareForMonitor(m_mirrorOf.lock());
+-        m_mirrorOf.reset();
+-    }
+-
+-    if (!m_mirrors.empty()) {
+-        for (auto const& m : m_mirrors) {
+-            m->setMirror("");
+-        }
+-
+-        Config::monitorRuleMgr()->scheduleReload();
+     }
+ 
+     m_listeners.frame.reset();
+@@ -1351,7 +1358,7 @@
+         // disable mirroring
+ 
+         if (m_mirrorOf) {
+-            m_mirrorOf->m_mirrors.erase(std::ranges::find_if(m_mirrorOf->m_mirrors, [&](const auto& other) { return other == m_self; }));
++            std::erase(m_mirrorOf->m_mirrors, m_self);
+ 
+             // unlock software for mirrored monitor
+             Pointer::mgr()->unlockSoftwareForMonitor(m_mirrorOf.lock());

@@ -30,8 +30,9 @@ choose workspace placement and monitor layout defaults.
 
 Requires Omarchy 4 with its Lua Hyprland config and Omarchy shell. Development
 and local validation use Hyprland 0.56.2 / Omarchy 4.0.3. The separately
-installed compositor backports address [window sizing](docs/HYPRLAND-SIZING-BUG.md)
-and [mirror-source output registration](docs/diagnostics/mirror-outputs/README.md).
+installed compositor backports address [window sizing](docs/HYPRLAND-SIZING-BUG.md),
+[mirror-source output registration](docs/diagnostics/mirror-outputs/README.md)
+and [mirror disconnection](docs/diagnostics/mirror-disconnect/README.md).
 
 Runtime and setup use the Omarchy shell (Quickshell), Bash, `lua`, `jq`,
 Python 3, coreutils, `flock` from util-linux, and `systemd-run` from systemd,
@@ -636,6 +637,7 @@ python3 test/install.py                          # installer and uninstaller
 python3 test/wayland.py && python3 test/displays.py && python3 test/display_configuration.py && python3 test/display_safety.py && python3 test/display_placement.py && python3 test/display_policy.py && node test/displays.js
                                                  # display transactions, failure recovery, assignment policy
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
+python3 test/display_integration.py --auto-position-only # disable next to an automatically placed display
 python3 test/mirror_outputs_integration.py --fixed # opt-in with the mirror-output compositor fix installed
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
 lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
