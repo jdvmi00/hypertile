@@ -2,11 +2,13 @@
 
 ## Current release state
 
-- Release version: **1.5.1**, tag `v1.5.1`. The immutable tag identifies
+- Release version: **1.5.2**, tag `v1.5.2`. The immutable tag identifies
   the promoted `main` commit; the GitHub release contains matching notes.
-  Marketplace verification for 1.5.1 is deliberately deferred at Jim's request.
+  Marketplace verification for 1.5.2 is deliberately deferred at Jim's request.
   Publishing the GitHub release does not submit it for plugin review, and
   earlier verification requests do not cover this version.
+- Previous published version: **1.5.1**, tag `v1.5.1`, with a GitHub release.
+  Marketplace verification was deliberately deferred at Jim's request.
 - Previous published version: **1.5.0**, tag `v1.5.0`, with a GitHub release.
   Marketplace verification was deliberately deferred at Jim's request.
 - Previous published version: **1.4.2**, tag `v1.4.2`, at
@@ -38,14 +40,15 @@
 - `main` is the default branch and is locked including for administrators.
   Unlock only for the authorized promotion, then lock it again immediately.
   Keep it fixed while the marketplace reviews and publishes that exact commit.
-- Preserve published tags, including `v1.5.1`, `v1.5.0`, `v1.4.2`, `v1.4.1`, `v1.4.0`, `v1.3.0`, `v1.2.0`, `v1.1.2`, `v1.1.1`, `v1.1.0`,
+- Preserve published tags, including `v1.5.2`, `v1.5.1`, `v1.5.0`, `v1.4.2`, `v1.4.1`, `v1.4.0`, `v1.3.0`, `v1.2.0`, `v1.1.2`, `v1.1.1`, `v1.1.0`,
   `v1.0.1`, and `marketplace-1ba0f8a`. Keep agent instructions outside the repository and
   installed plugin contents. CI rejects tracked instruction files; an ignore
   rule alone does not remove local files from a linked installation.
 
 The recorded development environment is Omarchy `4.0.3-1` with the separately
-installed Hyprland `0.56.2-2.1` size-ack backport. Its rebuild and isolated
-validation are documented under `docs/diagnostics/size-acks/`; release preparation
+installed Hyprland `0.56.2-3.3` size-ack and mirror backports. Their rebuild and
+isolated validation are documented under `docs/diagnostics/size-acks/`,
+`docs/diagnostics/mirror-outputs/` and `docs/diagnostics/mirror-disconnect/`; release preparation
 does not install or rebuild the compositor. Saved scene definitions remain
 individual files under `$XDG_CONFIG_HOME/hypertile/scenes/`, not `scenes.json`.
 
