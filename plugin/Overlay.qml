@@ -48,6 +48,8 @@ Item {
   ]
 
   property bool opened: false
+  property string displayScreenName: ""
+  property bool relocatingDisplay: false
   property bool moveMode: false
   TilePicker {
     id: tilePicker
@@ -363,6 +365,24 @@ Item {
     displaysPane.refresh()
   }
 
+  function setDisplayConfirmationScreen(screen) {
+    var name = String(screen.name || "")
+    var remap = root.displayScreenName !== "" && root.displayScreenName !== name
+    root.displayScreenName = name
+    // Qt can silently move QWindow.screen when its wl_output disappears,
+    // while the layer surface still belongs to the retired output. Assigning
+    // that same screen again does not recreate it. Unmap explicitly before
+    // retargeting, preserving the editor while releasing its input grab.
+    if (remap && root.opened) {
+      root.relocatingDisplay = true
+      window.screen = screen
+      Qt.callLater(function() {
+        root.relocatingDisplay = false
+        if (root.opened && !root.dismissing) Qt.callLater(root.focusKeys)
+      })
+    } else window.screen = screen
+  }
+
   // Keep recovery controls on an output that will remain in the arrangement
   // and is awake: `avoid` names a connector about to sleep. Re-evaluate as Qt
   // adds/removes screens during the compositor transaction.
@@ -381,11 +401,14 @@ Item {
       if (!desired) return true
       return desired.displays.some(function(d) { return d.connector === screen.name && d.enabled && !d.mirror_of && d.connected !== false })
     }
-    if (window.screen && screens.indexOf(window.screen) !== -1 && usable(window.screen)) return
-    for (var i = 0; i < screens.length; ++i) {
-      if (usable(screens[i])) { window.screen = screens[i]; return }
+    if (window.screen && screens.indexOf(window.screen) !== -1 && usable(window.screen)) {
+      root.setDisplayConfirmationScreen(window.screen)
+      return
     }
-    if (!window.screen || screens.indexOf(window.screen) === -1) window.screen = screens[0]
+    for (var i = 0; i < screens.length; ++i) {
+      if (usable(screens[i])) { root.setDisplayConfirmationScreen(screens[i]); return }
+    }
+    if (!window.screen || screens.indexOf(window.screen) === -1) root.setDisplayConfirmationScreen(screens[0])
   }
 
   Connections {
@@ -571,6 +594,7 @@ Item {
     }
     root.moveMode = false
     root.dismissing = false
+    root.placeDisplayConfirmation()
     root.opened = true
     root.errorText = ""
     root.statusText = ""
@@ -1831,7 +1855,7 @@ Item {
 
   PanelWindow {
     id: window
-    visible: root.opened || scrimRect.opacity > 0
+    visible: (root.opened || scrimRect.opacity > 0) && !root.relocatingDisplay
     anchors { top: true; bottom: true; left: true; right: true }
     color: "transparent"
     exclusionMode: ExclusionMode.Ignore
