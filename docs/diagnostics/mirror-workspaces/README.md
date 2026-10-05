@@ -82,13 +82,20 @@ The built package and logs are in
 Staged binary SHA-256:
 `3a3fdce20af2007d771444e3b0a5e138d88c6380c2160bf5f866ba65acf5a688`.
 
-Both fixes are prepared and tested but not installed: automatic approval
-review rejected changing the installed runtime during source development.
-Installation needs Jim's explicit approval for the package, recovery policy
-and display-watcher restart. Preserve the previous package and policy for
-rollback. The compositor correction activates only in a new login session;
-a configuration reload cannot activate it. The updated backport status
-checker tracks the new package marker and reports a pending session restart.
+Jim approved activation. Hyprland `0.56.2-4.2` is installed; `pacman -Qkk`
+reports zero altered files and its binary matches the tested artifact. All
+four package markers and tracked library versions match. The running
+compositor still uses the preceding binary; the correction activates in a
+new login session, and a configuration reload cannot activate it.
+
+The Hypertile recovery policy and updated backport checker are installed.
+The display watcher restarted successfully and remains live, with no new
+recorded error. Hyprland reports no configuration errors and the shell answers
+IPC. The linked source checkout uses the tested fix on local branch
+`local/mirror-workspace-reconnect`, preventing reloads from reverting it.
+Previous runtime files are preserved in
+`/home/jmartin/Work/workspace-mirror-investigation/`; the previous package is
+retained in `/home/jmartin/Work/hyprland-backports-0.56.2-4.1/` for rollback.
 
 Queued for upstream review; no PR or message has been published. Refresh
 current upstream source and overlapping issues/PRs before proposing the
