@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "displays"))
-from policy import WorkspacePolicy, effective_layout, project_session, read_rules, validate
+from policy import WorkspacePolicy, effective_layout, mirror_rescues, project_session, read_rules, validate
 
 
 class PolicyTests(unittest.TestCase):
@@ -152,6 +152,68 @@ class RuntimeTests(unittest.TestCase):
         self.policy.reconcile(self.doc, "restore")
         self.assertEqual(len(self.initial), 1)
         self.assertEqual(self.policy.state["suppressed"], ["1"])
+
+    def test_reconnect_rescues_unassigned_workspace_from_live_mirror(self):
+        self.doc['workspaces'] = {'1': {'layout': 'master'}}
+        # Saved intent is extended: the live topology must decide recovery.
+        self.adapter.outputs[1].update(mirror_of='wide', mirror_connector='DP-1')
+        self.policy.state.update(initialized=True, locations={'1': 'DP-1'},
+                                 available=['wide'], suppressed=['1'])
+        original = copy.deepcopy(self.doc)
+        result = self.policy.reconcile(self.doc, 'reconnect')
+        self.assertEqual(result['moves'], [{'workspace': '1', 'monitor': 'DP-1'}])
+        self.assertEqual(self.adapter.moves, [('1', 'DP-1')])
+        self.assertEqual(self.doc, original)
+        self.assertEqual(self.adapter.live[0]['tiledLayout'], 'master')
+        self.assertFalse(any(args[0] == 'apply' for args in self.commands))
+        self.policy.reconcile(self.doc, 'event')
+        self.assertEqual(self.adapter.moves, [('1', 'DP-1')])
+
+    def test_handoff_still_rescues_stranded_workspaces(self):
+        self.adapter.outputs[1].update(mirror_of='wide', mirror_connector='DP-1')
+        result = self.policy.reconcile(self.doc, 'handoff')
+        self.assertEqual(result['moves'], [{'workspace': '1', 'monitor': 'DP-1'}])
+
+    def test_rescue_ignores_saved_mirror_when_live_output_is_extended(self):
+        self.doc['displays'][1]['mirror_of'] = 'wide'
+        self.doc['workspaces'] = {}
+        self.policy.reconcile(self.doc, 'event')
+        self.assertEqual(self.adapter.moves, [])
+
+    def test_rescue_requires_live_enabled_independent_source(self):
+        self.adapter.outputs[1].update(mirror_of='wide', mirror_connector='DP-1')
+        self.assertEqual(mirror_rescues(self.adapter.live, self.adapter.outputs),
+                         [{'workspace': '1', 'monitor': 'DP-1'}])
+        for change in ({'enabled': False}, {'mirror_connector': 'DP-2'}, {'mirror_of': 'portrait'}):
+            current = copy.deepcopy(self.adapter.outputs)
+            current[0].update(change)
+            self.assertEqual(mirror_rescues(self.adapter.live, current), [])
+        self.assertEqual(mirror_rescues(self.adapter.live, self.adapter.outputs[1:]), [])
+
+    def test_rescue_includes_named_and_special_workspaces_only_on_mirror(self):
+        self.adapter.outputs[1].update(mirror_of='wide', mirror_connector='DP-1')
+        workspaces = [{'id': -2, 'name': 'work', 'monitor': 'DP-2'},
+                      {'id': -99, 'name': 'special:scratchpad', 'monitor': 'DP-2'},
+                      {'id': 4, 'name': '4', 'monitor': 'DP-1'}]
+        self.assertEqual(mirror_rescues(workspaces, self.adapter.outputs),
+                         [{'workspace': 'name:work', 'monitor': 'DP-1'},
+                          {'workspace': 'special:scratchpad', 'monitor': 'DP-1'}])
+
+    def test_failed_rescue_readback_is_reported(self):
+        self.adapter.outputs[1].update(mirror_of='wide', mirror_connector='DP-1')
+        self.doc['workspaces'] = {}
+        self.adapter.move = lambda *_: None
+        with self.assertRaisesRegex(ValueError, 'did not move workspace 1'):
+            self.policy.reconcile(self.doc, 'event')
+
+    def test_explicit_available_destination_takes_precedence_over_rescue(self):
+        self.adapter.outputs[1].update(mirror_of='wide', mirror_connector='DP-1')
+        third = {'id': 'other', 'identity': 'other', 'connector': 'HDMI-1', 'enabled': True}
+        self.adapter.outputs.append(third)
+        self.doc['displays'].append(third)
+        self.doc['workspaces']['1']['monitor'] = 'other'
+        result = self.policy.reconcile(self.doc, 'preview')
+        self.assertEqual(result['moves'], [{'workspace': '1', 'monitor': 'HDMI-1'}])
 
     def test_reconcile_uses_one_fresh_display_snapshot(self):
         with patch.object(self.adapter, 'displays', wraps=self.adapter.displays) as query:
