@@ -14,7 +14,8 @@ function fixture() {
   const calls = [], later = []
   const timer = () => ({running: false, restart() {this.running = true}, stop() {this.running = false}})
   const root = {
-    opened: true, dismissing: false, busy: false, editing: false, contentMode: false,
+    opened: true, displayScreenName: "", relocatingDisplay: false,
+    dismissing: false, busy: false, editing: false, contentMode: false,
     workspaceId: "1", ctl: "ctl", missingCtlText: "CLI is missing",
     committedLayout: "lua:quad", liveLayout: "lua:quad", browseTarget: "lua:quad", browseLaunched: "lua:quad",
     browseToken: "", commitOnRefresh: false, managedContent: false, contentCatalog: null,
@@ -26,7 +27,8 @@ function fixture() {
   Object.defineProperty(root, "viewed", {get() {return this.layouts[this.viewIndex] || null}})
   const context = {
     root, Editor: editor, Content: (() => {const c = {}; vm.runInNewContext(fs.readFileSync("plugin/Content.js", "utf8"), c); return c})(), Qt: {callLater(fn) {later.push(fn)}},
-    Quickshell: {execDetached(args) {calls.push(clone(args))}},
+    Quickshell: {screens: [], execDetached(args) {calls.push(clone(args))}},
+    window: {screen: null},
     browseProc: {running: false}, currentProc: {running: false}, listProc: {running: false}, importProc: {running: false},
     catalogProc: {running: false}, ctlProc: {running: false}, previewProc: {running: false},
     workspacesProc: {}, windowsProc: {}, defaultProc: {},
@@ -39,7 +41,46 @@ function fixture() {
   vm.createContext(context)
   vm.runInContext(functions, context)
   for (const [key, value] of Object.entries(context)) if (typeof value === "function") root[key] = value
-  return {root, context, calls}
+  return {root, context, calls, later}
+}
+
+// Qt can already report the promoted mirror as QWindow.screen even though
+// its layer surface was retired with the old source. The display name we
+// explicitly mapped must still trigger a remap, preserving unsaved state.
+{
+  const {root, context, later} = fixture()
+  const screen = {name: "DP-1"}
+  root.displayScreenName = "HDMI-A-1"
+  context.window.screen = screen
+  context.Quickshell.screens = [screen]
+  const draft = {displays: [{connector: "DP-1", enabled: true, connected: true}]}
+  context.displaysPane.draft = draft
+  context.displaysPane.dirty = true
+  context.displaysPane.pending = {token: "preview"}
+  root.placeDisplayConfirmation()
+  assert.equal(root.relocatingDisplay, true, "a changed Qt screen is not proof the native surface moved")
+  assert.equal(root.displayScreenName, "DP-1")
+  assert.strictEqual(context.displaysPane.draft, draft)
+  assert.equal(context.displaysPane.dirty, true)
+  assert.equal(context.displaysPane.pending.token, "preview")
+  later.shift()()
+  assert.equal(root.relocatingDisplay, false)
+  later.shift()()
+  root.placeDisplayConfirmation()
+  assert.equal(root.relocatingDisplay, false, "unchanged catalog polls must not remap the window")
+}
+
+// Closing during a deferred remap must not restore keyboard focus or reopen.
+{
+  const {root, context, later} = fixture()
+  root.displayScreenName = "HDMI-A-1"
+  root.setDisplayConfirmationScreen({name: "DP-1"})
+  root.opened = false
+  root.dismissing = true
+  later.shift()()
+  assert.equal(root.relocatingDisplay, false)
+  assert.equal(root.opened, false)
+  assert.equal(later.length, 0)
 }
 
 // SUPER+L browses the displayed layout and windows through the same preview

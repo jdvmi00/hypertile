@@ -639,6 +639,7 @@ python3 test/wayland.py && python3 test/displays.py && python3 test/display_conf
 python3 test/display_integration.py               # opt-in isolated compositor, from a live Wayland session
 python3 test/display_integration.py --auto-position-only # disable next to an automatically placed display
 python3 test/mirror_outputs_integration.py --fixed # opt-in with the mirror-output compositor fix installed
+python3 test/overlay_display_integration.py       # real overlay surfaces and keyboard input across mirror-source switches
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
 lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
                                                  # engine, bounded Lua patterns, capacity, hot swap
