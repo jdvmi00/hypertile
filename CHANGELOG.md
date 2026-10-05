@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+## 1.5.3 (2026-10-05)
+
+Hypertile 1.5.3 fixes an input lockup during mirror-source display changes.
+
 - Keep the overlay visible and responsive when switching a mirror group's
   source display. Recreate its layer surface on the new output so an invisible
   overlay cannot retain keyboard focus and make the desktop appear frozen.
