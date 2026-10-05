@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Keep the overlay visible and responsive when switching a mirror group's
+  source display. Recreate its layer surface on the new output so an invisible
+  overlay cannot retain keyboard focus and make the desktop appear frozen.
+
 ## 1.5.2 (2026-10-04)
 
 Hypertile 1.5.2 improves display placement previews and saved-profile cleanup.
