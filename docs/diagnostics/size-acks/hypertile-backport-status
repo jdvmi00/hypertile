@@ -43,6 +43,15 @@ else
   printf 'Mirror-disconnect marker: %s\n' "$(cat "$disconnect_marker.version")"
 fi
 
+workspace_marker=/usr/share/hyprland/backports/mirror-workspaces
+if [[ ! -r "$workspace_marker.version" || ! -r "$workspace_marker.patch" ]]; then
+  issues+=("The mirror-workspace backport is absent. Check whether this package prevents reconnects from restoring workspaces onto mirror outputs.")
+elif [[ $(cat "$workspace_marker.version") != "$installed" ]]; then
+  issues+=("Mirror-workspace backport marker does not match the installed package; reinstall or investigate.")
+else
+  printf 'Mirror-workspace marker: %s\n' "$(cat "$workspace_marker.version")"
+fi
+
 if [[ -x /usr/bin/Hyprland ]]; then
   linkage=$(ldd /usr/bin/Hyprland 2>&1)
   if [[ $? != 0 || "$linkage" == *'not found'* ]]; then
@@ -62,7 +71,7 @@ fi
 if (( ${#issues[@]} )); then
   printf '\nREVIEW NEEDED:\n'
   printf -- '- %s\n' "${issues[@]}"
-  printf '\nGuides: docs/HYPRLAND-SIZING-BUG.md, docs/diagnostics/mirror-outputs/README.md and docs/diagnostics/mirror-disconnect/README.md in the Hypertile checkout.\n'
+  printf '\nGuides: docs/HYPRLAND-SIZING-BUG.md, docs/diagnostics/mirror-outputs/README.md and docs/diagnostics/mirror-disconnect/README.md and docs/diagnostics/mirror-workspaces/README.md in the Hypertile checkout.\n'
   if [[ ${1:-} == --notify ]] && command -v notify-send >/dev/null; then
     notify-send -u critical 'Hyprland backports need review' \
       'Run hypertile-backport-status. An update, library change, or pending desktop restart needs attention.' || true

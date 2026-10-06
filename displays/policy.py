@@ -196,6 +196,29 @@ def effective_layout(key, monitor_id, document, rules, fallback, scenes=None):
     return fallback, "global"
 
 
+def mirror_rescues(workspaces, displays):
+    """Evacuate live mirror outputs without inventing placement preferences."""
+    from adapter import independent
+    by_connector = {d["connector"]: d for d in displays}
+    by_id = {d["id"]: d for d in displays}
+    destinations = {}
+    for display in displays:
+        source = by_connector.get(display.get("mirror_connector")) or by_id.get(display.get("mirror_of"))
+        if display.get("enabled") and source and independent(source):
+            destinations[display["connector"]] = source["connector"]
+    result = []
+    for workspace in workspaces:
+        target = destinations.get(workspace.get("monitor"))
+        key = workspace.get("name", "")
+        if not key.startswith("special:"):
+            key = selector(workspace)
+            if not valid_workspace(key):
+                continue
+        if target:
+            result.append({"workspace": key, "monitor": target})
+    return result
+
+
 class WorkspacePolicy:
     """Reconcile event snapshots without continuously pinning workspaces.
 
@@ -353,11 +376,16 @@ class WorkspacePolicy:
             # Source switching carries its own live desktop. Retained placement
             # preferences must not pull workspaces back from unrelated outputs.
             moves = []
+        # A compositor reconnect can restore a workspace onto a mirror after
+        # applying its mirror rule. Rescue even unassigned/suppressed workspaces;
+        # valid explicit placement moves still take precedence.
+        planned = {move["workspace"] for move in moves}
+        moves.extend(move for move in mirror_rescues(workspaces, current) if move["workspace"] not in planned)
         for move in moves:
             self.adapter.move(move["workspace"], move["monitor"])
         if moves:
             workspaces = self.adapter.workspaces()
-            actual = {selector(w): w.get("monitor") for w in workspaces}
+            actual = {w["name"] if w.get("name", "").startswith("special:") else selector(w): w.get("monitor") for w in workspaces}
             for move in moves:
                 if actual.get(move["workspace"]) != move["monitor"]:
                     raise ValueError("Hyprland did not move workspace " + move["workspace"])
