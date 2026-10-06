@@ -172,6 +172,7 @@ explains the basics until you choose **Got it**.
   every workspace of a display, or make it the default (section 7).
 - **Settings** (the gear): saving windows for startup (section 9), the rail's
   side, the key list, the menu bar position, and the desktop text size.
+  The installed Hypertile version appears beneath the Settings title.
 
 ## 4. Moving windows around a layout
 

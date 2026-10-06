@@ -109,7 +109,8 @@ scene keeps its required layout until you confirm a replacement.
 The gear in the overlay header opens **Settings**: saving windows for startup,
 the side of the screen the rail docks on, whether the rail lists the keys, the
 menu bar position, and the desktop text size. The layout, scene, and display
-settings stay in their tabs.
+settings stay in their tabs. The installed Hypertile version appears beneath
+the Settings title.
 
 ### Menu bar position
 
