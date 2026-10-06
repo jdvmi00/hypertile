@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## 1.5.4 (2026-10-06)
+
+Hypertile 1.5.4 makes the installed version easy to find and recovers
+workspaces stranded on reconnecting mirror outputs.
+
+- Show the installed Hypertile version beneath the Settings title, using
+  the plugin manifest.
+- Move workspaces stranded on a live mirror back to its independent source,
+  including named workspaces and scratchpads. Preserve saved placement
+  preferences and allow valid explicit moves to take precedence.
+- Document the separately installed Hyprland 0.56.2 mirror-workspace
+  restoration backport and its isolated validation. The plugin does not
+  build or install the compositor backport; physical monitor cycling remains
+  unverified.
+
 ## 1.5.3 (2026-10-05)
 
 Hypertile 1.5.3 fixes an input lockup during mirror-source display changes.
