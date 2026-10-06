@@ -81,6 +81,7 @@ ShellRoot {
   QtObject {
     id: overlay
     property var shell: shellApi
+    property var manifest: MANIFEST
     property color foreground: "#f5d2b7"
     property color mutedForeground: "#bba695"
     property color accent: "#ffcba4"
@@ -163,7 +164,7 @@ ShellRoot {
     }
   }
 }
-'''.replace("CONFIG_PATH", json.dumps(str(root / "saved.json"))).replace("CONFIG", json.dumps(config))
+'''.replace("CONFIG_PATH", json.dumps(str(root / "saved.json"))).replace("CONFIG", json.dumps(config)).replace("MANIFEST", (ROOT / "manifest.json").read_text())
     (root / "shell.qml").write_text(qml)
     env = dict(os.environ, HOME=str(root), XDG_CONFIG_HOME=str(root / ".config"),
                XDG_STATE_HOME=str(root / ".state"), XDG_RUNTIME_DIR=str(root / "run"),
