@@ -184,14 +184,23 @@ Controls.Popup {
     Row {
       width: parent.width
       spacing: Style.spacing.sm
-      Text {
+      Column {
         width: parent.width - closeButton.width - parent.spacing
         anchors.verticalCenter: parent.verticalCenter
-        text: "Settings"
-        color: root.overlay.foreground
-        font.family: root.overlay.fontFamily
-        font.pixelSize: root.overlay.uiFont
-        font.bold: true
+        spacing: Style.spacing.xs
+        Text {
+          text: "Settings"
+          color: root.overlay.foreground
+          font.family: root.overlay.fontFamily
+          font.pixelSize: root.overlay.uiFont
+          font.bold: true
+        }
+        Note {
+          text: root.overlay.manifest && root.overlay.manifest.version
+            ? "Hypertile " + root.overlay.manifest.version : "Hypertile version unavailable"
+          Accessible.role: Accessible.StaticText
+          Accessible.name: text
+        }
       }
       Button {
         id: closeButton

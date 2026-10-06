@@ -1,0 +1,40 @@
+--- a/src/output/Monitor.cpp
++++ b/src/output/Monitor.cpp
+@@ -330,7 +330,7 @@
+         const bool RECOVERY   = ORPHANED &&
+             std::ranges::count_if(State::monitorState()->monitors(), [](const auto& mon) { return !mon->m_isUnsafeFallback; }) == 1; // temporarily recover orphaned workspaces
+ 
+-        if (RETURNING || RECOVERY) {
++        if (!isMirror() && (RETURNING || RECOVERY)) {
+             State::workspacePlacementController()->moveWorkspaceToMonitor(ws, m_self.lock());
+             Animation::Workspace::startAnimation(ws, Animation::Workspace::ANIMATION_TYPE_IN, true, true);
+             if (RETURNING)
+@@ -344,7 +344,7 @@
+     if (!m_activeMonitorRule.m_mirrorOf.empty())
+         setMirror(m_activeMonitorRule.m_mirrorOf);
+ 
+-    if (!Desktop::focusState()->monitor()) // set the last monitor if it isn't set yet
++    if (!isMirror() && !Desktop::focusState()->monitor()) // set the last monitor if it isn't set yet
+         Desktop::focusState()->rawMonitorFocus(m_self.lock());
+ 
+     g_pHyprRenderer->arrangeLayersForMonitor(m_id);
+@@ -363,8 +363,8 @@
+     }
+ 
+     Log::logger->log(Log::DEBUG, "checking if we have seen this monitor before: {}", m_name);
+-    // if we saw this monitor before, set it to the workspace it was on
+-    if (const auto WORKSPACEID = State::workspaceState()->rememberedWorkspaceForMonitor(m_name); WORKSPACEID.has_value()) {
++    // Mirrors cannot host workspaces. Restore remembered placement only for an independent output.
++    if (const auto WORKSPACEID = State::workspaceState()->rememberedWorkspaceForMonitor(m_name); !isMirror() && WORKSPACEID.has_value()) {
+         auto workspaceID = *WORKSPACEID;
+         Log::logger->log(Log::DEBUG, "Monitor {} was on workspace {}, setting it to that", m_name, workspaceID);
+         auto ws = State::workspaceState()->query().id(workspaceID).run();
+@@ -375,7 +375,7 @@
+     } else
+         Log::logger->log(Log::DEBUG, "Monitor {} was not on any workspace", m_name);
+ 
+-    if (!found)
++    if (!found && !isMirror())
+         Desktop::focusState()->rawMonitorFocus(m_self.lock());
+ 
+     scheduleFrame(Aquamarine::IOutput::AQ_SCHEDULE_NEW_MONITOR);

@@ -31,8 +31,9 @@ choose workspace placement and monitor layout defaults.
 Requires Omarchy 4 with its Lua Hyprland config and Omarchy shell. Development
 and local validation use Hyprland 0.56.2 / Omarchy 4.0.3. The separately
 installed compositor backports address [window sizing](docs/HYPRLAND-SIZING-BUG.md),
-[mirror-source output registration](docs/diagnostics/mirror-outputs/README.md)
-and [mirror disconnection](docs/diagnostics/mirror-disconnect/README.md).
+[mirror-source output registration](docs/diagnostics/mirror-outputs/README.md),
+[mirror disconnection](docs/diagnostics/mirror-disconnect/README.md), and
+[workspace restoration onto mirrors](docs/diagnostics/mirror-workspaces/README.md).
 
 Runtime and setup use the Omarchy shell (Quickshell), Bash, `lua`, `jq`,
 Python 3, coreutils, `flock` from util-linux, and `systemd-run` from systemd,
@@ -109,7 +110,8 @@ scene keeps its required layout until you confirm a replacement.
 The gear in the overlay header opens **Settings**: saving windows for startup,
 the side of the screen the rail docks on, whether the rail lists the keys, the
 menu bar position, and the desktop text size. The layout, scene, and display
-settings stay in their tabs.
+settings stay in their tabs. The installed Hypertile version appears beneath
+the Settings title.
 
 ### Menu bar position
 
