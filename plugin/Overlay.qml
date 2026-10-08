@@ -5,6 +5,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
@@ -224,11 +225,11 @@ Item {
     return out
   }
 
-  property color surfaceColor: Qt.rgba(Color.menu.background.r, Color.menu.background.g, Color.menu.background.b, 1)
-  property color foreground: Readability.textColor(Color.menu.text, surfaceColor, 1)
+  property color surfaceColor: Qt.rgba(Commons.Color.menu.background.r, Commons.Color.menu.background.g, Commons.Color.menu.background.b, 1)
+  property color foreground: Readability.textColor(Commons.Color.menu.text, surfaceColor, 1)
   readonly property color mutedForeground: Readability.textColor(foreground, surfaceColor, 0.72)
-  property color accent: Color.accent
-  property color scrim: Color.menu.scrim
+  property color accent: Commons.Color.accent
+  property color scrim: Commons.Color.menu.scrim
   property string fontFamily: Style.font.menuFamily
 
   // Type scale for the chrome. The shell's tokens are bar-sized, so on a
@@ -1880,7 +1881,7 @@ Item {
       Behavior on opacity { NumberAnimation { duration: root.motion; easing.type: Easing.OutCubic } }
       Rectangle {
         anchors.fill: parent
-        color: Util.alpha(Color.background, 0.18)
+        color: Util.alpha(Commons.Color.background, 0.18)
       }
     }
 
@@ -2055,7 +2056,7 @@ Item {
           anchors.centerIn: parent
           textFormat: Text.PlainText
           text: toast.shown
-          color: root.errorText !== "" ? Color.urgent : root.foreground
+          color: root.errorText !== "" ? Commons.Color.urgent : root.foreground
           font.family: root.fontFamily
           font.pixelSize: root.uiFontSmall
         }

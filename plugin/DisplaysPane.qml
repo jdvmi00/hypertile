@@ -4,6 +4,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Displays.js" as Displays
 import "Wallpaper.js" as Wallpaper
@@ -1408,7 +1409,7 @@ Card {
             width: parent.width
             height: Math.max(pane.overlay.uiFont * 3.4, footerText.implicitHeight + Style.spacing.xxl * 2)
             radius: pane.overlay.radiusControl
-            color: pane.confirmingDiscard ? Util.alpha(Color.urgent, .1) : Util.alpha(pane.pending ? pane.overlay.accent : pane.fg, .06)
+            color: pane.confirmingDiscard ? Util.alpha(Commons.Color.urgent, .1) : Util.alpha(pane.pending ? pane.overlay.accent : pane.fg, .06)
             Row {
                 id: footerActions
                 anchors.right: parent.right
@@ -1419,8 +1420,8 @@ Card {
                     id: discardAction
                     visible: pane.confirmingDiscard
                     text: "Discard"
-                    foreground: Color.urgent
-                    accent: Color.urgent
+                    foreground: Commons.Color.urgent
+                    accent: Commons.Color.urgent
                     tooltipText: "D"
                     Accessible.description: "Close and drop the unsaved display changes (D)"
                     onClicked: pane.discardAndClose()
@@ -1467,7 +1468,7 @@ Card {
                 anchors.right: footerActions.left
                 anchors.rightMargin: Style.spacing.xxl
                 anchors.verticalCenter: parent.verticalCenter
-                color: pane.error !== "" ? Readability.textColor(Color.urgent, pane.overlay.surfaceColor, 1) : pane.fg
+                color: pane.error !== "" ? Readability.textColor(Commons.Color.urgent, pane.overlay.surfaceColor, 1) : pane.fg
                 text: pane.confirmingDiscard ? "Close and discard the unsaved display changes? Nothing has been applied." : pane.error || (pane.busy ? "Applying…" : pane.pending ? "Keep these display settings? Enter keeps, Esc reverts. Reverting in " + pane.remaining + " seconds." : pane.notice || (pane.dirty ? "Ready to preview. You get 15 seconds to keep the changes." : "Display changes preview first, then you keep or revert them."))
             }
         }

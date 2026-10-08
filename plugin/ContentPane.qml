@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Content.js" as Content
 
@@ -215,7 +216,7 @@ Column {
     textFormat: Text.PlainText
     width: pane.width
     wrapMode: Text.WordWrap
-    color: urgent ? Color.urgent : pane.overlay.mutedForeground
+    color: urgent ? Commons.Color.urgent : pane.overlay.mutedForeground
     font.family: pane.family
     font.pixelSize: pane.overlay.uiCaption
   }
@@ -359,7 +360,7 @@ Column {
       width: Math.min(implicitWidth, row.width * 0.45)
       textFormat: Text.PlainText
       text: row.trait
-      color: row.urgent ? Color.urgent : pane.overlay.mutedForeground
+      color: row.urgent ? Commons.Color.urgent : pane.overlay.mutedForeground
       font.family: pane.family
       font.pixelSize: pane.overlay.uiCaption
       elide: Text.ElideRight
@@ -465,7 +466,7 @@ Column {
           textFormat: Text.PlainText
           width: parent.width
           text: card.meta
-          color: card.valid ? pane.overlay.mutedForeground : Color.urgent
+          color: card.valid ? pane.overlay.mutedForeground : Commons.Color.urgent
           font.family: pane.family
           font.pixelSize: pane.overlay.uiCaption
           wrapMode: card.valid ? Text.NoWrap : Text.WordWrap
@@ -496,9 +497,9 @@ Column {
     implicitHeight: promptColumn.implicitHeight + Style.spacing.xl * 2
     height: implicitHeight
     radius: pane.overlay.radiusControl
-    color: Util.alpha(warning ? Color.urgent : pane.accent, 0.08)
+    color: Util.alpha(warning ? Commons.Color.urgent : pane.accent, 0.08)
     border.width: 1
-    border.color: Util.alpha(warning ? Color.urgent : pane.accent, 0.6)
+    border.color: Util.alpha(warning ? Commons.Color.urgent : pane.accent, 0.6)
     Column {
       id: promptColumn
       x: Style.spacing.xl
@@ -566,7 +567,7 @@ Column {
       Flow {
         width: parent.width
         spacing: Style.spacing.sm
-        Action { text: "Delete"; accent: Color.urgent; selected: true; onClicked: { pane.overlay.deleteScene(pane.deleting); pane.deleting = "" } }
+        Action { text: "Delete"; accent: Commons.Color.urgent; selected: true; onClicked: { pane.overlay.deleteScene(pane.deleting); pane.deleting = "" } }
         Action { text: "Cancel"; onClicked: pane.deleting = "" }
       }
     }

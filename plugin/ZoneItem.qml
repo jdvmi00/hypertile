@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Effects
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Content.js" as Content
 
@@ -106,7 +107,7 @@ Item {
       : Util.alpha(zone.accent, zone.fitted ? 0.04 : (zone.isSelected ? 0.16 : (zone.isHovered ? 0.12 : (zone.editing ? 0.08 : 0.03)))))
     border.width: zone.isSelected && !zone.peek ? Math.max(2, Style.space(2)) : 1
     border.color: zone.peek ? Util.alpha(zone.isSelected ? zone.accent : zone.fg, zone.isSelected ? 0.7 : 0.25)
-      : zone.urgent ? Util.alpha(Color.urgent, zone.isSelected ? 1 : 0.8)
+      : zone.urgent ? Util.alpha(Commons.Color.urgent, zone.isSelected ? 1 : 0.8)
       : zone.isSelected ? zone.accent
       : (zone.isHovered ? Util.alpha(zone.accent, 0.8)
       : Util.alpha(zone.isSpacer ? zone.fg : zone.accent, zone.isSpacer ? 0.35 : 0.55))
@@ -123,11 +124,11 @@ Item {
     radius: zone.overlay.effectiveRounding
     color: "transparent"
     border.width: Math.max(2, Style.space(2))
-    border.color: zone.urgent ? Color.urgent : zone.accent
+    border.color: zone.urgent ? Commons.Color.urgent : zone.accent
     layer.enabled: visible
     layer.effect: MultiEffect {
       shadowEnabled: true
-      shadowColor: zone.urgent ? Color.urgent : zone.accent
+      shadowColor: zone.urgent ? Commons.Color.urgent : zone.accent
       shadowOpacity: 0.85
       shadowBlur: 1.0
       blurMax: 32
@@ -269,7 +270,7 @@ Item {
       textFormat: Text.PlainText
       id: centreState
       text: zone.ghost !== null ? "click to put it here" : zone.contentState.text
-      color: (zone.contentState.urgent && zone.ghost === null) ? Color.urgent : zone.overlay.mutedForeground
+      color: (zone.contentState.urgent && zone.ghost === null) ? Commons.Color.urgent : zone.overlay.mutedForeground
       font.family: zone.overlay.fontFamily
       font.pixelSize: zone.overlay.uiFontSmall
       horizontalAlignment: Text.AlignHCenter
@@ -371,7 +372,7 @@ Item {
     accent: zone.accent
     fontFamily: zone.overlay.fontFamily
     fontSize: zone.overlay.uiCaption
-    background: Util.alpha(Color.menu.background, 0.7)
+    background: Util.alpha(Commons.Color.menu.background, 0.7)
     radius: zone.overlay.radiusControl
   }
 
@@ -382,7 +383,7 @@ Item {
     y: zone.height - zone.pad - height
     spacing: Style.spacing.sm
 
-    ZoneButton { visible: zone.urgent; text: "Retry"; accent: Color.urgent; tooltipText: "Check the pending content again"; enabled: !zone.overlay.busy; onClicked: zone.overlay.sceneAction("retry") }
+    ZoneButton { visible: zone.urgent; text: "Retry"; accent: Commons.Color.urgent; tooltipText: "Check the pending content again"; enabled: !zone.overlay.busy; onClicked: zone.overlay.sceneAction("retry") }
     ZoneButton { text: "Change…"; tooltipText: "Choose what opens here"; onClicked: { zone.overlay.selected = zone.modelData.name; zone.overlay.focusSearch() } }
     ZoneButton { visible: zone.source !== null; text: "Clear"; tooltipText: "Back to any window, in fill order"; enabled: !zone.overlay.busy; onClicked: { zone.overlay.selected = zone.modelData.name; zone.overlay.assignContent("local") } }
   }
@@ -396,6 +397,6 @@ Item {
 
     ZoneButton { text: "Columns"; tooltipText: "Split into columns (c)"; onClicked: zone.overlay.splitSelected("columns") }
     ZoneButton { text: "Rows"; tooltipText: "Split into rows (r)"; onClicked: zone.overlay.splitSelected("rows") }
-    ZoneButton { text: "Delete"; tooltipText: "Delete zone (x, right-click)"; accent: Color.urgent; onClicked: zone.overlay.deleteZone(zone.modelData.name) }
+    ZoneButton { text: "Delete"; tooltipText: "Delete zone (x, right-click)"; accent: Commons.Color.urgent; onClicked: zone.overlay.deleteZone(zone.modelData.name) }
   }
 }

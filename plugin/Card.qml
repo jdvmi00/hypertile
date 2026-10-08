@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // A floating surface over the canvas, bordered the way the theme borders
@@ -15,9 +16,9 @@ BorderSurface {
 
   radius: overlay.radiusCard
   color: overlay.surfaceColor
-  borderSpec: urgent ? Border.flat(Color.urgent, Math.max(1, Style.space(1)))
+  borderSpec: urgent ? Border.flat(Commons.Color.urgent, Math.max(1, Style.space(1)))
     : accented ? Border.flat(overlay.accent, Math.max(1, Style.space(1)))
-    : Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(1)))
+    : Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(1)))
 
   MouseArea {
     anchors.fill: parent

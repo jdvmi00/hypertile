@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Geometry.js" as Geometry
 import "Editor.js" as Editor
@@ -112,7 +113,7 @@ Card {
   // PanelSlider colors itself from a bar; hand it the rail's palette.
   readonly property QtObject palette: QtObject {
     readonly property color foreground: rail.fg
-    readonly property color background: Color.menu.background
+    readonly property color background: Commons.Color.menu.background
     readonly property string fontFamily: rail.family
   }
 
@@ -226,7 +227,7 @@ Card {
     leftAlign: true
     bordered: false
     radius: overlay.radiusControl
-    foreground: danger ? Color.urgent : rail.fg
+    foreground: danger ? Commons.Color.urgent : rail.fg
     accent: rail.accent
     fontFamily: rail.family
     fontSize: overlay.uiFontSmall
@@ -496,9 +497,9 @@ Card {
     implicitHeight: promptColumn.implicitHeight + Style.spacing.xl * 2
     height: implicitHeight
     radius: overlay.radiusControl
-    color: Util.alpha(warning ? Color.urgent : rail.accent, 0.08)
+    color: Util.alpha(warning ? Commons.Color.urgent : rail.accent, 0.08)
     border.width: 1
-    border.color: Util.alpha(warning ? Color.urgent : rail.accent, 0.6)
+    border.color: Util.alpha(warning ? Commons.Color.urgent : rail.accent, 0.6)
     Column {
       id: promptColumn
       x: Style.spacing.xl
@@ -690,7 +691,7 @@ Card {
         Muted { text: rail.metaText; visible: text !== "" }
         Muted { visible: rail.fillText !== "" && !overlay.renaming; text: rail.fillText }
         Muted { visible: !overlay.editing && !overlay.contentMode && overlay.viewedIsBuiltin; text: "Dwindle automatically splits space as windows open. Its layout is managed by Hyprland." }
-        Muted { visible: rail.scenesTab && rail.scene !== null && !!rail.scene.error; text: rail.scene ? (rail.scene.error || "") : ""; color: Color.urgent }
+        Muted { visible: rail.scenesTab && rail.scene !== null && !!rail.scene.error; text: rail.scene ? (rail.scene.error || "") : ""; color: Commons.Color.urgent }
         Muted { visible: rail.scenesTab && rail.scene !== null && (rail.scene.phase === "partial" || rail.scene.phase === "needs-attention"); text: Content.retrySummary(rail.scene) }
 
         Flow {
@@ -723,7 +724,7 @@ Card {
           Action { visible: overlay.editing && !overlay.naming; text: "Save"; primary: true; tooltipText: "Save to ~/.config/hypr/layouts (w)"; enabled: !overlay.busy; onClicked: overlay.requestSave() }
           Action { visible: overlay.editing && !overlay.naming; text: "Undo"; tooltipText: "Undo (u)"; enabled: overlay.undoStack.length > 0; onClicked: overlay.undo() }
           Action { visible: overlay.editing && !overlay.naming; text: overlay.numbering ? "Done numbering" : "Fill order"; selected: overlay.numbering; tooltipText: "Click zones in the order windows fill them (f)"; onClicked: overlay.numbering ? overlay.finishNumbering() : overlay.startNumbering() }
-          Action { visible: overlay.editing && !overlay.naming && !overlay.confirmingDiscard; text: overlay.dirty ? "Discard" : "Done"; accent: overlay.dirty ? Color.urgent : rail.accent; tooltipText: overlay.dirty ? "Drop the changes (Esc)" : "Back to browsing (Esc)"; enabled: !overlay.busy; onClicked: overlay.dirty ? (overlay.confirmingDiscard = true) : overlay.leaveEdit("") }
+          Action { visible: overlay.editing && !overlay.naming && !overlay.confirmingDiscard; text: overlay.dirty ? "Discard" : "Done"; accent: overlay.dirty ? Commons.Color.urgent : rail.accent; tooltipText: overlay.dirty ? "Drop the changes (Esc)" : "Back to browsing (Esc)"; enabled: !overlay.busy; onClicked: overlay.dirty ? (overlay.confirmingDiscard = true) : overlay.leaveEdit("") }
           // naming
           Action { visible: overlay.naming; text: "Save as"; primary: true; onClicked: overlay.confirmName() }
           Action { visible: overlay.naming; text: "Cancel"; onClicked: { overlay.naming = false; overlay.focusKeys() } }
@@ -818,7 +819,7 @@ Card {
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
-          Action { text: "Delete"; accent: Color.urgent; selected: true; enabled: !overlay.busy; onClicked: overlay.deleteViewed() }
+          Action { text: "Delete"; accent: Commons.Color.urgent; selected: true; enabled: !overlay.busy; onClicked: overlay.deleteViewed() }
           Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.confirmingDelete = false }
         }
       }
@@ -848,7 +849,7 @@ Card {
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
-          Action { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName.replace(/^lua:/, "")) : ""); accent: Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
+          Action { text: "Use " + (overlay.pendingSwitch ? (overlay.pendingSwitch.sceneName || overlay.pendingSwitch.layoutName.replace(/^lua:/, "")) : ""); accent: Commons.Color.urgent; selected: true; tooltipText: "Enter"; enabled: !overlay.busy; onClicked: overlay.confirmSwitch() }
           Action { text: "Cancel"; tooltipText: "Esc"; onClicked: overlay.pendingSwitch = null }
         }
       }
@@ -901,7 +902,7 @@ Card {
         Flow {
           width: parent.width
           spacing: Style.spacing.sm
-          Action { text: "Discard"; accent: Color.urgent; selected: true; tooltipText: "d"; enabled: !overlay.busy; onClicked: overlay.discard() }
+          Action { text: "Discard"; accent: Commons.Color.urgent; selected: true; tooltipText: "d"; enabled: !overlay.busy; onClicked: overlay.discard() }
           Action { text: "Save"; primary: true; tooltipText: "w"; enabled: !overlay.busy; onClicked: overlay.requestSave() }
           Action { text: "Keep editing"; tooltipText: "Esc"; onClicked: overlay.confirmingDiscard = false }
         }
@@ -1220,7 +1221,7 @@ Card {
           spacing: Style.spacing.sm
           Action { text: "Split columns"; tooltipText: "c"; onClicked: overlay.splitSelected("columns") }
           Action { text: "Split rows"; tooltipText: "r"; onClicked: overlay.splitSelected("rows") }
-          Action { text: "Delete"; accent: Color.urgent; tooltipText: "Remove this zone; its neighbours take the room (x, or right-click the zone)"; onClicked: overlay.deleteZone(overlay.selected) }
+          Action { text: "Delete"; accent: Commons.Color.urgent; tooltipText: "Remove this zone; its neighbours take the room (x, or right-click the zone)"; onClicked: overlay.deleteZone(overlay.selected) }
         }
 
         Field {
