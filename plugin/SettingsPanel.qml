@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls as Controls
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Displays.js" as Displays
 import "Readability.js" as Readability
@@ -105,7 +106,7 @@ Controls.Popup {
   background: BorderSurface {
     color: root.overlay.surfaceColor
     radius: root.overlay.radiusCard
-    borderSpec: Border.surfaceSpec("menu", "border", Color.menu.border, Math.max(1, Style.space(1)))
+    borderSpec: Border.surfaceSpec("menu", "border", Commons.Color.menu.border, Math.max(1, Style.space(1)))
   }
 
   Process {
@@ -375,7 +376,7 @@ Controls.Popup {
     Text {
       width: parent.width
       text: root.error || (!root.section ? "Hypertile’s bar position is unavailable." : root.busy ? "Moving Hypertile…" : "Applies immediately on every screen.")
-      color: root.error ? Readability.textColor(Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.mutedForeground
+      color: root.error ? Readability.textColor(Commons.Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.mutedForeground
       font.family: root.overlay.fontFamily
       font.pixelSize: root.overlay.uiCaption
       wrapMode: Text.WordWrap
@@ -436,7 +437,7 @@ Controls.Popup {
     }
     Note {
       text: root.textSizeError || "Text on every display and in the bar, changed at once."
-      color: root.textSizeError ? Readability.textColor(Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.mutedForeground
+      color: root.textSizeError ? Readability.textColor(Commons.Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.mutedForeground
     }
   }
 }

@@ -3,6 +3,7 @@ import QtQuick.Controls as Controls
 import QtQuick.Dialogs
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 import "Displays.js" as Displays
 import "Readability.js" as Readability
@@ -225,7 +226,7 @@ Column {
     Label {
         text: root.error || root.notice
         visible: text !== ""
-        color: root.error ? Readability.textColor(Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.foreground
+        color: root.error ? Readability.textColor(Commons.Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.foreground
     }
     Note { text: root.blocked ? "Keep or discard the display changes before editing the wallpaper." : "Applies at once and stays through theme changes." }
     // Inside the overlay's layer surface, like the layout import and export

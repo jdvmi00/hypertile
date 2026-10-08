@@ -3,6 +3,7 @@ import Quickshell
 import Quickshell.Io
 import Quickshell.Wayland
 import qs.Commons
+import qs.Commons as Commons
 import "TilePicker.js" as Picker
 
 Item {
@@ -144,10 +145,10 @@ Item {
         y: modelData.y + 4
         width: Math.max(1, modelData.w - 8)
         height: Math.max(1, modelData.h - 8)
-        color: dropTarget ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.35) :
-          source || hovered ? Qt.rgba(Color.accent.r, Color.accent.g, Color.accent.b, 0.18) : "transparent"
+        color: dropTarget ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.35) :
+          source || hovered ? Qt.rgba(Commons.Color.accent.r, Commons.Color.accent.g, Commons.Color.accent.b, 0.18) : "transparent"
         border.width: dropTarget ? 5 : source || hovered ? 3 : 1
-        border.color: source || hovered ? Color.accent : "#b3ffffff"
+        border.color: source || hovered ? Commons.Color.accent : "#b3ffffff"
         radius: 10
         MouseArea {
           id: mouse
@@ -162,7 +163,7 @@ Item {
           height: label.height + root.uiFont
           radius: 12
           color: "#ee16191f"
-          border.color: source ? Color.accent : "#88ffffff"
+          border.color: source ? Commons.Color.accent : "#88ffffff"
           Column {
             id: label
             anchors.centerIn: parent
