@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 1.5.5 (2026-10-08)
+
+Hypertile 1.5.5 restores overlay colors after the Qt 6.12 update.
+
+- Explicitly select Omarchy's theme colors to avoid Qt 6.12's new `Color`
+  singleton shadowing them. Restore panel backgrounds, text, borders, zone
+  labels, and warning colors across the overlay, settings, and tile picker.
+- Keep compatibility with the older Qt versions already supported by Hypertile;
+  this fix does not require a newer Qt API.
+
 ## 1.5.4 (2026-10-06)
 
 Hypertile 1.5.4 makes the installed version easy to find and recovers

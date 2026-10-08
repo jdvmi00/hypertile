@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 
 // One draggable boundary between sibling zones. Visual only: the overlay's
 // single pointer handler does the hit-testing and dragging, so this item is
@@ -43,6 +44,6 @@ Item {
     radius: Math.min(width, height) / 2
     color: divider.overlay.accent
     border.width: 1
-    border.color: Util.alpha(Color.menu.background, 0.8)
+    border.color: Util.alpha(Commons.Color.menu.background, 0.8)
   }
 }
