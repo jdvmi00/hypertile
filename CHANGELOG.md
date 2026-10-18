@@ -2,10 +2,14 @@
 
 ## Unreleased
 
-- Start a tile drag when Super is pressed after the left button is already
-  down, not only when Super is held first. The dragged window still receives
-  its button release, so a terminal selection or browser link does not stay
-  pressed after the drop.
+- Start a tile drag when Super is pressed during a left-button drag, not only
+  when Super is held first. Releasing Super before the button closes the
+  destinations and hands the drag back to the app; pressing it again brings
+  them back. Releasing both together still drops the window.
+- The dragged window still receives its button release, so a terminal
+  selection or browser link does not stay pressed after the drop.
+- Fix a Super drag that opened no destinations after the previous drag ended
+  with Super released before the button.
 
 ## 1.5.5 (2026-10-08)
 

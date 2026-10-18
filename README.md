@@ -151,6 +151,12 @@ outlined zones leaves windows unchanged. Destinations stay on the starting
 workspace and monitor. Floating
 windows and other layouts keep their normal mouse behavior.
 
+`SUPER` can also come second: press it while already dragging with the left
+button, and the destinations appear. Holding `SUPER` is what makes it a tile
+drag. Release `SUPER` before the button and the destinations close, nothing
+moves, and the drag goes back to the app. Press `SUPER` again to bring them
+back. Releasing both together still drops the window.
+
 ## Overlay
 
 A fullscreen layer draws the viewed layout's zones at true scale over your

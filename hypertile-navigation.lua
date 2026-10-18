@@ -116,6 +116,16 @@ function M.drag_slot(request, cursor, monitor)
   end
 end
 
+-- Put the layout back and close the overlay without moving anything.
+function M.drag_cancel()
+  if not drag then return end
+  local cancelled = drag
+  drag = nil
+  if drag_timer then drag_timer:set_enabled(false); drag_timer = nil end
+  pcall(cancelled.restore)
+  publish_drag({ token = cancelled.token, active = false, zone = "" })
+end
+
 function M.drag_update()
   if not drag then return end
   local exists = false
@@ -123,13 +133,7 @@ function M.drag_update()
     if window.address == drag.request.address and window.stable_id == drag.request.stable_id
       and window.pid == drag.request.pid then exists = true end
   end
-  if not exists then
-    pcall(drag.restore)
-    publish_drag({ token = drag.token, active = false, zone = "" })
-    drag = nil
-    if drag_timer then drag_timer:set_enabled(false); drag_timer = nil end
-    return
-  end
+  if not exists then return M.drag_cancel() end
   local monitor = hl.get_monitor_at_cursor()
   local cursor = hl.get_cursor_pos()
   local zone = M.drag_slot(drag.request, cursor, monitor)
@@ -307,56 +311,66 @@ function M.bind()
   end
   hl.unbind("SUPER + mouse:272")
   local native_drag = hl.dsp.window.drag()
-  local native_active = false
-  o.bind("SUPER + mouse:272", "Move window or select destination tile", function()
-    -- Calling the native dispatcher marks this binding releasePending, so
-    -- Hyprland invokes this same callback on release even without SUPER.
-    if native_active then
-      native_active = false
-      M.drag_update()
-      local result = hl.dispatch(native_drag)
-      M.drag_end(true)
-      return result
-    end
-    M.drag_begin()
-    native_active = true
-    return hl.dispatch(native_drag)
-  end)
-  -- Hyprland matches mouse binds against the modifiers held at button press,
-  -- so SUPER pressed while LMB is already down needs its own trigger. Any
-  -- key event ends a native drag, and the dispatcher does nothing when
-  -- Hyprland calls it again for the SUPER release.
-  local button_held, swallowed = false, nil
-  local function late_super()
-    if not button_held or not M.drag_begin() then return end
-    -- The window already saw this press, and an active native drag swallows
-    -- the release, so deliver that release unless SUPER goes up first.
-    if not native_active then swallowed = drag.request.address end
-    return hl.dispatch(native_drag)
-  end
-  for _, key in ipairs({ "Super_L", "Super_R" }) do
-    o.bind(key, nil, late_super, { ignore_mods = true, non_consuming = true })
-    -- Transparent: after a button release Hyprland shadows binds on held keys.
-    o.bind(key, nil, function() swallowed = nil end,
-      { release = true, ignore_mods = true, non_consuming = true, transparent = true })
+  local button_held, client_pressed, swallowed, cancelling = false, false, nil, nil
+  local function keep_drag()
+    if cancelling then cancelling:set_enabled(false); cancelling = nil end
   end
   -- A missed release would turn the next SUPER press into a drag, so the
   -- button tracking also runs while locked, in submaps and when inhibited.
+  -- Hyprland runs binds in the order they were added: these come first, so
+  -- the SUPER binds below can tell a press from a release by button_held.
   local function every(release)
     return { release = release, ignore_mods = true, non_consuming = true, locked = true,
       submap_universal = true, dont_inhibit = true, allow_input_capture = true }
   end
-  o.bind("mouse:272", nil, function() button_held = true end, every(false))
-  -- Ignore modifiers on release: SUPER may have been released before LMB.
+  o.bind("mouse:272", nil, function() button_held, client_pressed = true, true end, every(false))
+  -- Ignore modifiers on release: SUPER may have been released just before LMB.
   -- Non-consuming leaves ordinary clicks alone when no Hypertile drag exists.
   o.bind("mouse:272", "Finish tile drop", function()
     button_held = false
+    keep_drag()
     if swallowed then
       hl.dispatch(hl.dsp.pass({ window = "address:" .. swallowed }))
       swallowed = nil
     end
     M.drag_end()
   end, every(true))
+  -- Calling the native dispatcher marks a binding releasePending, so Hyprland
+  -- may call it again on release, where the dispatcher does nothing.
+  o.bind("SUPER + mouse:272", "Move window or select destination tile", function()
+    if button_held then
+      client_pressed = false -- This binding consumes the press.
+      M.drag_begin()
+    end
+    return hl.dispatch(native_drag)
+  end)
+  -- Hyprland matches mouse binds against the modifiers held at button press,
+  -- so SUPER pressed while LMB is already down needs its own trigger.
+  local function late_super()
+    keep_drag()
+    if not button_held or not M.drag_begin() then return end
+    -- An active native drag swallows the button release, so the drop passes
+    -- it to a window that saw the press, unless SUPER goes up first.
+    if client_pressed then swallowed = drag.request.address end
+    return hl.dispatch(native_drag)
+  end
+  -- SUPER held is what makes a left drag a tile drag, so releasing it hands
+  -- the drag back. The grace period still drops a tile when both come up
+  -- together and SUPER happens to lead.
+  local function super_up()
+    swallowed = nil
+    keep_drag()
+    if not drag then return end
+    cancelling = hl.timer(function()
+      cancelling = nil
+      M.drag_cancel()
+    end, { timeout = 200, type = "oneshot" })
+  end
+  for _, key in ipairs({ "Super_L", "Super_R" }) do
+    o.bind(key, nil, late_super, { ignore_mods = true, non_consuming = true })
+    -- Transparent: after a button release Hyprland shadows binds on held keys.
+    o.bind(key, nil, super_up, { release = true, ignore_mods = true, non_consuming = true, transparent = true })
+  end
   hl.unbind("SUPER + ALT + T")
   o.bind("SUPER + ALT + T", "Move window to numbered tile", M.pick)
   for _, entry in ipairs({ { "LEFT", "l" }, { "RIGHT", "r" }, { "UP", "u" }, { "DOWN", "d" } }) do

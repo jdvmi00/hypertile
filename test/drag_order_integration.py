@@ -14,15 +14,28 @@ sys.path.insert(0, str(ROOT / 'displays'))
 from wayland import words, string, read_string
 
 PROBE = """
-import gi, sys
+import gi, os, sys
 gi.require_version('Gtk', '4.0')
 from gi.repository import Gtk, Gdk
 log = open(sys.argv[1], 'a', buffering=1)
-names = {Gdk.EventType.BUTTON_PRESS: 'press', Gdk.EventType.BUTTON_RELEASE: 'release'}
+def event(controller, *_):
+    e = controller.get_current_event()
+    kind = e.get_event_type()
+    if kind == Gdk.EventType.BUTTON_PRESS:
+        log.write('press\\n')
+        # A title bar drag: the client asks the compositor to move the window.
+        if os.path.exists(sys.argv[1] + '.move'):
+            x, y = e.get_position()
+            controller.get_widget().get_surface().begin_move(e.get_device(), e.get_button(), x, y, e.get_time())
+    elif kind == Gdk.EventType.BUTTON_RELEASE:
+        log.write('release\\n')
+    elif kind == Gdk.EventType.MOTION_NOTIFY and e.get_modifier_state() & Gdk.ModifierType.BUTTON1_MASK:
+        log.write('held-motion\\n')
+    return False
 def activate(app):
     window = Gtk.ApplicationWindow(application=app)
     events = Gtk.EventControllerLegacy()
-    events.connect('event', lambda c, *_: log.write(names.get(c.get_current_event().get_event_type(), '') + '\\n') and False)
+    events.connect('event', event)
     window.add_controller(events)
     window.present()
 app = Gtk.Application(application_id='drag.probe')
@@ -160,13 +173,14 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                 time.sleep(0.1)
             assert sorted(w['class'] for w in clients().values()) == ['drag-foot', 'drag.probe'], clients()
 
-            def scenario(name, steps):
-                before = sorted(clients().values(), key=lambda w: w['at'][0])
-                a, b = before
+            def scenario(name, steps, swap):
+                windows = clients().values()
+                a = next(w for w in windows if w['class'] == 'drag.probe')
+                b = next(w for w in windows if w['class'] == 'drag-foot')
                 point_at(a)
                 time.sleep(0.2)
                 seen = len(probe_log.read_text().split())
-                key = None
+                key, problems = None, []
                 for step in steps:
                     if step == 'super':
                         key = hold_super(1.2)
@@ -177,37 +191,62 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                     elif step == 'move':
                         point_at(b)
                         time.sleep(0.3)
+                        if not (drag_state()['active'] and drag_state().get('zone')):
+                            problems.append('no destination highlighted while dragging with super')
                     elif step == 'release':
                         pointer.button(False)
                         time.sleep(0.3)
                     elif step == 'unsuper':
                         key.communicate(timeout=5)
                         time.sleep(0.3)
+                    elif step == 'unsuper+release':
+                        key.communicate(timeout=5)
+                        pointer.button(False)
+                        time.sleep(0.3)
+                    elif step == 'cancelled':
+                        now = clients()
+                        if drag_state()['active'] or any(w['floating'] for w in now.values()) or now[a['address']]['at'] != a['at']:
+                            problems.append('super release did not hand the drag back')
+                        mark = len(probe_log.read_text().split())
+                        pointer.nudge()
+                        time.sleep(0.2)
+                        if steps[0] == 'press' and 'held-motion' not in probe_log.read_text().split()[mark:]:
+                            problems.append('app did not get its drag back')
                     print(name, 'after', step, drag_state().get('active'), drag_state().get('zone'), [(w['class'], w['floating'], w['at']) for w in clients().values()], flush=True)
                 if key:
                     key.communicate(timeout=5)
                 time.sleep(0.4)
                 after = clients()
                 swapped = after[a['address']]['at'] == b['at'] and after[b['address']]['at'] == a['at']
-                settled = not drag_state()['active'] and not any(w['floating'] for w in after.values())
-                buttons = probe_log.read_text().split()[seen:]
-                # Only a press made before Super reaches the dragged window.
-                balanced = steps[0] != 'press' or (a['class'] == 'drag.probe' and buttons.count('press') == buttons.count('release') == 1)
-                result = 'PASS' if swapped and settled and balanced else 'FAIL'
-                print(result, name, 'swapped' if swapped else 'not swapped', 'settled' if settled else 'drag left active/floating',
-                      'probe ' + ('dragged ' + ' '.join(buttons) if a['class'] == 'drag.probe' else 'was the target'), flush=True)
-                if result == 'FAIL':
+                unchanged = after[a['address']]['at'] == a['at'] and after[b['address']]['at'] == b['at']
+                if swap and not swapped or not swap and not unchanged:
+                    problems.append('swapped' if swapped else 'not swapped')
+                if drag_state()['active'] or any(w['floating'] for w in after.values()):
+                    problems.append('drag left active or floating')
+                buttons = [e for e in probe_log.read_text().split()[seen:] if e != 'held-motion']
+                if buttons.count('press') != buttons.count('release'):
+                    problems.append('probe buttons ' + ' '.join(buttons))
+                print('FAIL' if problems else 'PASS', name, '; '.join(problems), flush=True)
+                if problems:
                     failures.append(name)
                     pointer.button(False)
+                    time.sleep(0.3)
 
-            scenario('button then super, button released first', ['press', 'super', 'move', 'release', 'unsuper'])
-            scenario('super then button, button released first', ['super', 'press', 'move', 'release', 'unsuper'])
-            scenario('button then super, super released first', ['press', 'super', 'move', 'unsuper', 'release'])
+            scenario('button then super, button released first', ['press', 'super', 'move', 'release', 'unsuper'], True)
+            scenario('super then button, button released first', ['super', 'press', 'move', 'release', 'unsuper'], True)
+            scenario('super then button, released together', ['super', 'press', 'move', 'unsuper+release'], True)
+            scenario('button then super, super released hands the drag back', ['press', 'super', 'move', 'unsuper', 'cancelled', 'release'], False)
+            scenario('super then button, super released hands the drag back', ['super', 'press', 'move', 'unsuper', 'cancelled', 'release'], False)
+            scenario('button then super twice', ['press', 'super', 'unsuper', 'super', 'move', 'release', 'unsuper'], True)
+            (probe_log.parent / (probe_log.name + '.move')).touch()
+            scenario('window move then super', ['press', 'super', 'move', 'release', 'unsuper'], True)
+            scenario('window move then super released', ['press', 'super', 'move', 'unsuper', 'release'], False)
+            (probe_log.parent / (probe_log.name + '.move')).unlink()
             before = clients()
             hold_super(0.4).communicate(timeout=5)
             time.sleep(0.3)
             lone = not drag_state()['active'] and all(clients()[k]['at'] == w['at'] and not clients()[k]['floating'] for k, w in before.items())
-            print('PASS' if lone else 'FAIL', 'super alone after late drags starts nothing', flush=True)
+            print('PASS' if lone else 'FAIL', 'super alone after drags starts nothing', flush=True)
             if not lone:
                 failures.append('super alone')
             point_at(sorted(before.values(), key=lambda w: w['at'][0])[0])
