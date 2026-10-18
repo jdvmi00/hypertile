@@ -341,10 +341,11 @@ open the overlay to see unmatched windows or resume saving after a partial
 restore or freeze. See [Session recovery](docs/SESSIONS.md).
 
 The bar widget shows the layout icon and name on each monitor's active
-workspace. Clicking opens the overlay; the scroll wheel or a middle-click cycles. It follows workspace
-focus, workspaces moving between monitors, and config reloads on its own,
-and `hypertile-ctl` pokes it after every apply, since a workspace rule
-write raises no compositor event. `omarchy bar move jmartin.hypertile
+workspace, or **Floating** for a workspace in Omarchy's floating mode.
+Clicking opens the overlay; the scroll wheel or a middle-click cycles. It follows workspace
+focus, workspaces moving between monitors, and config reloads on its own.
+`hypertile-ctl` pokes it after every apply, and Hypertile pokes it after
+Omarchy's layout toggle, since neither raises a compositor event. `omarchy bar move jmartin.hypertile
 --section center` moves it. The shell tracks the plugin by that one bar
 entry, so `omarchy plugin disable jmartin.hypertile` drops the overlay too.
 
@@ -430,9 +431,10 @@ hypertile-ctl cycle [--reverse] [--workspace N] [--quiet] [--now]
                                        switches at once); while the Layouts overlay is open,
                                        cycle browses there instead (--now bypasses this)
 hypertile-ctl heal [--workspace N]     manual recovery for a window drawn smaller than its tile
-hypertile-ctl current [--json]         active workspace id, name, layout; --json adds monitor size,
-                                       reserved edges, gaps, border, layout area
-hypertile-ctl workspaces [--json]      every workspace with monitor, layout, window count
+hypertile-ctl current [--json]         active workspace id, name, layout, and "floating" in Omarchy's
+                                       floating mode; --json adds monitor size, reserved edges, gaps,
+                                       border, layout area
+hypertile-ctl workspaces [--json]      every workspace with monitor, layout, floating, window count
 hypertile-ctl windows [--json]         open windows (class, title, workspace)
 hypertile-ctl default [name|dwindle|scrolling|master] [--no-reload]
                                        show or set the default layout (looknfeel.lua)
