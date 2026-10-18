@@ -474,5 +474,16 @@ local shown = #opened
 super.callback(); super_click()
 assert(#opened == shown + 1, "the next SUPER drag still opens the overlay")
 super_drop()
+-- A title bar move can carry the pointer off the pressed tile before SUPER.
+local here = cursor
+button.callback()
+cursor = {x=dragged.at.x - 50, y=dragged.at.y - 50}
+shown, natives = #opened, native_calls
+super.callback()
+assert(#opened == shown + 1 and native_calls == natives,
+  "SUPER shows the pressed tile's destinations without dragging another window")
+release.callback(); super_up.callback()
+assert(#passed == 2, "without a native drag Hyprland delivers the release itself")
+cursor = here
 nav.capture, nav.move, io.open, os.rename = capture, move, open_file, rename
 print("tile drag: all checks passed")

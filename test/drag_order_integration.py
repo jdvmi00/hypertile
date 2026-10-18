@@ -186,7 +186,7 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                         focused = json.loads(ctl('activewindow', '-j')).get('address')
                         key = hold_super(1.2)
                         time.sleep(0.4)
-                        if button_down and [w['address'] for w in clients().values() if w['floating']] != [a['address']]:
+                        if button_down and (not drag_state()['active'] or any(w['floating'] and w['address'] != a['address'] for w in clients().values())):
                             problems.append('super did not drag the pressed window')
                     elif step == 'press':
                         pointer.button(True)

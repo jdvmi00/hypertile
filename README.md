@@ -156,6 +156,10 @@ button, and the destinations appear. Holding `SUPER` is what makes it a tile
 drag. Release `SUPER` before the button and the destinations close, nothing
 moves, and the drag goes back to the app. Press `SUPER` again to bring them
 back. Releasing both together still drops the window.
+Dragging a window by its title bar works too: `SUPER` takes over the move for
+the window you grabbed, even with the pointer over another tile. Hyprland ends
+the title bar move when `SUPER` goes down, so releasing `SUPER` leaves the
+window in its tile rather than resuming the move.
 
 ## Overlay
 

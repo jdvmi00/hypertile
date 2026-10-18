@@ -6,6 +6,8 @@
   when Super is held first. Releasing Super before the button closes the
   destinations and hands the drag back to the app; pressing it again brings
   them back. Releasing both together still drops the window.
+- Pressing Super during a title bar move drags the grabbed window, not the
+  tile under the pointer, and releasing Super leaves focus where it was.
 - The dragged window still receives its button release, so a terminal
   selection or browser link does not stay pressed after the drop.
 - Fix a Super drag that opened no destinations after the previous drag ended

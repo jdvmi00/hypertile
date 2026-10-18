@@ -145,8 +145,8 @@ function M.drag_update()
   end
 end
 
-function M.drag_begin()
-  if drag then return true end
+-- The tiled window a left press at the pointer would drag, if any.
+function M.tile_under_pointer()
   local active, cursor = hl.get_active_window(), hl.get_cursor_pos()
   if not cursor then return end
   local ws = hl.get_active_workspace()
@@ -162,12 +162,22 @@ function M.drag_begin()
       candidates[#candidates + 1] = window
     end
   end
+  if #candidates == 1 then return candidates[1] end
+  for _, window in ipairs(candidates) do
+    if active and window.address == active.address then return window end
+  end
+end
+
+-- With an address, drag that window wherever the pointer is now.
+function M.drag_begin(address)
+  if drag then return true end
   local target
-  if #candidates == 1 then target = candidates[1]
-  else
-    for _, window in ipairs(candidates) do
-      if active and window.address == active.address then target = window end
+  if address then
+    for _, window in ipairs(hl.get_windows()) do
+      if window.address == address then target = window end
     end
+  else
+    target = M.tile_under_pointer()
   end
   if not target then return end
   local ok, request = pcall(M.capture, target)
@@ -323,7 +333,12 @@ function M.bind()
     return { release = release, ignore_mods = true, non_consuming = true, locked = true,
       submap_universal = true, dont_inhibit = true, allow_input_capture = true }
   end
-  o.bind("mouse:272", nil, function() button_held, client_pressed = true, true end, every(false))
+  local pressed -- The tile that got the press, which a later SUPER drags.
+  o.bind("mouse:272", nil, function()
+    button_held, client_pressed = true, true
+    local tile = M.tile_under_pointer()
+    pressed = tile and tile.address
+  end, every(false))
   -- Ignore modifiers on release: SUPER may have been released just before LMB.
   -- Non-consuming leaves ordinary clicks alone when no Hypertile drag exists.
   o.bind("mouse:272", "Finish tile drop", function()
@@ -348,10 +363,15 @@ function M.bind()
   -- so SUPER pressed while LMB is already down needs its own trigger.
   local function late_super()
     keep_drag()
-    if not button_held or not M.drag_begin() then return end
+    -- A title bar move may have carried the pointer over another tile.
+    if not button_held or not pressed or not M.drag_begin(pressed) then return end
+    -- Hyprland's drag takes the window under the pointer, so off the pressed
+    -- tile the overlay alone shows where it will drop.
+    local under = M.tile_under_pointer()
+    if not under or under.address ~= pressed then return end
     -- An active native drag swallows the button release, so the drop passes
     -- it to a window that saw the press, unless SUPER goes up first.
-    if client_pressed then swallowed = drag.request.address end
+    if client_pressed then swallowed = pressed end
     return hl.dispatch(native_drag)
   end
   -- SUPER held is what makes a left drag a tile drag, so releasing it hands
