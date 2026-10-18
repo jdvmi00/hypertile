@@ -180,13 +180,20 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                 point_at(a)
                 time.sleep(0.2)
                 seen = len(probe_log.read_text().split())
-                key, problems = None, []
+                key, problems, button_down = None, [], False
                 for step in steps:
                     if step == 'super':
+                        focused = json.loads(ctl('activewindow', '-j')).get('address')
                         key = hold_super(1.2)
                         time.sleep(0.4)
+                        if button_down and [w['address'] for w in clients().values() if w['floating']] != [a['address']]:
+                            problems.append('super did not drag the pressed window')
                     elif step == 'press':
                         pointer.button(True)
+                        button_down = True
+                        time.sleep(0.3)
+                    elif step == 'drift':
+                        point_at(b)
                         time.sleep(0.3)
                     elif step == 'move':
                         point_at(b)
@@ -207,6 +214,8 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                         now = clients()
                         if drag_state()['active'] or any(w['floating'] for w in now.values()) or now[a['address']]['at'] != a['at']:
                             problems.append('super release did not hand the drag back')
+                        if json.loads(ctl('activewindow', '-j')).get('address') != focused:
+                            problems.append('super release changed focus')
                         mark = len(probe_log.read_text().split())
                         pointer.nudge()
                         time.sleep(0.2)
@@ -241,6 +250,8 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
             (probe_log.parent / (probe_log.name + '.move')).touch()
             scenario('window move then super', ['press', 'super', 'move', 'release', 'unsuper'], True)
             scenario('window move then super released', ['press', 'super', 'move', 'unsuper', 'release'], False)
+            scenario('window move over another tile, then super', ['press', 'drift', 'super', 'move', 'release', 'unsuper'], True)
+            scenario('window move over another tile, then super released', ['press', 'drift', 'super', 'unsuper', 'cancelled', 'release'], False)
             (probe_log.parent / (probe_log.name + '.move')).unlink()
             before = clients()
             hold_super(0.4).communicate(timeout=5)
