@@ -1143,9 +1143,15 @@ function M.workspace_layout_source(id, inherit, workspace)
     end
   end
   local rule = read_file(M.paths.rules_dir .. "/" .. tostring(id) .. ".lua")
+  local omarchy_pick = not rule and read_file(M.paths.workspace_state_dir .. "/" .. tostring(id) .. ".lua")
   local preference = (doc.workspaces or {})[tostring(id)] or {}
   local scene = M.active_scene_layout(id)
   if scene and not inherit then return { effective_layout = scene, layout_source = "scene" } end
+  if omarchy_pick and not inherit then
+    local mode = omarchy_pick:match('mode%s*=%s*"([^"]*)"') or omarchy_pick:match('layout%s*=%s*"([^"]*)"')
+    local layout = ws and ws.layout or (mode ~= "floating" and mode) or M.default_layout() or "dwindle"
+    return { effective_layout = layout, layout_source = "omarchy" }
+  end
   local explicit
   if rule then
     if not rule:find("-- hypertile: monitor-default", 1, true) then explicit = rule:match('layout%s*=%s*"([^"]*)"') end

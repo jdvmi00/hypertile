@@ -90,6 +90,13 @@ def read_rules(directory=None):
     return result
 
 
+def read_omarchy_workspaces(directory=None):
+    if directory is None:
+        state = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local/state")
+        directory = state / "omarchy/workspace-layouts"
+    return {path.stem for path in Path(directory).glob("*.lua") if re.fullmatch(r"[1-9][0-9]*", path.stem)}
+
+
 def inherited_rules(directory=None):
     """The effective layout each inherited rule file currently caches."""
     if directory is None:
@@ -181,9 +188,11 @@ def restore_rules(files):
     return errors
 
 
-def effective_layout(key, monitor_id, document, rules, fallback, scenes=None):
+def effective_layout(key, monitor_id, document, rules, fallback, scenes=None, omarchy=frozenset(), current=None):
     if scenes and key in scenes:
         return scenes[key], "scene"
+    if key in omarchy and key not in rules:
+        return current, "omarchy"
     preference = document.get("workspaces", {}).get(key, {})
     # A freshly made explicit chooser selection supersedes previously confirmed
     # display policy; selecting Monitor default similarly clears an old override.
@@ -267,14 +276,15 @@ class WorkspacePolicy:
 
     def layouts(self, document, workspaces, available, rules, fallback, scenes=None):
         identities = {connector: identity for identity, connector in available.items()}
+        omarchy = read_omarchy_workspaces()
         result = []
         for workspace in workspaces:
             key = selector(workspace)
             if not valid_workspace(key):
                 continue
-            layout, source = effective_layout(key, identities.get(workspace.get("monitor")), document, rules, fallback, scenes)
-            result.append({"workspace": key, "layout": layout, "source": source,
-                           "changed": layout != workspace.get("layout", workspace.get("tiledLayout", workspace.get("tiled_layout")))})
+            live = workspace.get("layout", workspace.get("tiledLayout", workspace.get("tiled_layout")))
+            layout, source = effective_layout(key, identities.get(workspace.get("monitor")), document, rules, fallback, scenes, omarchy, live)
+            result.append({"workspace": key, "layout": layout, "source": source, "changed": layout != live})
         return result
 
     def _ctl(self, *args, preferences_path=None):
@@ -517,7 +527,7 @@ class WorkspacePolicy:
         self._save_runtime()
 
 
-def project_session(desktop, document, available, rules=None, fallback="dwindle"):
+def project_session(desktop, document, available, rules=None, fallback="dwindle", omarchy=None):
     """Resolve saved intent before session restore creates or moves windows.
 
     This does not restore scene applications or create initial workspaces. The
@@ -529,6 +539,7 @@ def project_session(desktop, document, available, rules=None, fallback="dwindle"
     scenes = {str(r["workspace"]): qualify(r["document"]["layout"]) for r in desktop.get("scenes", [])
               if r.get("document", {}).get("layout")}
     rules = read_rules() if rules is None else rules
+    omarchy = read_omarchy_workspaces() if omarchy is None else omarchy
     reverse = {connector: identity for identity, connector in available.items()}
     for workspace in result.get("workspaces", []):
         key = selector(workspace)
@@ -547,7 +558,7 @@ def project_session(desktop, document, available, rules=None, fallback="dwindle"
         identity = reverse.get(workspace.get("monitor"))
         display = next((d for d in document.get("displays", []) if d["id"] == identity), {})
         if key in rules or display.get("default_layout") or key in scenes or "layout" in preference:
-            workspace["layout"], _ = effective_layout(key, identity, document, rules, fallback, scenes)
+            workspace["layout"], _ = effective_layout(key, identity, document, rules, fallback, scenes, omarchy, workspace["layout"])
     monitors = {selector(w): w.get("monitor") for w in result.get("workspaces", [])}
     for window in result.get("windows", []):
         if window.get("workspace") in monitors:
