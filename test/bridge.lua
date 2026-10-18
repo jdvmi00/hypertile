@@ -337,7 +337,7 @@ esac
   bridge.shell_bin = fake_shell
 
   local active, err = bridge.active_workspace()
-  check(active and active.id == 3 and active.layout == "lua:quad", "active_workspace parses the compositor answer: " .. tostring(err))
+  check(active and active.id == 3 and active.layout == "lua:quad" and active.floating == false, "active_workspace parses the compositor answer: " .. tostring(err))
 
   local ok, perr = bridge.preview("quad", quad_spec, 3)
   check(ok, "preview evaluates without error: " .. tostring(perr))
@@ -362,7 +362,7 @@ esac
   check(geo and geo.monitor.width == 2560 and geo.monitor.height == 1440, "geometry divides by scale (logical size)")
   check(geo and geo.area.x == 10 and geo.area.y == 36 and geo.area.w == 2540 and geo.area.h == 1394,
     "geometry area = monitor minus reserved minus gaps: " .. (geo and (geo.area.x .. "," .. geo.area.y .. " " .. geo.area.w .. "x" .. geo.area.h) or "nil"))
-  check(geo and geo.workspace.id == 3 and geo.workspace.layout == "lua:quad", "geometry carries the workspace")
+  check(geo and geo.workspace.id == 3 and geo.workspace.layout == "lua:quad" and geo.workspace.floating == false, "geometry carries the workspace")
   check(geo and geo.gaps_in == 5 and geo.border_size == 2, "geometry reports global inner gap and border")
 
   local layout, id = bridge.apply("ultrawide")
@@ -463,6 +463,8 @@ esac
   check(wins and wins[1].title == "Docs tab", "windows() flattens tabs in titles: " .. tostring(wins and wins[1].title))
   local wss = bridge.workspaces()
   check(wss and #wss == 2 and wss[1].id == 1 and wss[2].id == 3 and wss[2].active and wss[2].monitor == "DP-1", "workspaces() sorted by id with monitor and active flag")
+  check(wss and wss[1].floating == true and wss[1].layout == "dwindle" and wss[2].floating == false,
+    "a workspace Omarchy saved as floating reads back floating over its tiled layout")
   local resolve = bridge.workspace_layout_source
   bridge.workspace_layout_source = function() error("live queries must not resolve saved preferences") end
   local live_wss = bridge.workspaces(true)
@@ -616,6 +618,10 @@ do
   local live_list = live_code == 0 and json.decode(live_out).workspaces
   check(live_list and #live_list == 2 and live_list[2].layout == "lua:quad" and live_list[2].active
     and not live_list[2].layout_source, "CLI live workspaces include bar fields without source resolution")
+  check(live_list and live_list[1].floating == true and live_list[2].floating == false, "CLI live workspaces say which float")
+  local text_list = run("workspaces")
+  check(text_list:find("1\tDP-1\tdwindle\t1 windows\tfloating", 1, true) and not text_list:find("quad\t2 windows\tfloating", 1, true),
+    "CLI workspaces marks the floating one: " .. text_list)
   check(code == 0 and out:find('"name": "quad"'), "cli dump prints JSON: " .. out:sub(1, 80))
   local _, vcode = run("validate -", out)
   check(vcode == 0, "cli validate accepts dump output")
@@ -794,7 +800,7 @@ do
   local previous_query = bridge.query
   local previous_identity = bridge.current_display_id
   bridge.current_display_id = function() return "wide" end
-  bridge.query = function() return "1\t1\tDP-1\tlua:columns\t0\ttrue" end
+  bridge.query = function() return "1\t1\tDP-1\tlua:columns\tfalse\t0\ttrue" end
   put(bridge.paths.displays_path, json.encode({ version = 1, displays = {
     { id = "wide", connector = "DP-1", default_layout = "lua:columns" }
   }, workspaces = {} }))

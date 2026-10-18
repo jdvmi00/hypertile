@@ -696,18 +696,24 @@ function M.query(lua_expr_returning_string)
   return text
 end
 
--- { id = number, name = string, layout = "lua:quad" | "dwindle" | ... }
+-- Only the mirror the loader attached knows Omarchy's modes. Without it,
+-- nothing floats.
+local FLOATING = 'local modes = package.loaded["hypr.hypertile-modes"]\n'
+  .. "local function floating(id) return modes ~= nil and modes.floating(id) end\n"
+
+-- { id = number, name = string, layout = "lua:quad" | "dwindle" | ...,
+--   floating = bool }. Omarchy's floating mode leaves `layout` underneath.
 function M.active_workspace()
-  local text, err = M.query([[
+  local text, err = M.query(FLOATING .. [[
     local ws = hl.get_active_workspace()
     if not ws then return "" end
-    return tostring(ws.id) .. "\t" .. tostring(ws.name) .. "\t" .. tostring(ws.tiled_layout)
+    return tostring(ws.id) .. "\t" .. tostring(ws.name) .. "\t" .. tostring(ws.tiled_layout) .. "\t" .. tostring(floating(ws.id))
   ]])
   if not text or text == "" then
     return nil, err or "no active workspace"
   end
-  local id, name, layout = text:match("^(.-)\t(.-)\t(.*)$")
-  return { id = tonumber(id), name = name, layout = layout }
+  local id, name, layout, floating = text:match("^(.-)\t(.-)\t(.-)\t(.*)$")
+  return { id = tonumber(id), name = name, layout = layout, floating = floating == "true" }
 end
 
 -- Active workspace plus the geometry a layout actually receives on the
@@ -715,7 +721,7 @@ end
 -- and the resulting area, all in monitor-local logical pixels. This is
 -- what an overlay needs to draw zones exactly where windows will go.
 function M.geometry()
-  local text, err = M.query([[
+  local text, err = M.query(FLOATING .. [[
     local ws = hl.get_active_workspace()
     local m = hl.get_active_monitor()
     if not m then return "" end
@@ -739,6 +745,7 @@ function M.geometry()
       tostring(res("top", 1)), tostring(res("right", 2)), tostring(res("bottom", 3)), tostring(res("left", 4)),
       tostring(gap("top")), tostring(gap("right")), tostring(gap("bottom")), tostring(gap("left")),
       tostring(inner), tostring(border), tostring(rounding),
+      tostring(ws ~= nil and floating(ws.id)),
     }, "\t")
   ]])
   if not text or text == "" then
@@ -763,7 +770,7 @@ function M.geometry()
     h = height - reserved.top - reserved.bottom - gaps.top - gaps.bottom,
   }
   return {
-    workspace = { id = tonumber(f[1]), name = f[2], layout = f[3] },
+    workspace = { id = tonumber(f[1]), name = f[2], layout = f[3], floating = f[21] == "true" },
     monitor = { name = f[4], x = tonumber(f[5]) or 0, y = tonumber(f[6]) or 0, width = width, height = height, scale = scale },
     reserved = reserved,
     gaps_out = gaps,
@@ -1158,12 +1165,12 @@ function M.workspace_layout_source(id, inherit, workspace)
   return { effective_layout = M.default_layout() or "dwindle", layout_source = "global" }
 end
 
--- Workspaces: { { id, name, monitor, layout, windows, active }, ... } sorted by id.
+-- Workspaces: { { id, name, monitor, layout, floating, windows, active }, ... } sorted by id.
 function M.workspaces(raw)
-  local text, err = M.query([[
+  local text, err = M.query(FLOATING .. [[
     local out = {}
     for _, ws in ipairs(hl.get_workspaces()) do
-      out[#out + 1] = table.concat({ tostring(ws.id), tostring(ws.name), ws.monitor and tostring(ws.monitor.name) or "", tostring(ws.tiled_layout), tostring(ws.windows or 0), tostring(ws.active) }, "\t")
+      out[#out + 1] = table.concat({ tostring(ws.id), tostring(ws.name), ws.monitor and tostring(ws.monitor.name) or "", tostring(ws.tiled_layout), tostring(floating(ws.id)), tostring(ws.windows or 0), tostring(ws.active) }, "\t")
     end
     return table.concat(out, "\n")
   ]])
@@ -1172,9 +1179,10 @@ function M.workspaces(raw)
   end
   local out = {}
   for line in text:gmatch("[^\n]+") do
-    local id, name, monitor, layout, windows, active = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.-)\t(.*)$")
+    local id, name, monitor, layout, floating, windows, active = line:match("^(.-)\t(.-)\t(.-)\t(.-)\t(.-)\t(.-)\t(.*)$")
     if id then
-      out[#out + 1] = { id = tonumber(id), name = name, monitor = monitor, layout = layout, windows = tonumber(windows) or 0, active = active == "true" }
+      out[#out + 1] = { id = tonumber(id), name = name, monitor = monitor, layout = layout, floating = floating == "true",
+        windows = tonumber(windows) or 0, active = active == "true" }
     end
   end
   if not raw then
