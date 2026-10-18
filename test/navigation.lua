@@ -403,6 +403,8 @@ end
 o = {bind=function(key, description, callback, options)
   bindings[#bindings+1] = {key=key, callback=callback, options=options or {}}
 end}
+local listeners = {}
+hl.on = function(name, callback) listeners[name] = callback end
 nav.bind()
 local function binding(key, release)
   for _, b in ipairs(bindings) do
@@ -485,5 +487,39 @@ assert(#opened == shown + 1 and native_calls == natives,
 release.callback(); super_up.callback()
 assert(#passed == 2, "without a native drag Hyprland delivers the release itself")
 cursor = here
+-- SUPER during a title bar move: Hyprland ends the move before the bind runs.
+local carried = {}
+for _, name in ipairs({"set_prop", "float", "resize", "move"}) do
+  hl.dsp.window[name] = function(options) return {carry=name, options=options} end
+end
+local native_dispatch = hl.dispatch
+hl.dispatch = function(command)
+  if command.carry then carried[#carried+1] = command return end
+  return native_dispatch(command)
+end
+local function last(name)
+  for i = #carried, 1, -1 do if carried[i].carry == name then return carried[i].options end end
+end
+button.callback()
+local tiled_at = dragged.at
+dragged.floating, dragged.at = true, {x=cursor.x - 40, y=cursor.y - 10}
+listeners["input.keyboard.key"](133, 0, 1)
+dragged.floating, dragged.at = false, tiled_at
+natives, moved = native_calls, #moves
+super.callback()
+assert(native_calls == natives and last("float").action == "set" and last("set_prop").value == "1"
+  and last("resize").x == dragged.size.x, "SUPER lifts the moved window at its floating box")
+cursor = {x=cursor.x + 25, y=cursor.y + 5}
+timers[#timers].callback()
+assert(last("move").x == cursor.x - 40 and last("move").y == cursor.y - 10, "the window follows the pointer")
+local follow_timer = timers[#timers]
+super_up.callback()
+fire(timers[#timers])
+assert(writes[#writes]:find('"active": false',1,true) and follow_timer.enabled and last("float").action == "set",
+  "SUPER release closes the overlay and keeps carrying the window")
+release.callback()
+assert(not follow_timer.enabled and last("float").action == "unset" and last("set_prop").value == "unset"
+  and #moves == moved, "the button release tiles the window again without a tile drop")
+hl.dispatch = native_dispatch
 nav.capture, nav.move, io.open, os.rename = capture, move, open_file, rename
 print("tile drag: all checks passed")

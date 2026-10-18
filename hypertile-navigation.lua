@@ -116,6 +116,51 @@ function M.drag_slot(request, cursor, monitor)
   end
 end
 
+-- Hyprland ends a title bar move on any key press, SUPER included, and Lua
+-- can start a native move only on the window under the pointer. Hypertile
+-- carries the window itself instead, at the box it had during the move.
+local follow
+
+local function window_by_address(address)
+  for _, window in ipairs(hl.get_windows()) do
+    if window.address == address then return window end
+  end
+end
+
+function M.follow_tick()
+  local cursor = follow and hl.get_cursor_pos()
+  if not cursor then return end
+  if not window_by_address(follow.address) then return M.follow_drop() end
+  local x, y = math.floor(cursor.x + follow.dx), math.floor(cursor.y + follow.dy)
+  if x ~= follow.x or y ~= follow.y then
+    follow.x, follow.y = x, y
+    hl.dispatch(hl.dsp.window.move({ window = "address:" .. follow.address, x = x, y = y }))
+  end
+end
+
+-- box holds the window's floating size and its offset from the pointer.
+function M.follow_lift(address, box)
+  local window = "address:" .. address
+  hl.dispatch(hl.dsp.window.set_prop({ window = window, prop = "no_anim", value = "1" }))
+  hl.dispatch(hl.dsp.window.float({ window = window, action = "set" }))
+  hl.dispatch(hl.dsp.window.resize({ window = window, x = box.w, y = box.h }))
+  follow = { address = address, dx = box.dx, dy = box.dy, w = box.w, h = box.h,
+    timer = hl.timer(M.follow_tick, { timeout = 8, type = "repeat" }) }
+  M.follow_tick()
+end
+
+-- Let the layout tile the window again, as Hyprland's own drop does.
+function M.follow_drop()
+  if not follow then return end
+  local dropped = follow
+  follow = nil
+  dropped.timer:set_enabled(false)
+  local window = "address:" .. dropped.address
+  hl.dispatch(hl.dsp.window.float({ window = window, action = "unset" }))
+  hl.dispatch(hl.dsp.window.set_prop({ window = window, prop = "no_anim", value = "unset" }))
+  return dropped
+end
+
 -- Put the layout back and close the overlay without moving anything.
 function M.drag_cancel()
   if not drag then return end
@@ -334,8 +379,17 @@ function M.bind()
       submap_universal = true, dont_inhibit = true, allow_input_capture = true }
   end
   local pressed -- The tile that got the press, which a later SUPER drags.
+  local moving -- Its floating box when SUPER interrupted a title bar move.
+  -- Key events reach Lua before Hyprland ends the move on any key press, so
+  -- the window is still floating under the pointer here.
+  hl.on("input.keyboard.key", function(_, _, state)
+    if state ~= 1 or not button_held or not pressed or follow then return end
+    local window, cursor = window_by_address(pressed), hl.get_cursor_pos()
+    moving = window and window.floating and cursor and { dx = window.at.x - cursor.x,
+      dy = window.at.y - cursor.y, w = window.size.x, h = window.size.y } or nil
+  end)
   o.bind("mouse:272", nil, function()
-    button_held, client_pressed = true, true
+    button_held, client_pressed, moving = true, true, nil
     local tile = M.tile_under_pointer()
     pressed = tile and tile.address
   end, every(false))
@@ -348,6 +402,7 @@ function M.bind()
       hl.dispatch(hl.dsp.pass({ window = "address:" .. swallowed }))
       swallowed = nil
     end
+    M.follow_drop()
     M.drag_end()
   end, every(true))
   -- Calling the native dispatcher marks a binding releasePending, so Hyprland
@@ -363,8 +418,16 @@ function M.bind()
   -- so SUPER pressed while LMB is already down needs its own trigger.
   local function late_super()
     keep_drag()
-    -- A title bar move may have carried the pointer over another tile.
-    if not button_held or not pressed or not M.drag_begin(pressed) then return end
+    if not button_held or not pressed or (follow and drag) then return end
+    local box = moving
+    moving = nil
+    if follow then
+      -- SUPER again after handing the move back: end the carry the way
+      -- Hyprland ends its own move, then lift the window into a tile drag.
+      box = M.follow_drop()
+    end
+    if not M.drag_begin(pressed) then return end
+    if box then return M.follow_lift(pressed, box) end
     -- Hyprland's drag takes the window under the pointer, so off the pressed
     -- tile the overlay alone shows where it will drop.
     local under = M.tile_under_pointer()
