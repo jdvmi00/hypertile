@@ -477,7 +477,7 @@ o.bind("SUPER + U", "User", "keep-me")
             stream.write('local navigation = require("hypr.hypertile-navigation")\n')
         result = self.run_script("uninstall.sh", "--purge", success=False)
         self.assertIn("still references hypertile-navigation; runtime files retained", result.stderr)
-        for name in ("hypertile-navigation.lua", "hypertile-session.lua", "hypertile.lua", "hypertile-pattern.lua"):
+        for name in ("hypertile-navigation.lua", "hypertile-session.lua", "hypertile-modes.lua", "hypertile.lua", "hypertile-pattern.lua"):
             self.assertTrue((self.hypr / name).exists())
         self.assertTrue((self.hypr / "layouts").exists())
         self.bindings.write_text('-- user removed custom navigation binding\n')

@@ -31,6 +31,8 @@ hl.monitor({output="WAYLAND-1", disabled=true})
 hl.monitor({output="HEADLESS-1", mode="2304x1536@120", position="0x0", scale=scale})
 '''
         monitors.write_text(original_monitors)
+        for source in ROOT.glob('hypertile*.lua'):
+            (config / source.name).write_bytes(source.read_bytes())
         entry = config / 'hyprland.lua'
         entry.write_text('''package.path = os.getenv("XDG_CONFIG_HOME") .. "/?.lua;" .. package.path
 hl.config({general={layout="dwindle"}, animations={enabled=false}, xwayland={enabled=false}})

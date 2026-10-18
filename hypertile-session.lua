@@ -5,6 +5,7 @@ local modname = ... or "hypertile-session"
 local prefix = modname:match("^(.-)hypertile%-session$") or ""
 local engine = require(prefix .. "hypertile")
 local json = require(prefix .. "hypertile-json")
+local modes = require(prefix .. "hypertile-modes")
 local M = {}
 local scene_content = {}
 
@@ -128,7 +129,11 @@ function M.scene_layout(request)
   local bridge = require(prefix .. "hypertile-bridge")
   if request.spec then engine.layout(request.layout:match("^lua:(.+)$"), request.spec) end
   local rule = bridge.rule_source(request.workspace, request.layout, request.spec)
-  assert(load(rule, "=scene-workspace", "t"))()
+  if request.pick then
+    modes.pick(rule, "=scene-workspace")
+  else
+    assert(load(rule, "=scene-workspace", "t"))()
+  end
   return rule -- Persistence belongs to the external writer, never nested hyprctl.
 end
 
@@ -494,11 +499,16 @@ function M.place(request)
   local window = "address:" .. address
   dispatch(hl.dsp.window.fullscreen_state, { window = window, internal = 0, client = 0, action = "set" })
   dispatch(hl.dsp.window.move, { window = window, workspace = saved.workspace, follow = false })
-  dispatch(hl.dsp.window.float, { window = window, action = saved.floating and "on" or "off" })
-  if saved.floating then
-    dispatch(hl.dsp.window.resize, { window = window, x = saved.size.x, y = saved.size.y })
-    dispatch(hl.dsp.window.move, { window = window, x = saved.at.x, y = saved.at.y })
-    dispatch(hl.dsp.window.pin, { window = window, action = saved.pinned and "on" or "off" })
+  -- Omarchy floats each window arriving on a workspace in its floating mode,
+  -- and tags it so that leaving the mode tiles it again. Floating it first
+  -- would leave it untagged, floating on after the mode ends.
+  if not modes.floating(saved.workspace) then
+    dispatch(hl.dsp.window.float, { window = window, action = saved.floating and "on" or "off" })
+    if saved.floating then
+      dispatch(hl.dsp.window.resize, { window = window, x = saved.size.x, y = saved.size.y })
+      dispatch(hl.dsp.window.move, { window = window, x = saved.at.x, y = saved.at.y })
+      dispatch(hl.dsp.window.pin, { window = window, action = saved.pinned and "on" or "off" })
+    end
   end
   for _, live in pairs(engine.live) do
     live.state.pins[address] = nil

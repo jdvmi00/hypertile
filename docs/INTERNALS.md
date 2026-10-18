@@ -105,8 +105,8 @@ every workspace with dwindle before putting it back. That is where the
 "a second apply fixes it" folklore came from. hypertile keeps its
 rules in `~/.local/state/hypertile/workspace-rules/`, which the loader
 reads with `io.open` (so nothing watches it) and applies once the config
-has finished loading; Omarchy's file for a workspace is removed the
-first time hypertile takes it over.
+has finished loading. Apply removes Omarchy's file for a workspace when
+hypertile takes it over (see Omarchy workspace modes).
 
 The fix is to not generate either storm: a switch is one workspace rule
 write and nothing else, and a Wayland trace of a four-press burst shows
@@ -121,6 +121,71 @@ the OSD, and a detached `cycle-commit` applies the request 200 ms later
 unless a newer press superseded it. A burst is one switch, to the layout
 landed on. `HYPERTILE_CYCLE_DEBOUNCE_MS` tunes it, `--now` bypasses it.
 `heal` stays as the manual recovery for the compositor-side condition.
+
+## Omarchy workspace modes
+
+Omarchy's layout toggle (`omarchy-hyprland-workspace-layout-toggle`, behind
+the bar's workspace glyph) cycles a workspace through dwindle, scrolling, and
+floating. It runs `o.workspace_mode({ workspace, mode })` through `hyprctl
+eval` and saves the same line as
+`~/.local/state/omarchy/workspace-layouts/<id>.lua`. Floating is not a
+Hyprland layout. Omarchy floats the windows itself, tags the ones it floated
+`omarchy-mode-floated`, and leaves the tiled layout in place, so
+`tiled_layout` keeps naming the layout underneath.
+
+`hypertile-modes.lua` holds the rules both sides follow:
+
+- **One saved choice per workspace.** Each side keeps its own file, and the
+  latest pick removes the other side's file. The bridge and the scene
+  service remove Omarchy's file when they save a rule. A wrapper around
+  `o.workspace_mode` removes hypertile's rule when Omarchy's toggle runs.
+  With neither file, the workspace follows Omarchy's `default.lua` or
+  `general.layout`.
+- **A pair of files is not a pick.** `omarchy-hyprland-workspace-layout-default`
+  writes a file for every busy workspace when the default changes, without
+  calling `o.workspace_mode`, so the wrapper never sees it. For a hypertile
+  workspace that file names `lua:<layout>`, or the old default when
+  `default.lua` already existed. Hypertile's rule stays in charge of such a
+  pair. Only the first load with this version treats a pair as a pick: before
+  the wrapper existed, Omarchy's toggle left hypertile's rule behind, and the
+  newer file was the user's choice. `omarchy-modes-migrated` in hypertile's
+  state directory records that the first load ran.
+- **Floating is its own fact.** The module mirrors Omarchy's private
+  `modes` table. It reads the mode each of Omarchy's saved files passes to
+  `o.workspace_mode`, then follows the wrapper and hypertile's own picks. `hypertile-ctl current`, `workspaces --json`,
+  and the bar widget read `floating` from it.
+- **Only a pick ends floating.** A pick is a persisted apply, a scene, or a
+  saved rule applied at load. It calls Omarchy's unwrapped `o.workspace_mode`
+  with the layout, which tiles the floated windows and records the mode.
+  Transient writes set the workspace rule directly and leave a floating
+  workspace floating. Those are `--no-persist`, previews, overlay browsing,
+  display policy reapplies, and session restore. Routed through Omarchy, a
+  transient write un-floats the workspace, so browsing in the overlay and
+  reverting, or a display reapply under a floating default, would end
+  floating mode.
+- **Restore leaves floating to Omarchy.** Omarchy floats and tags a window
+  that arrives on a floating workspace. Session restore used to float such a
+  window first, which left it untagged and floating after the mode ended.
+
+The nested probe behind `test/omarchy_modes_integration.py` established
+these facts on Hyprland 0.56.2:
+
+- `o.workspace_mode` does not exist while `hypertile-layouts.lua` runs,
+  because Omarchy's loader comes later, from `default.hypr.toggles`. It
+  exists when the loader's 1 ms timer fires. The timer attaches the module,
+  then applies hypertile's saved rules.
+- A reload builds a fresh Lua state. Omarchy defines `o.workspace_mode`
+  again, and the timer wraps the new function once.
+- Rewriting or deleting an Omarchy file that the last load required reloads
+  the whole config. Creating a new file there does not. Hyprland watches
+  each required file and reloads on any event from that watch. Removing
+  hypertile's rule from the wrapper never reloads, since nothing watches it.
+- A `require` that loads a file at runtime goes through Hyprland's hook on
+  the Lua file searcher. `test/display_integration.py` failed 3 of 3 runs
+  while every compositor query loaded `hypertile-modes.lua` that way, and
+  passed again when the queries stopped. The bridge's queries therefore
+  read `package.loaded`, which only has the module once the loader attached
+  it.
 
 ## What shapes the overlay
 

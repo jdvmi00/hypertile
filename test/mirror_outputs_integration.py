@@ -38,6 +38,8 @@ def main():
         runtime.mkdir(mode=0o700)
         config = root / 'c/hypr'
         config.mkdir(parents=True)
+        for source in ROOT.glob('hypertile*.lua'):
+            (config / source.name).write_bytes(source.read_bytes())
         entry = config / 'hyprland.lua'
         entry.write_text('package.path=os.getenv("XDG_CONFIG_HOME").."/?.lua;"..package.path\n'
                          'require("hypr.monitors")\nhl.config({animations={enabled=false},xwayland={enabled=false}})\n')
