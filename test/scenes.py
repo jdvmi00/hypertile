@@ -88,6 +88,8 @@ class SceneTests(unittest.TestCase):
         self.assertEqual(self.command("current")["phase"], "ready")
     def test_private_save_and_idempotent_apply(self):
         self.ready()
+        layouts = [args for method, args in self.comp.calls if method == "scene_layout"]
+        self.assertTrue(layouts and all(args.get("pick") for args in layouts), "an applied scene layout is the workspace's pick")
         self.assertEqual((self.root / "scenes/work.json").stat().st_mode & 0o777, 0o600)
         self.assertEqual(self.command("current")["document"]["layout_id"], "layout-one")
         count = len(self.comp.calls)

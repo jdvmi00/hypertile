@@ -5,6 +5,7 @@ local modname = ... or "hypertile-session"
 local prefix = modname:match("^(.-)hypertile%-session$") or ""
 local engine = require(prefix .. "hypertile")
 local json = require(prefix .. "hypertile-json")
+local modes = require(prefix .. "hypertile-modes")
 local M = {}
 local scene_content = {}
 
@@ -128,7 +129,11 @@ function M.scene_layout(request)
   local bridge = require(prefix .. "hypertile-bridge")
   if request.spec then engine.layout(request.layout:match("^lua:(.+)$"), request.spec) end
   local rule = bridge.rule_source(request.workspace, request.layout, request.spec)
-  assert(load(rule, "=scene-workspace", "t"))()
+  if request.pick then
+    modes.pick(rule, "=scene-workspace")
+  else
+    assert(load(rule, "=scene-workspace", "t"))()
+  end
   return rule -- Persistence belongs to the external writer, never nested hyprctl.
 end
 

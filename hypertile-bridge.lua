@@ -39,8 +39,6 @@ M.paths = {
 M.paths.layouts_dir = env_or("HYPERTILE_LAYOUTS_DIR", M.paths.config_home .. "/hypr/layouts")
 -- Persisted workspace rules. Kept outside Hyprland's config tree and read by
 -- the loader with io.open, so writing one does not trip the config watcher.
--- Omarchy's per-workspace file is removed when hypertile takes a workspace
--- over, because Omarchy's loader runs last.
 M.paths.rules_dir = env_or("HYPERTILE_RULES_DIR", M.paths.state_home .. "/hypertile/workspace-rules")
 M.paths.displays_path = env_or("HYPERTILE_DISPLAYS_PATH", M.paths.state_home .. "/hypertile/displays/confirmed.json")
 M.paths.scene_state_path = M.paths.state_home .. "/hypertile/scenes/state.json"
@@ -902,9 +900,10 @@ end
 
 -- Point a workspace at a layout, live and persisted. `layout` is a full
 -- layout name like "lua:quad" or "dwindle"; a bare hypertile name gets the
--- "lua:" prefix. opts.persist = false switches the running compositor only:
--- the rule file is left alone, so the next reload puts the workspace back.
--- The overlay browses layouts that way. Returns layout, workspace id.
+-- "lua:" prefix. A persisted apply is the user's pick, which ends Omarchy's
+-- floating mode there. opts.persist = false switches the running compositor
+-- only: the rule file is left alone, so the next reload puts the workspace
+-- back, and a floating workspace keeps floating. Returns layout, workspace id.
 function M.apply(layout, workspace, opts)
   if display_preview_busy() then return nil, "keep or revert the display preview before changing layouts" end
   local persist = not (opts and opts.persist == false)
@@ -938,7 +937,7 @@ function M.apply(layout, workspace, opts)
     end
   end
   local src = (inherited and "-- hypertile: monitor-default\n" or "") .. rule_source(id, layout, spec)
-  local _, err = M.eval_file(src)
+  local _, err = M.eval_file(persist and 'require("hypr.hypertile-modes").pick(' .. string.format("%q", src) .. ")" or src)
   if err then
     return nil, err
   end
@@ -950,9 +949,12 @@ function M.apply(layout, workspace, opts)
   if not ok then
     return nil, werr
   end
-  -- Removing Omarchy's file is itself a watched write, so it happens only on
-  -- first takeover.
-  os.remove(M.paths.workspace_state_dir .. "/" .. id .. ".lua")
+  -- Omarchy's bar and dock cache the mode they read from this file.
+  if os.remove(M.paths.workspace_state_dir .. "/" .. id .. ".lua") then
+    for _, target in ipairs({ "omarchy.workspaces", "omarchy.dock" }) do
+      os.execute(shell_quote(M.shell_bin) .. " -q " .. target .. " refresh >/dev/null 2>&1")
+    end
+  end
   return layout, id
 end
 

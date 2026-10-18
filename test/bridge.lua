@@ -308,17 +308,33 @@ case "$1" in
         dispatch = function(d) local f = io.open("%s/dispatch.log", "a"); f:write(tostring(d), "\n"); f:close() end,
         dsp = { window = { resize = function(opts) return "resize x=" .. opts.x .. " relative=" .. tostring(opts.relative) end }, layout = function(msg) return "layout " .. msg end },
       }
+      o = { workspace_mode = function(spec)
+        local f = io.open("%s/omarchy.log", "a"); f:write(spec.workspace, " ", spec.mode, "\n"); f:close()
+      end }
       package.preload["hypr.hypertile"] = function() return dofile("%s/hypertile.lua") end
+      package.loaded["hypr.hypertile-modes"] = dofile("%s/hypertile-modes.lua")
+      package.loaded["hypr.hypertile-modes"].attach("%s/omarchy-state")
       '"$code"'
     ' && echo ok
     ;;
   reload) echo ok ;;
   configerrors) echo "" ;;
 esac
-]]):format(tmp, tmp, tmp, tmp, tmp, root))
+]]):format(tmp, tmp, tmp, tmp, tmp, tmp, root, root, tmp))
   f:close()
+  os.execute("mkdir -p '" .. tmp .. "/omarchy-state/omarchy/workspace-layouts'")
+  local floating = assert(io.open(tmp .. "/omarchy-state/omarchy/workspace-layouts/1.lua", "w"))
+  floating:write('o.workspace_mode({ workspace = "1", mode = "floating" })\n')
+  floating:close()
   os.execute("chmod +x '" .. fake .. "'")
   bridge.hyprctl_bin = fake
+  local fake_shell = tmp .. "/fake-shell"
+  local sf = assert(io.open(fake_shell, "w"))
+  sf:write("#!/usr/bin/env bash\necho \"$*\" >> '" .. tmp .. "/shell.log'\n")
+  sf:write('if [[ "$1 $2" == "hypertile cycle" ]]; then echo "${TEST_OVERLAY_REPLY:-unhandled}"; fi\n')
+  sf:close()
+  os.execute("chmod +x '" .. fake_shell .. "'")
+  bridge.shell_bin = fake_shell
 
   local active, err = bridge.active_workspace()
   check(active and active.id == 3 and active.layout == "lua:quad", "active_workspace parses the compositor answer: " .. tostring(err))
@@ -351,6 +367,8 @@ esac
 
   local layout, id = bridge.apply("ultrawide")
   check(layout == "lua:ultrawide" and id == "3", "apply defaults to the active workspace and adds lua: prefix")
+  check(slurp(tmp .. "/omarchy.log") == "3 lua:ultrawide\n", "a persisted apply is Omarchy's mode for the workspace: " .. slurp(tmp .. "/omarchy.log"))
+  check(slurp(tmp .. "/shell.log") == "", "no Omarchy file, no word to Omarchy's bar")
   check(not exists(tmp .. "/dispatch.log"), "apply writes the rule only: no resize, no timer, no re-apply")
   check(bridge.heal() == "3", "heal defaults to the active workspace")
   local healed = slurp(tmp .. "/dispatch.log")
@@ -365,6 +383,9 @@ esac
   local legacy = assert(io.open(tmp .. "/workspace-layouts/3.lua", "w")); legacy:write('hl.workspace_rule({ workspace = "3", layout = "dwindle" })\n'); legacy:close()
   bridge.apply("ultrawide", 3)
   check(not exists(tmp .. "/workspace-layouts/3.lua"), "apply removes Omarchy's file for the workspace so it cannot override ours at reload")
+  local told = slurp(tmp .. "/shell.log")
+  check(told:find("omarchy.workspaces refresh", 1, true) and told:find("omarchy.dock refresh", 1, true),
+    "Omarchy's bar and dock reread the mode after apply removes its file: " .. told)
   bridge.save("gappy", gapped)
   bridge.apply("gappy", 4)
   local persisted4 = slurp(tmp .. "/workspace-rules/4.lua")
@@ -372,6 +393,7 @@ esac
   bridge.remove("gappy")
   local live, live_id = bridge.apply("quad", 5, { persist = false })
   check(live == "lua:quad" and live_id == "5" and not exists(tmp .. "/workspace-rules/5.lua"), "apply with persist = false writes no rule file")
+  check(not slurp(tmp .. "/omarchy.log"):find("5 ", 1, true), "apply with persist = false leaves Omarchy's mode alone")
 
   -- Unknown layouts and unsafe names never reach the compositor or the disk.
   local missing, merr = bridge.apply("typo", 9)
@@ -428,13 +450,7 @@ esac
   check(bridge.cycle_pending("3") == nil and bridge.cycle_commit("3", 2) == false, "the request is cleared once applied")
 
   -- The word to the shell: OSD only when asked, the bar refresh always.
-  local fake_shell = tmp .. "/fake-shell"
-  local sf = assert(io.open(fake_shell, "w"))
-  sf:write("#!/usr/bin/env bash\necho \"$*\" >> '" .. tmp .. "/shell.log'\n")
-  sf:write('if [[ "$1 $2" == "hypertile cycle" ]]; then echo "${TEST_OVERLAY_REPLY:-unhandled}"; fi\n')
-  sf:close()
-  os.execute("chmod +x '" .. fake_shell .. "'")
-  bridge.shell_bin = fake_shell
+  os.remove(tmp .. "/shell.log")
   bridge.notify_shell("lua:quad", true)
   bridge.notify_shell("dwindle", false)
   local shell_log = slurp(tmp .. "/shell.log")

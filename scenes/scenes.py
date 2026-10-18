@@ -353,7 +353,7 @@ class Manager:
                     self.step(active)
                     self.ctl.persist()
                     return self.public(active)
-                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": target})
+                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": target, "pick": True})
                 self.layouts.persist(workspace, rule)
                 return {"phase": "restored", "layout": target}
             entry = self.layouts.ensure(target.removeprefix("lua:"))
@@ -436,7 +436,7 @@ class Manager:
             self.ctl.compositor.call("scene_clear", {"workspace": workspace})
             if phase == "restore-builtin":
                 target = record.get("builtin_target") or record["baseline"]["layout"]
-                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": target})
+                rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": target, "pick": True})
                 self.layouts.persist(workspace, rule)
                 record["phase"] = "restored"
                 return
@@ -445,7 +445,7 @@ class Manager:
             record.update(document=document, spec=spec, phase="layout")
             self.ctl.persist()
         if record["phase"] == "layout":
-            rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": "lua:" + record["document"]["layout"], "spec": record["spec"]})
+            rule = self.ctl.compositor.call("scene_layout", {"workspace": workspace, "layout": "lua:" + record["document"]["layout"], "spec": record["spec"], "pick": True})
             self.layouts.persist(workspace, rule)
             record.update(phase="connecting", content_applied=False)
             self.ctl.persist()
