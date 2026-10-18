@@ -499,11 +499,16 @@ function M.place(request)
   local window = "address:" .. address
   dispatch(hl.dsp.window.fullscreen_state, { window = window, internal = 0, client = 0, action = "set" })
   dispatch(hl.dsp.window.move, { window = window, workspace = saved.workspace, follow = false })
-  dispatch(hl.dsp.window.float, { window = window, action = saved.floating and "on" or "off" })
-  if saved.floating then
-    dispatch(hl.dsp.window.resize, { window = window, x = saved.size.x, y = saved.size.y })
-    dispatch(hl.dsp.window.move, { window = window, x = saved.at.x, y = saved.at.y })
-    dispatch(hl.dsp.window.pin, { window = window, action = saved.pinned and "on" or "off" })
+  -- Omarchy floats each window arriving on a workspace in its floating mode,
+  -- and tags it so that leaving the mode tiles it again. Floating it first
+  -- would leave it untagged, floating on after the mode ends.
+  if not modes.floating(saved.workspace) then
+    dispatch(hl.dsp.window.float, { window = window, action = saved.floating and "on" or "off" })
+    if saved.floating then
+      dispatch(hl.dsp.window.resize, { window = window, x = saved.size.x, y = saved.size.y })
+      dispatch(hl.dsp.window.move, { window = window, x = saved.at.x, y = saved.at.y })
+      dispatch(hl.dsp.window.pin, { window = window, action = saved.pinned and "on" or "off" })
+    end
   end
   for _, live in pairs(engine.live) do
     live.state.pins[address] = nil
