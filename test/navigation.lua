@@ -403,30 +403,123 @@ end
 o = {bind=function(key, description, callback, options)
   bindings[#bindings+1] = {key=key, callback=callback, options=options or {}}
 end}
+local listeners = {}
+hl.on = function(name, callback) listeners[name] = callback end
 nav.bind()
-local press, release = bindings[1], bindings[2]
-assert(press.key == "SUPER + mouse:272" and not press.options.non_consuming)
-assert(release.options.release and release.options.ignore_mods)
-nav.capture = function()
+local function binding(key, release)
+  for _, b in ipairs(bindings) do
+    if b.key == key and not b.options.release == not release then return b end
+  end
+end
+local passed = {}
+hl.dsp.pass = function(options) return {pass=options.window} end
+hl.dispatch = function(command)
+  if command.pass then passed[#passed+1] = command.pass return end
+  assert(command == native_dispatcher, "native drag must use hl.dispatch")
+  native_calls = native_calls + 1
+end
+local press, release = binding("SUPER + mouse:272"), binding("mouse:272", true)
+local button, super, super_up = binding("mouse:272"), binding("Super_L"), binding("Super_L", true)
+assert(not press.options.non_consuming and release.options.ignore_mods and button.options.locked)
+assert(super.options.non_consuming and super_up.options.transparent)
+local function index(b) for i, v in ipairs(bindings) do if v == b then return i end end end
+assert(index(button) < index(press) and index(release) < index(press), "Hyprland runs the button binds first")
+local function super_click() button.callback(); press.callback() end
+local function super_drop() release.callback(); press.callback() end -- releasePending re-entry
+local function fire(timer) if timer.enabled then timer.enabled = false; timer.callback() end end
+local function tiled()
   return {address="dragged",stable_id=42,pid=100,monitor="offset",workspace=ws.id,
     source="a",slots=drag_request.slots}
 end
-press.callback()
-assert(native_calls == 1 and #moves == 1, "managed press animates without swapping")
+nav.capture = tiled
+local moved, natives = #moves, native_calls
+super_click()
+assert(native_calls == natives + 1 and #moves == moved, "managed press animates without swapping")
 cursor = {x=-1850,y=450}
-press.callback() -- Native release ends animation before committing.
-release.callback()
-assert(native_calls == 2 and #moves == 2, "only release commits managed drop")
+super_drop()
+assert(#moves == moved + 1, "only release commits managed drop")
 dragged.floating = true
-press.callback()
-assert(native_calls == 3, "floating windows retain native drag")
-press.callback() -- Hyprland re-enters the releasePending callback on release.
-release.callback()
-assert(native_calls == 4 and #moves == 2, "native release never starts tile selection")
+natives = native_calls
+super_click(); super_drop()
+assert(native_calls == natives + 2 and #moves == moved + 1, "floating windows keep native drag")
 dragged.floating = false
 nav.capture = function() error("other layout") end
-press.callback()
-press.callback()
-assert(native_calls == 6, "other layouts retain native press and release")
+super_click(); super_drop()
+assert(native_calls == natives + 4 and #moves == moved + 1, "other layouts keep native drag")
+nav.capture = tiled
+-- SUPER pressed after LMB arrives as its own key, not as the mouse bind.
+natives = native_calls
+super.callback(); super_up.callback()
+assert(native_calls == natives, "SUPER alone never drags")
+button.callback(); super.callback()
+assert(native_calls == natives + 1, "SUPER after LMB starts the native drag")
+release.callback(); super_up.callback()
+assert(#moves == moved + 2 and #passed == 1 and passed[1] == "address:dragged",
+  "the drop commits and the window gets the release the native drag swallowed")
+button.callback(); super.callback(); super_up.callback()
+fire(timers[#timers])
+assert(writes[#writes]:find('"active": false',1,true), "SUPER release closes the overlay")
+release.callback()
+assert(#moves == moved + 2 and #passed == 1, "a handed-back drag drops nothing and leaves the release to Hyprland")
+super.callback(); super_click(); super_up.callback(); super_drop()
+assert(#moves == moved + 3 and not timers[#timers].enabled, "a drop inside the grace period still commits")
+button.callback(); super.callback(); super_up.callback()
+fire(timers[#timers])
+super.callback()
+release.callback(); super_up.callback()
+assert(#moves == moved + 4 and #passed == 2, "SUPER pressed again takes the drag back")
+-- Hyprland skips the SUPER mouse bind on release once SUPER is up.
+super.callback(); super_click(); super_up.callback()
+fire(timers[#timers])
+release.callback()
+local shown = #opened
+super.callback(); super_click()
+assert(#opened == shown + 1, "the next SUPER drag still opens the overlay")
+super_drop()
+-- A title bar move can carry the pointer off the pressed tile before SUPER.
+local here = cursor
+button.callback()
+cursor = {x=dragged.at.x - 50, y=dragged.at.y - 50}
+shown, natives = #opened, native_calls
+super.callback()
+assert(#opened == shown + 1 and native_calls == natives,
+  "SUPER shows the pressed tile's destinations without dragging another window")
+release.callback(); super_up.callback()
+assert(#passed == 2, "without a native drag Hyprland delivers the release itself")
+cursor = here
+-- SUPER during a title bar move: Hyprland ends the move before the bind runs.
+local carried = {}
+for _, name in ipairs({"set_prop", "float", "resize", "move"}) do
+  hl.dsp.window[name] = function(options) return {carry=name, options=options} end
+end
+local native_dispatch = hl.dispatch
+hl.dispatch = function(command)
+  if command.carry then carried[#carried+1] = command return end
+  return native_dispatch(command)
+end
+local function last(name)
+  for i = #carried, 1, -1 do if carried[i].carry == name then return carried[i].options end end
+end
+button.callback()
+local tiled_at = dragged.at
+dragged.floating, dragged.at = true, {x=cursor.x - 40, y=cursor.y - 10}
+listeners["input.keyboard.key"](133, 0, 1)
+dragged.floating, dragged.at = false, tiled_at
+natives, moved = native_calls, #moves
+super.callback()
+assert(native_calls == natives and last("float").action == "set" and last("set_prop").value == "1"
+  and last("resize").x == dragged.size.x, "SUPER lifts the moved window at its floating box")
+cursor = {x=cursor.x + 25, y=cursor.y + 5}
+timers[#timers].callback()
+assert(last("move").x == cursor.x - 40 and last("move").y == cursor.y - 10, "the window follows the pointer")
+local follow_timer = timers[#timers]
+super_up.callback()
+fire(timers[#timers])
+assert(writes[#writes]:find('"active": false',1,true) and follow_timer.enabled and last("float").action == "set",
+  "SUPER release closes the overlay and keeps carrying the window")
+release.callback()
+assert(not follow_timer.enabled and last("float").action == "unset" and last("set_prop").value == "unset"
+  and #moves == moved, "the button release tiles the window again without a tile drop")
+hl.dispatch = native_dispatch
 nav.capture, nav.move, io.open, os.rename = capture, move, open_file, rename
 print("tile drag: all checks passed")
