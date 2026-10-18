@@ -25,7 +25,7 @@ def event(controller, *_):
         log.write('press\\n')
         # A title bar drag: the client asks the compositor to move the window.
         if os.path.exists(sys.argv[1] + '.move'):
-            x, y = e.get_position()
+            _, x, y = e.get_position()
             controller.get_widget().get_surface().begin_move(e.get_device(), e.get_button(), x, y, e.get_time())
     elif kind == Gdk.EventType.BUTTON_RELEASE:
         log.write('release\\n')
@@ -95,6 +95,11 @@ class Pointer:
             self.send(5, 4)
         self.sync()
 
+    def motion(self, dx, dy):
+        self.send(5, 0, words(int(time.monotonic() * 1000) & 0xffffffff, int(dx * 256) & 0xffffffff, int(dy * 256) & 0xffffffff))
+        self.send(5, 4)
+        self.sync()
+
     def button(self, pressed):
         self.send(5, 2, words(int(time.monotonic() * 1000) & 0xffffffff, 272, 1 if pressed else 0))
         self.send(5, 4)
@@ -152,6 +157,23 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                 ctl('eval', f'hl.dispatch(hl.dsp.cursor.move({{x={x + sx // 2}, y={y + sy // 2}}}))')
                 pointer.nudge()
 
+            def cursor():
+                return tuple(int(v) for v in ctl('cursorpos').split(','))
+
+            def glide_to(tx, ty):
+                # Real motion events: Hyprland's window moves ignore warps.
+                x, y = cursor()
+                dx, dy = tx - x, ty - y
+                steps = max(1, int(max(abs(dx), abs(dy)) / 40))
+                for _ in range(steps):
+                    pointer.motion(dx / steps, dy / steps)
+                    time.sleep(0.01)
+                time.sleep(0.3)
+
+            def under_pointer(address):
+                w, (x, y) = clients()[address], cursor()
+                return w['floating'] and w['at'][0] <= x < w['at'][0] + w['size'][0] and w['at'][1] <= y < w['at'][1] + w['size'][1]
+
             def hold_super(seconds):
                 key = subprocess.Popen(['wtype', '-M', 'logo', '-P', 'Super_L', '-s', str(int(seconds * 1000)), '-p', 'Super_L', '-m', 'logo'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
                 children.append(key)
@@ -180,35 +202,48 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                 point_at(a)
                 time.sleep(0.2)
                 seen = len(probe_log.read_text().split())
-                key, problems, button_down = None, [], False
+                key, problems, button_down, super_down = None, [], False, False
+                title_bar = (probe_log.parent / (probe_log.name + '.move')).exists()
                 for step in steps:
                     if step == 'super':
                         focused = json.loads(ctl('activewindow', '-j')).get('address')
-                        key = hold_super(1.2)
+                        key, super_down = hold_super(1.2), True
                         time.sleep(0.4)
                         if button_down and (not drag_state()['active'] or any(w['floating'] and w['address'] != a['address'] for w in clients().values())):
                             problems.append('super did not drag the pressed window')
+                        if button_down and title_bar and not under_pointer(a['address']):
+                            problems.append('window stopped following on super')
                     elif step == 'press':
                         pointer.button(True)
                         button_down = True
                         time.sleep(0.3)
-                    elif step == 'drift':
-                        point_at(b)
-                        time.sleep(0.3)
+                    elif step in ('drift', 'back'):
+                        # Left first: Hyprland ends the move by tiling the window last, on the right.
+                        glide_to(320 if step == 'drift' else 960, 360)
+                        if title_bar and not under_pointer(a['address']):
+                            problems.append('window not following after ' + step)
+                        if super_down and not (drag_state()['active'] and drag_state().get('zone')):
+                            problems.append('no destination highlighted while dragging with super')
                     elif step == 'move':
                         point_at(b)
                         time.sleep(0.3)
                         if not (drag_state()['active'] and drag_state().get('zone')):
                             problems.append('no destination highlighted while dragging with super')
                     elif step == 'release':
+                        dropped_at = cursor()
                         pointer.button(False)
+                        button_down = False
                         time.sleep(0.3)
                     elif step == 'unsuper':
                         key.communicate(timeout=5)
+                        super_down = False
                         time.sleep(0.3)
+                        if button_down and title_bar and (drag_state()['active'] or not under_pointer(a['address'])):
+                            problems.append('super release did not return to the window move')
                     elif step == 'unsuper+release':
                         key.communicate(timeout=5)
                         pointer.button(False)
+                        super_down = button_down = False
                         time.sleep(0.3)
                     elif step == 'cancelled':
                         now = clients()
@@ -228,7 +263,11 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                 after = clients()
                 swapped = after[a['address']]['at'] == b['at'] and after[b['address']]['at'] == a['at']
                 unchanged = after[a['address']]['at'] == a['at'] and after[b['address']]['at'] == b['at']
-                if swap and not swapped or not swap and not unchanged:
+                if swap == 'pointer':
+                    w = after[a['address']]
+                    if not (w['at'][0] <= dropped_at[0] < w['at'][0] + w['size'][0]):
+                        problems.append('window not dropped under the pointer')
+                elif swap is not None and (swap and not swapped or not swap and not unchanged):
                     problems.append('swapped' if swapped else 'not swapped')
                 if drag_state()['active'] or any(w['floating'] for w in after.values()):
                     problems.append('drag left active or floating')
@@ -248,10 +287,9 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
             scenario('super then button, super released hands the drag back', ['super', 'press', 'move', 'unsuper', 'cancelled', 'release'], False)
             scenario('button then super twice', ['press', 'super', 'unsuper', 'super', 'move', 'release', 'unsuper'], True)
             (probe_log.parent / (probe_log.name + '.move')).touch()
-            scenario('window move then super', ['press', 'super', 'move', 'release', 'unsuper'], True)
-            scenario('window move then super released', ['press', 'super', 'move', 'unsuper', 'release'], False)
-            scenario('window move over another tile, then super', ['press', 'drift', 'super', 'move', 'release', 'unsuper'], True)
-            scenario('window move over another tile, then super released', ['press', 'drift', 'super', 'unsuper', 'cancelled', 'release'], False)
+            scenario('title bar move, then super drops it in a tile', ['press', 'drift', 'super', 'back', 'release', 'unsuper'], 'pointer')
+            scenario('title bar move, super released returns to the move', ['press', 'drift', 'super', 'unsuper', 'back', 'release'], None)
+            scenario('title bar move, super pressed again', ['press', 'drift', 'super', 'unsuper', 'super', 'back', 'release', 'unsuper'], 'pointer')
             (probe_log.parent / (probe_log.name + '.move')).unlink()
             before = clients()
             hold_super(0.4).communicate(timeout=5)
