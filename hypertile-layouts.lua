@@ -37,10 +37,11 @@ end
 -- rounding they refer to are the user's values, not the defaults.
 local state_home = os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state")
 local rules_dir = state_home .. "/hypertile/workspace-rules"
+local modes = require("hypr.hypertile-modes")
 
 local function apply_persisted_rules()
-  local quoted_dir = "'" .. rules_dir:gsub("'", "'\\''") .. "'"
-  local handle = io.popen("find " .. quoted_dir .. " -maxdepth 1 -type f -name '*.lua' -printf '%f\\n' 2>/dev/null | sort -V")
+  modes.attach(state_home)
+  local handle = io.popen("find " .. quote(rules_dir) .. " -maxdepth 1 -type f -name '*.lua' -printf '%f\\n' 2>/dev/null | sort -V")
   if not handle then
     return
   end
@@ -49,21 +50,17 @@ local function apply_persisted_rules()
     if f then
       local text = f:read("a")
       f:close()
-      local chunk, err = load(text, "=hypertile-rule:" .. filename, "t")
-      if chunk then
-        local ok, rerr = pcall(chunk)
-        if not ok then
-          print("hypertile: workspace rule " .. filename .. " failed: " .. tostring(rerr))
-        end
-      else
-        print("hypertile: workspace rule " .. filename .. " does not parse: " .. tostring(err))
+      local ok, err = pcall(modes.pick, text, "=hypertile-rule:" .. filename)
+      if not ok then
+        print("hypertile: workspace rule " .. filename .. " failed: " .. tostring(err))
       end
     end
   end
   handle:close()
 end
 -- Timers fire only after the config chunk has finished, so the shortest
--- one-shot is enough to run after looknfeel.lua has set the globals.
+-- one-shot is enough to run after looknfeel.lua has set the globals, and
+-- after Omarchy has loaded its saved workspace modes.
 if hl.timer then
   hl.timer(apply_persisted_rules, { timeout = 1, type = "oneshot" })
 else
