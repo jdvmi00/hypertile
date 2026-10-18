@@ -404,7 +404,12 @@ o = {bind=function(key, description, callback, options)
   bindings[#bindings+1] = {key=key, callback=callback, options=options or {}}
 end}
 nav.bind()
-local press, release = bindings[1], bindings[2]
+local function binding(key, release)
+  for _, b in ipairs(bindings) do
+    if b.key == key and not b.options.release == not release then return b end
+  end
+end
+local press, release = binding("SUPER + mouse:272"), binding("mouse:272", true)
 assert(press.key == "SUPER + mouse:272" and not press.options.non_consuming)
 assert(release.options.release and release.options.ignore_mods)
 nav.capture = function()
@@ -428,5 +433,35 @@ nav.capture = function() error("other layout") end
 press.callback()
 press.callback()
 assert(native_calls == 6, "other layouts retain native press and release")
+-- SUPER pressed after LMB arrives as its own key, not as the mouse bind.
+local passed = {}
+hl.dsp.pass = function(options) return {pass=options.window} end
+hl.dispatch = function(command)
+  if command.pass then passed[#passed+1] = command.pass return end
+  assert(command == native_dispatcher, "native drag must use hl.dispatch")
+  native_calls = native_calls + 1
+end
+local super, super_up, button = binding("Super_L"), binding("Super_L", true), binding("mouse:272")
+assert(super.options.non_consuming and super_up.options.transparent and button.options.locked)
+nav.capture = function()
+  return {address="dragged",stable_id=42,pid=100,monitor="offset",workspace=ws.id,
+    source="a",slots=drag_request.slots}
+end
+super.callback()
+assert(native_calls == 6, "SUPER alone never drags")
+button.callback()
+super.callback()
+assert(native_calls == 7, "SUPER after LMB starts the native drag")
+release.callback()
+super_up.callback()
+assert(#moves == 3 and #passed == 1 and passed[1] == "address:dragged",
+  "the drop commits and the window gets the release the native drag swallowed")
+button.callback()
+super.callback()
+super_up.callback()
+release.callback()
+assert(native_calls == 8 and #moves == 4 and #passed == 1, "SUPER released first leaves the release to Hyprland")
+super.callback()
+assert(native_calls == 8, "a finished late drag leaves SUPER alone")
 nav.capture, nav.move, io.open, os.rename = capture, move, open_file, rename
 print("tile drag: all checks passed")

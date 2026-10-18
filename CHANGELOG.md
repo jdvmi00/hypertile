@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Start a tile drag when Super is pressed after the left button is already
+  down, not only when Super is held first. The dragged window still receives
+  its button release, so a terminal selection or browser link does not stay
+  pressed after the drop.
+
 ## 1.5.5 (2026-10-08)
 
 Hypertile 1.5.5 restores overlay colors after the Qt 6.12 update.

@@ -1,15 +1,34 @@
 """Exercise Super + left-button tile drags in both press orders, nested Hyprland.
 
 Run from a Wayland desktop: python3 test/drag_order_integration.py.
-Requires Hyprland, hyprctl, foot and wtype. Creates two disposable windows.
-Unlike drag_integration.py the real mouse:272 binds stay in place: a
-zwlr_virtual_pointer_v1 client sends the button and wtype holds Super, so
-Hyprland's own modifier matching decides whether the drag starts.
+Requires Hyprland, hyprctl, foot, wtype and PyGObject with GTK 4. Creates
+two disposable windows. Unlike drag_integration.py the real mouse:272 binds
+stay in place: a zwlr_virtual_pointer_v1 client sends the button and wtype
+holds Super, so Hyprland's own modifier matching decides whether the drag
+starts. One window is a GTK probe that logs the buttons it receives, since a
+window that saw the press must also see the release.
 """
 import os, json, subprocess, time, tempfile, pathlib, shutil, socket, struct, sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'displays'))
 from wayland import words, string, read_string
+
+PROBE = """
+import gi, sys
+gi.require_version('Gtk', '4.0')
+from gi.repository import Gtk, Gdk
+log = open(sys.argv[1], 'a', buffering=1)
+names = {Gdk.EventType.BUTTON_PRESS: 'press', Gdk.EventType.BUTTON_RELEASE: 'release'}
+def activate(app):
+    window = Gtk.ApplicationWindow(application=app)
+    events = Gtk.EventControllerLegacy()
+    events.connect('event', lambda c, *_: log.write(names.get(c.get_current_event().get_event_type(), '') + '\\n') and False)
+    window.add_controller(events)
+    window.present()
+app = Gtk.Application(application_id='drag.probe')
+app.connect('activate', activate)
+app.run([])
+"""
 
 
 class Pointer:
@@ -27,7 +46,8 @@ class Pointer:
         assert 'zwlr_virtual_pointer_manager_v1' in found, sorted(found)
         self.send(2, 0, words(found['zwlr_virtual_pointer_manager_v1']) + string('zwlr_virtual_pointer_manager_v1') + words(1, 4))
         self.send(4, 0, words(0, 5))
-        list(self.roundtrip(6))
+        self.next_id = 6
+        self.sync()
 
     def send(self, object_id, opcode, payload=b''):
         self.connection.sendall(words(object_id, ((8 + len(payload)) << 16) | opcode) + payload)
@@ -46,21 +66,26 @@ class Pointer:
         while True:
             object_id, header = struct.unpack('=II', self.receive(8))
             data = self.receive((header >> 16) - 8)
-            if object_id == 1 and opcode_of(header) == 0:
+            if object_id == 1 and header & 0xffff == 0:
                 raise OSError('Wayland error ' + repr(data))
             if object_id == callback:
                 return
-            yield object_id, opcode_of(header), data
+            yield object_id, header & 0xffff, data
+
+    def sync(self):
+        list(self.roundtrip(self.next_id))
+        self.next_id += 1
+
+    def nudge(self):
+        for dx in (256, -256):
+            self.send(5, 0, words(int(time.monotonic() * 1000) & 0xffffffff, dx & 0xffffffff, 0))
+            self.send(5, 4)
+        self.sync()
 
     def button(self, pressed):
         self.send(5, 2, words(int(time.monotonic() * 1000) & 0xffffffff, 272, 1 if pressed else 0))
         self.send(5, 4)
-        list(self.roundtrip(7 + self.__dict__.setdefault('syncs', 0)))
-        self.syncs += 1
-
-
-def opcode_of(header):
-    return header & 0xffff
+        self.sync()
 
 
 with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
@@ -112,6 +137,7 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                 x, y = window['at']
                 sx, sy = window['size']
                 ctl('eval', f'hl.dispatch(hl.dsp.cursor.move({{x={x + sx // 2}, y={y + sy // 2}}}))')
+                pointer.nudge()
 
             def hold_super(seconds):
                 key = subprocess.Popen(['wtype', '-M', 'logo', '-P', 'Super_L', '-s', str(int(seconds * 1000)), '-p', 'Super_L', '-m', 'logo'], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -120,18 +146,26 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
 
             assert not ctl('configerrors'), ctl('configerrors')
             pointer = Pointer(str(runtime / env['WAYLAND_DISPLAY']))
-            for name in ['drag-a', 'drag-b']:
-                children.append(subprocess.Popen(['foot', '--app-id', name, 'sh', '-c', 'sleep 120'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            probe_log = root / 'probe.log'
+            probe_log.touch()
+            children.append(subprocess.Popen([sys.executable, '-c', PROBE, str(probe_log)], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+            for _ in range(80):
+                if len(clients()) == 1:
+                    break
+                time.sleep(0.1)
+            children.append(subprocess.Popen(['foot', '--app-id', 'drag-foot', 'sh', '-c', 'sleep 120'], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
             for _ in range(80):
                 if len(clients()) == 2:
                     break
                 time.sleep(0.1)
+            assert sorted(w['class'] for w in clients().values()) == ['drag-foot', 'drag.probe'], clients()
 
             def scenario(name, steps):
                 before = sorted(clients().values(), key=lambda w: w['at'][0])
                 a, b = before
                 point_at(a)
                 time.sleep(0.2)
+                seen = len(probe_log.read_text().split())
                 key = None
                 for step in steps:
                     if step == 'super':
@@ -143,29 +177,39 @@ with tempfile.TemporaryDirectory(prefix='ht-do-') as directory:
                     elif step == 'move':
                         point_at(b)
                         time.sleep(0.3)
-                        print(name, 'mid-drag', drag_state(), flush=True)
                     elif step == 'release':
                         pointer.button(False)
                         time.sleep(0.3)
                     elif step == 'unsuper':
                         key.communicate(timeout=5)
                         time.sleep(0.3)
+                    print(name, 'after', step, drag_state().get('active'), drag_state().get('zone'), [(w['class'], w['floating'], w['at']) for w in clients().values()], flush=True)
                 if key:
                     key.communicate(timeout=5)
                 time.sleep(0.4)
                 after = clients()
                 swapped = after[a['address']]['at'] == b['at'] and after[b['address']]['at'] == a['at']
                 settled = not drag_state()['active'] and not any(w['floating'] for w in after.values())
-                result = 'PASS' if swapped and settled else 'FAIL'
-                print(result, name, 'swapped' if swapped else 'not swapped', 'settled' if settled else 'drag left active/floating', flush=True)
+                buttons = probe_log.read_text().split()[seen:]
+                # Only a press made before Super reaches the dragged window.
+                balanced = steps[0] != 'press' or (a['class'] == 'drag.probe' and buttons.count('press') == buttons.count('release') == 1)
+                result = 'PASS' if swapped and settled and balanced else 'FAIL'
+                print(result, name, 'swapped' if swapped else 'not swapped', 'settled' if settled else 'drag left active/floating',
+                      'probe ' + ('dragged ' + ' '.join(buttons) if a['class'] == 'drag.probe' else 'was the target'), flush=True)
                 if result == 'FAIL':
                     failures.append(name)
                     pointer.button(False)
 
-            scenario('super then button, button released first', ['super', 'press', 'move', 'release', 'unsuper'])
             scenario('button then super, button released first', ['press', 'super', 'move', 'release', 'unsuper'])
+            scenario('super then button, button released first', ['super', 'press', 'move', 'release', 'unsuper'])
             scenario('button then super, super released first', ['press', 'super', 'move', 'unsuper', 'release'])
             before = clients()
+            hold_super(0.4).communicate(timeout=5)
+            time.sleep(0.3)
+            lone = not drag_state()['active'] and all(clients()[k]['at'] == w['at'] and not clients()[k]['floating'] for k, w in before.items())
+            print('PASS' if lone else 'FAIL', 'super alone after late drags starts nothing', flush=True)
+            if not lone:
+                failures.append('super alone')
             point_at(sorted(before.values(), key=lambda w: w['at'][0])[0])
             pointer.button(True)
             point_at(sorted(before.values(), key=lambda w: w['at'][0])[1])

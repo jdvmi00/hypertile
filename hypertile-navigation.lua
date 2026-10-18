@@ -322,9 +322,41 @@ function M.bind()
     native_active = true
     return hl.dispatch(native_drag)
   end)
+  -- Hyprland matches mouse binds against the modifiers held at button press,
+  -- so SUPER pressed while LMB is already down needs its own trigger. Any
+  -- key event ends a native drag, and the dispatcher does nothing when
+  -- Hyprland calls it again for the SUPER release.
+  local button_held, swallowed = false, nil
+  local function late_super()
+    if not button_held or not M.drag_begin() then return end
+    -- The window already saw this press, and an active native drag swallows
+    -- the release, so deliver that release unless SUPER goes up first.
+    if not native_active then swallowed = drag.request.address end
+    return hl.dispatch(native_drag)
+  end
+  for _, key in ipairs({ "Super_L", "Super_R" }) do
+    o.bind(key, nil, late_super, { ignore_mods = true, non_consuming = true })
+    -- Transparent: after a button release Hyprland shadows binds on held keys.
+    o.bind(key, nil, function() swallowed = nil end,
+      { release = true, ignore_mods = true, non_consuming = true, transparent = true })
+  end
+  -- A missed release would turn the next SUPER press into a drag, so the
+  -- button tracking also runs while locked, in submaps and when inhibited.
+  local function every(release)
+    return { release = release, ignore_mods = true, non_consuming = true, locked = true,
+      submap_universal = true, dont_inhibit = true, allow_input_capture = true }
+  end
+  o.bind("mouse:272", nil, function() button_held = true end, every(false))
   -- Ignore modifiers on release: SUPER may have been released before LMB.
   -- Non-consuming leaves ordinary clicks alone when no Hypertile drag exists.
-  o.bind("mouse:272", "Finish tile drop", M.drag_end, { release = true, ignore_mods = true, non_consuming = true })
+  o.bind("mouse:272", "Finish tile drop", function()
+    button_held = false
+    if swallowed then
+      hl.dispatch(hl.dsp.pass({ window = "address:" .. swallowed }))
+      swallowed = nil
+    end
+    M.drag_end()
+  end, every(true))
   hl.unbind("SUPER + ALT + T")
   o.bind("SUPER + ALT + T", "Move window to numbered tile", M.pick)
   for _, entry in ipairs({ { "LEFT", "l" }, { "RIGHT", "r" }, { "UP", "u" }, { "DOWN", "d" } }) do
