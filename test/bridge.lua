@@ -308,20 +308,36 @@ case "$1" in
         dispatch = function(d) local f = io.open("%s/dispatch.log", "a"); f:write(tostring(d), "\n"); f:close() end,
         dsp = { window = { resize = function(opts) return "resize x=" .. opts.x .. " relative=" .. tostring(opts.relative) end }, layout = function(msg) return "layout " .. msg end },
       }
+      o = { workspace_mode = function(spec)
+        local f = io.open("%s/omarchy.log", "a"); f:write(spec.workspace, " ", spec.mode, "\n"); f:close()
+      end }
       package.preload["hypr.hypertile"] = function() return dofile("%s/hypertile.lua") end
+      package.loaded["hypr.hypertile-modes"] = dofile("%s/hypertile-modes.lua")
+      package.loaded["hypr.hypertile-modes"].attach("%s/omarchy-state")
       '"$code"'
     ' && echo ok
     ;;
   reload) echo ok ;;
   configerrors) echo "" ;;
 esac
-]]):format(tmp, tmp, tmp, tmp, tmp, root))
+]]):format(tmp, tmp, tmp, tmp, tmp, tmp, root, root, tmp))
   f:close()
+  os.execute("mkdir -p '" .. tmp .. "/omarchy-state/omarchy/workspace-layouts'")
+  local floating = assert(io.open(tmp .. "/omarchy-state/omarchy/workspace-layouts/1.lua", "w"))
+  floating:write('o.workspace_mode({ workspace = "1", mode = "floating" })\n')
+  floating:close()
   os.execute("chmod +x '" .. fake .. "'")
   bridge.hyprctl_bin = fake
+  local fake_shell = tmp .. "/fake-shell"
+  local sf = assert(io.open(fake_shell, "w"))
+  sf:write("#!/usr/bin/env bash\necho \"$*\" >> '" .. tmp .. "/shell.log'\n")
+  sf:write('if [[ "$1 $2" == "hypertile cycle" ]]; then echo "${TEST_OVERLAY_REPLY:-unhandled}"; fi\n')
+  sf:close()
+  os.execute("chmod +x '" .. fake_shell .. "'")
+  bridge.shell_bin = fake_shell
 
   local active, err = bridge.active_workspace()
-  check(active and active.id == 3 and active.layout == "lua:quad", "active_workspace parses the compositor answer: " .. tostring(err))
+  check(active and active.id == 3 and active.layout == "lua:quad" and active.floating == false, "active_workspace parses the compositor answer: " .. tostring(err))
 
   local ok, perr = bridge.preview("quad", quad_spec, 3)
   check(ok, "preview evaluates without error: " .. tostring(perr))
@@ -346,11 +362,13 @@ esac
   check(geo and geo.monitor.width == 2560 and geo.monitor.height == 1440, "geometry divides by scale (logical size)")
   check(geo and geo.area.x == 10 and geo.area.y == 36 and geo.area.w == 2540 and geo.area.h == 1394,
     "geometry area = monitor minus reserved minus gaps: " .. (geo and (geo.area.x .. "," .. geo.area.y .. " " .. geo.area.w .. "x" .. geo.area.h) or "nil"))
-  check(geo and geo.workspace.id == 3 and geo.workspace.layout == "lua:quad", "geometry carries the workspace")
+  check(geo and geo.workspace.id == 3 and geo.workspace.layout == "lua:quad" and geo.workspace.floating == false, "geometry carries the workspace")
   check(geo and geo.gaps_in == 5 and geo.border_size == 2, "geometry reports global inner gap and border")
 
   local layout, id = bridge.apply("ultrawide")
   check(layout == "lua:ultrawide" and id == "3", "apply defaults to the active workspace and adds lua: prefix")
+  check(slurp(tmp .. "/omarchy.log") == "3 lua:ultrawide\n", "a persisted apply is Omarchy's mode for the workspace: " .. slurp(tmp .. "/omarchy.log"))
+  check(slurp(tmp .. "/shell.log") == "", "no Omarchy file, no word to Omarchy's bar")
   check(not exists(tmp .. "/dispatch.log"), "apply writes the rule only: no resize, no timer, no re-apply")
   check(bridge.heal() == "3", "heal defaults to the active workspace")
   local healed = slurp(tmp .. "/dispatch.log")
@@ -365,6 +383,9 @@ esac
   local legacy = assert(io.open(tmp .. "/workspace-layouts/3.lua", "w")); legacy:write('hl.workspace_rule({ workspace = "3", layout = "dwindle" })\n'); legacy:close()
   bridge.apply("ultrawide", 3)
   check(not exists(tmp .. "/workspace-layouts/3.lua"), "apply removes Omarchy's file for the workspace so it cannot override ours at reload")
+  local told = slurp(tmp .. "/shell.log")
+  check(told:find("omarchy.workspaces refresh", 1, true) and told:find("omarchy.dock refresh", 1, true),
+    "Omarchy's bar and dock reread the mode after apply removes its file: " .. told)
   bridge.save("gappy", gapped)
   bridge.apply("gappy", 4)
   local persisted4 = slurp(tmp .. "/workspace-rules/4.lua")
@@ -372,6 +393,7 @@ esac
   bridge.remove("gappy")
   local live, live_id = bridge.apply("quad", 5, { persist = false })
   check(live == "lua:quad" and live_id == "5" and not exists(tmp .. "/workspace-rules/5.lua"), "apply with persist = false writes no rule file")
+  check(not slurp(tmp .. "/omarchy.log"):find("5 ", 1, true), "apply with persist = false leaves Omarchy's mode alone")
 
   -- Unknown layouts and unsafe names never reach the compositor or the disk.
   local missing, merr = bridge.apply("typo", 9)
@@ -428,13 +450,7 @@ esac
   check(bridge.cycle_pending("3") == nil and bridge.cycle_commit("3", 2) == false, "the request is cleared once applied")
 
   -- The word to the shell: OSD only when asked, the bar refresh always.
-  local fake_shell = tmp .. "/fake-shell"
-  local sf = assert(io.open(fake_shell, "w"))
-  sf:write("#!/usr/bin/env bash\necho \"$*\" >> '" .. tmp .. "/shell.log'\n")
-  sf:write('if [[ "$1 $2" == "hypertile cycle" ]]; then echo "${TEST_OVERLAY_REPLY:-unhandled}"; fi\n')
-  sf:close()
-  os.execute("chmod +x '" .. fake_shell .. "'")
-  bridge.shell_bin = fake_shell
+  os.remove(tmp .. "/shell.log")
   bridge.notify_shell("lua:quad", true)
   bridge.notify_shell("dwindle", false)
   local shell_log = slurp(tmp .. "/shell.log")
@@ -447,6 +463,8 @@ esac
   check(wins and wins[1].title == "Docs tab", "windows() flattens tabs in titles: " .. tostring(wins and wins[1].title))
   local wss = bridge.workspaces()
   check(wss and #wss == 2 and wss[1].id == 1 and wss[2].id == 3 and wss[2].active and wss[2].monitor == "DP-1", "workspaces() sorted by id with monitor and active flag")
+  check(wss and wss[1].floating == true and wss[1].layout == "dwindle" and wss[2].floating == false,
+    "a workspace Omarchy saved as floating reads back floating over its tiled layout")
   local resolve = bridge.workspace_layout_source
   bridge.workspace_layout_source = function() error("live queries must not resolve saved preferences") end
   local live_wss = bridge.workspaces(true)
@@ -600,6 +618,10 @@ do
   local live_list = live_code == 0 and json.decode(live_out).workspaces
   check(live_list and #live_list == 2 and live_list[2].layout == "lua:quad" and live_list[2].active
     and not live_list[2].layout_source, "CLI live workspaces include bar fields without source resolution")
+  check(live_list and live_list[1].floating == true and live_list[2].floating == false, "CLI live workspaces say which float")
+  local text_list = run("workspaces")
+  check(text_list:find("1\tDP-1\tdwindle\t1 windows\tfloating", 1, true) and not text_list:find("quad\t2 windows\tfloating", 1, true),
+    "CLI workspaces marks the floating one: " .. text_list)
   check(code == 0 and out:find('"name": "quad"'), "cli dump prints JSON: " .. out:sub(1, 80))
   local _, vcode = run("validate -", out)
   check(vcode == 0, "cli validate accepts dump output")
@@ -778,7 +800,7 @@ do
   local previous_query = bridge.query
   local previous_identity = bridge.current_display_id
   bridge.current_display_id = function() return "wide" end
-  bridge.query = function() return "1\t1\tDP-1\tlua:columns\t0\ttrue" end
+  bridge.query = function() return "1\t1\tDP-1\tlua:columns\tfalse\t0\ttrue" end
   put(bridge.paths.displays_path, json.encode({ version = 1, displays = {
     { id = "wide", connector = "DP-1", default_layout = "lua:columns" }
   }, workspaces = {} }))
@@ -795,6 +817,14 @@ do
   bridge.current_display_id = function() return "wide" end
   source = bridge.workspace_layout_source("1", false, { id = 1, name = "1", monitor = "HDMI-A-2" })
   check(source.layout_source == "monitor" and source.effective_layout == "lua:columns", "stable identity follows a changed connector")
+  os.remove(bridge.paths.rules_dir .. "/1.lua")
+  os.execute("mkdir -p '" .. bridge.paths.workspace_state_dir .. "'")
+  put(bridge.paths.workspace_state_dir .. "/1.lua", 'o.workspace_mode({ workspace = "1", mode = "floating" })\n')
+  source = bridge.workspace_layout_source("1")
+  check(source.layout_source == "omarchy" and source.effective_layout == "lua:columns", "Omarchy's saved mode is the workspace's own choice")
+  source = bridge.workspace_layout_source("1", true)
+  check(source.layout_source == "monitor", "inheriting skips Omarchy's mode")
+  os.remove(bridge.paths.workspace_state_dir .. "/1.lua")
   local refs = bridge.references("columns")
   check(#refs.monitors == 1 and refs.monitors[1] == "DP-1", "monitor default participates in references")
   put(bridge.paths.scene_state_path, json.encode({ scenes = { ["1"] = { phase = "ready", document = { layout = "quad" } } } }))

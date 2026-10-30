@@ -463,6 +463,20 @@ Hyprland, and `hypertile-ctl default <name>` sets the default.
 A useful arrangement: a quad or reader layout as the default, and a code
 layout on the one or two workspaces where you build things.
 
+### Sharing workspaces with Omarchy's layout toggle
+
+Omarchy cycles a workspace through dwindle, scrolling, and floating when you
+click its workspace glyph in the bar or pick a layout from the Omarchy menu.
+Hypertile and that toggle share each workspace: the latest choice from either
+one wins, and it stays after a reload or a login. Omarchy saves its choice in
+`~/.local/state/omarchy/workspace-layouts/`. Whichever side you choose with
+removes the other side's saved choice for that workspace.
+
+On a floating workspace the bar widget reads **Floating**. To tile it with a
+Hypertile layout, press `SUPER+L`, scroll on the bar widget, or press Enter on
+a layout in the overlay. Browsing in the overlay leaves the windows floating
+until you keep a layout. Omarchy's toggle cannot select a Hypertile layout.
+
 ## 8. Scenes: what each zone holds
 
 A layout says where windows go. A **scene** says which windows: for each
@@ -683,6 +697,7 @@ Monitor settings and unrelated desktop customizations are retained.
 | layouts, one Lua file each | `~/.config/hypr/layouts/<name>.lua` |
 | the default layout | `general.layout` in `~/.config/hypr/looknfeel.lua` |
 | each workspace's layout | `~/.local/state/hypertile/workspace-rules/` |
+| a layout chosen with Omarchy's toggle | `~/.local/state/omarchy/workspace-layouts/` |
 | overlay preferences (rail side, key list, open sections, the Getting started card) | `~/.local/state/hypertile/overlay.json` |
 | saved scenes | `~/.config/hypertile/scenes/<name>.json` |
 | session settings and app recipes | `~/.config/hypertile/session.json` |

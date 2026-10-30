@@ -110,4 +110,22 @@ assert(engine.live.test.state.exclusive_pins.a and not engine.live.test.state.ex
 assert(engine.live.old.state.pins.a == "elsewhere" and not engine.live.old.state.pins.gone,
   "pins on inactive layouts retain live windows and release closed windows")
 
+local pipe = assert(io.popen("mktemp -d /tmp/hypertile-session-XXXXXX"))
+local state = assert(pipe:read("l")); assert(pipe:close())
+assert(os.execute("mkdir -p '" .. state .. "/omarchy/workspace-layouts'"))
+local mode = assert(io.open(state .. "/omarchy/workspace-layouts/2.lua", "w"))
+mode:write('o.workspace_mode({ workspace = "2", mode = "floating" })\n'); mode:close()
+require("hypertile-modes").attach(state)
+local function placed(workspace)
+  dispatched = {}
+  session.place({ address = "a", layout = "lua:test",
+    saved = { workspace = workspace, floating = true, pinned = false, at = { x = 5, y = 6 }, size = { x = 70, y = 80 } } })
+  local kinds = {}
+  for _, args in ipairs(dispatched) do kinds[#kinds + 1] = args.kind end
+  return table.concat(kinds, ",")
+end
+assert(placed("2") == "fullscreen,move", "Omarchy's floating workspace gets the window and floats it: " .. placed("2"))
+assert(placed("3") == "fullscreen,move,float,resize,move,pin", "a tiled workspace restores the saved floating window: " .. placed("3"))
+assert(os.execute("rm -rf '" .. state .. "'"))
+
 print("session adapter: all checks passed")

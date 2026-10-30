@@ -69,8 +69,9 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
                              to the layout landed on (--now switches at once)
                              while the Layouts overlay is open, browse there
                              instead (Enter keeps, Esc restores); --now bypasses it
-  current [--json]           active workspace id, name, and layout; --json adds
-                             monitor size, reserved edges, gaps, and layout area
+  current [--json]           active workspace id, name, and layout, then "floating"
+                             in Omarchy's floating mode; --json adds monitor size,
+                             reserved edges, gaps, and layout area
   workspaces [--json] [--live]
                              every workspace with its monitor and layout;
                              --live skips saved layout-source resolution
@@ -465,7 +466,8 @@ function commands.current(pos, flags)
   if not active then
     die(err)
   end
-  print(string.format("%s\t%s\t%s", tostring(active.id), tostring(active.name), tostring(active.layout)))
+  print(string.format("%s\t%s\t%s%s", tostring(active.id), tostring(active.name), tostring(active.layout),
+    active.floating and "\tfloating" or ""))
 end
 
 function commands.workspaces(pos, flags)
@@ -478,7 +480,8 @@ function commands.workspaces(pos, flags)
     return
   end
   for _, ws in ipairs(list) do
-    print(string.format("%s%s\t%s\t%s\t%d windows", ws.active and "* " or "  ", tostring(ws.id), ws.monitor, ws.layout, ws.windows))
+    print(string.format("%s%s\t%s\t%s\t%d windows%s", ws.active and "* " or "  ", tostring(ws.id), ws.monitor, ws.layout, ws.windows,
+      ws.floating and "\tfloating" or ""))
   end
 end
 

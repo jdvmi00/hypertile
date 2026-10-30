@@ -234,7 +234,7 @@ fi
 mkdir -p "$hypr/layouts"
 
 # Install the new dependency before a watched engine write can trigger reload.
-for f in hypertile-pattern.lua hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
+for f in hypertile-pattern.lua hypertile-modes.lua hypertile.lua hypertile-json.lua hypertile-bridge.lua hypertile-layouts.lua hypertile-navigation.lua hypertile-session.lua; do
   install -m 0644 "$src/$f" "$hypr/$f"
 done
 
