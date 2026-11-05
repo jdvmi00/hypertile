@@ -88,6 +88,7 @@ without `--enable`, then run its `install.sh` with `--no-menu` and/or
 | `SUPER+ALT+T`, then a zone number | move the active window to that zone, swapping if occupied; `Esc` cancels |
 | `SUPER+Arrow` / `SUPER+SHIFT+Arrow` | focus a window / move or swap it into the next zone |
 | `SUPER` + left mouse drag | drag a tiled window to a numbered destination |
+| `SUPER+ALT+SHIFT+Home` | on a floating workspace, open new windows at the focused window's size |
 | bar widget | the layout on this monitor's workspace; scroll or middle-click cycles |
 | right-click bar widget | Settings, opened at Hypertile’s menu bar position: Left, Middle, or Right |
 | `hypertile-ctl list` | the layouts on disk, the one in use starred |
@@ -341,10 +342,11 @@ open the overlay to see unmatched windows or resume saving after a partial
 restore or freeze. See [Session recovery](docs/SESSIONS.md).
 
 The bar widget shows the layout icon and name on each monitor's active
-workspace. Clicking opens the overlay; the scroll wheel or a middle-click cycles. It follows workspace
-focus, workspaces moving between monitors, and config reloads on its own,
-and `hypertile-ctl` pokes it after every apply, since a workspace rule
-write raises no compositor event. `omarchy bar move jmartin.hypertile
+workspace, or **Floating** for a workspace in Omarchy's floating mode.
+Clicking opens the overlay; the scroll wheel or a middle-click cycles. It follows workspace
+focus, workspaces moving between monitors, and config reloads on its own.
+`hypertile-ctl` pokes it after every apply, and Hypertile pokes it after
+Omarchy's layout toggle, since neither raises a compositor event. `omarchy bar move jmartin.hypertile
 --section center` moves it. The shell tracks the plugin by that one bar
 entry, so `omarchy plugin disable jmartin.hypertile` drops the overlay too.
 
@@ -430,9 +432,10 @@ hypertile-ctl cycle [--reverse] [--workspace N] [--quiet] [--now]
                                        switches at once); while the Layouts overlay is open,
                                        cycle browses there instead (--now bypasses this)
 hypertile-ctl heal [--workspace N]     manual recovery for a window drawn smaller than its tile
-hypertile-ctl current [--json]         active workspace id, name, layout; --json adds monitor size,
-                                       reserved edges, gaps, border, layout area
-hypertile-ctl workspaces [--json]      every workspace with monitor, layout, window count
+hypertile-ctl current [--json]         active workspace id, name, layout, and "floating" in Omarchy's
+                                       floating mode; --json adds monitor size, reserved edges, gaps,
+                                       border, layout area
+hypertile-ctl workspaces [--json]      every workspace with monitor, layout, floating, window count
 hypertile-ctl windows [--json]         open windows (class, title, workspace)
 hypertile-ctl default [name|dwindle|scrolling|master] [--no-reload]
                                        show or set the default layout (looknfeel.lua)
@@ -653,8 +656,9 @@ python3 test/display_integration.py --auto-position-only # disable next to an au
 python3 test/mirror_outputs_integration.py --fixed # opt-in with the mirror-output compositor fix installed
 python3 test/overlay_display_integration.py       # real overlay surfaces and keyboard input across mirror-source switches
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
-lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
-                                                 # engine, bounded Lua patterns, capacity, hot swap
+lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua && lua test/floating.lua
+                                                 # engine, bounded Lua patterns, capacity, hot swap, floating window size
+python3 test/floating_integration.py              # opt-in isolated compositor with Omarchy's floating mode
 lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
 lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl
 python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lua && node test/session.js

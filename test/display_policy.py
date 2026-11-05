@@ -9,7 +9,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "displays"))
-from policy import WorkspacePolicy, effective_layout, mirror_rescues, project_session, read_rules, validate
+from policy import WorkspacePolicy, effective_layout, mirror_rescues, project_session, read_omarchy_workspaces, read_rules, validate
 
 
 class PolicyTests(unittest.TestCase):
@@ -21,6 +21,9 @@ class PolicyTests(unittest.TestCase):
                            "name:work": {"monitor": "portrait", "layout": "lua:quad"}}}
         self.policy = WorkspacePolicy()
         self.both = {"wide": "DP-1", "portrait": "DP-2"}
+        self.omarchy = patch("policy.read_omarchy_workspaces", return_value=set())
+        self.omarchy.start()
+        self.addCleanup(self.omarchy.stop)
 
     def ws(self, monitor="DP-1", key="1", layout="lua:columns"):
         return {"selector": key, "monitor": monitor, "layout": layout}
@@ -32,6 +35,16 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual(effective_layout("1", "wide", self.document, {"1": "lua:quad"}, "dwindle"), ("lua:quad", "explicit"))
         self.assertEqual(effective_layout("name:work", "wide", self.document, {"name:work": None}, "dwindle"), ("lua:columns", "monitor"))
         self.assertEqual(effective_layout("1", "wide", self.document, {}, "dwindle", {"1": "lua:scene"}), ("lua:scene", "scene"))
+        self.assertEqual(effective_layout("name:work", "wide", self.document, {}, "dwindle", omarchy={"name:work"}, current="scrolling"),
+                         ("scrolling", "omarchy"))
+        self.assertEqual(effective_layout("1", "wide", self.document, {"1": "lua:quad"}, "dwindle", omarchy={"1"}), ("lua:quad", "explicit"))
+
+    def test_omarchy_modes_are_numbered_workspace_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("2", "10", "default", "name:work"):
+                (root / (name + ".lua")).write_text('o.workspace_mode({ workspace = "2", mode = "floating" })')
+            self.assertEqual(read_omarchy_workspaces(root), {"2", "10"})
 
     def test_migrate_rules_and_do_not_infer_from_effective_layout(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -68,6 +81,12 @@ class PolicyTests(unittest.TestCase):
         self.assertEqual([(w["monitor"], w["layout"]) for w in result["workspaces"]], [("DP-1", "lua:columns"), ("DP-2", "lua:quad")])
         desktop["scenes"] = [{"workspace": "1", "document": {"layout": "scene"}}]
         self.assertEqual(project_session(desktop, self.document, self.both, {})["workspaces"][0]["layout"], "lua:scene")
+        desktop["scenes"] = []
+        omarchy = project_session(desktop, self.document, self.both, {}, omarchy={"1"})
+        self.assertEqual(omarchy["workspaces"][0]["layout"], "lua:columns", "Omarchy's workspace restores the layout it had")
+        desktop["workspaces"][0]["layout"] = "scrolling"
+        omarchy = project_session(desktop, self.document, self.both, {}, omarchy={"1"})
+        self.assertEqual(omarchy["workspaces"][0]["layout"], "scrolling", "Omarchy's workspace is not given the display default")
         self.assertEqual(project_session(desktop, {"displays": []}, {}, {}), desktop)
 
     def test_invalid_policy_and_duplicate_initial_rejected(self):
@@ -139,6 +158,26 @@ class RuntimeTests(unittest.TestCase):
         self.rules = patch("policy.read_rules", return_value={})
         self.rules.start()
         self.addCleanup(self.rules.stop)
+        self.omarchy = patch("policy.read_omarchy_workspaces", return_value=set())
+        self.omarchy.start()
+        self.addCleanup(self.omarchy.stop)
+
+    def test_reload_leaves_a_workspace_omarchy_picked(self):
+        self.adapter.live[0]["monitor"] = "DP-1"
+        self.policy.reconcile(self.doc, "restore")
+        self.adapter.live[0]["tiledLayout"] = "scrolling"
+        self.commands.clear()
+        self.omarchy.stop()
+        with patch("policy.read_omarchy_workspaces", return_value={"1"}):
+            result = self.policy.reconcile(self.doc, "configreload")
+        self.omarchy.start()
+        self.assertEqual(result["layouts"][0]["source"], "omarchy")
+        self.assertFalse([args for args in self.commands if args[0] == "apply"], "Omarchy's scrolling survives the reload")
+        self.assertEqual(self.adapter.live[0]["tiledLayout"], "scrolling")
+        result = self.policy.reconcile(self.doc, "configreload")
+        self.assertEqual(result["layouts"][0]["source"], "monitor")
+        self.assertIn(("apply", "dwindle", "--workspace", "1", "--no-persist", "--quiet"), self.commands,
+                      "without Omarchy's file the display default returns")
 
     def test_runtime_preview_and_reload_do_not_persist_temporary_layouts(self):
         result = self.policy.reconcile(self.doc, "preview")

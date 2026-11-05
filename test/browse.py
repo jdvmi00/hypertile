@@ -51,6 +51,7 @@ class BrowseTests(unittest.TestCase):
         self.start(name="dwindle")
         self.assertEqual(self.comp.desktop["workspaces"][0]["layout"], "dwindle")
         self.assertNotIn("spec", self.comp.calls[-1][1])
+        self.assertNotIn("pick", self.comp.calls[-1][1], "browsing leaves Omarchy's mode alone")
         self.tick(3)
         self.assertEqual(self.command("current"), before)
         self.command("browse-end", browse_token="overlay")

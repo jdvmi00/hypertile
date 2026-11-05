@@ -463,6 +463,9 @@ function M.bind()
     hl.unbind("SUPER + " .. key)
     o.bind("SUPER + " .. key, "Focus window " .. key:lower() .. " (gap-aware)", function() M.focus(direction) end)
   end
+  -- Floating workspaces: save the focused window's size for new windows.
+  local ok, floating = pcall(require, "hypr.hypertile-floating")
+  if ok then floating.bind() end
 end
 
 return M

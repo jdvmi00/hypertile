@@ -28,6 +28,8 @@ def main():
         runtime = root / "r"
         runtime.mkdir(mode=0o700)
         (root / 'config/hypr').mkdir(parents=True)
+        for source in ROOT.glob('hypertile*.lua'):
+            (root / 'config/hypr' / source.name).write_bytes(source.read_bytes())
         (root / 'config/hypr/looknfeel.lua').write_text('hl.config({general={layout="dwindle"}})\n')
         config = root / "config/hypr/hyprland.lua"
         monitors = root / "config/hypr/monitors.lua"

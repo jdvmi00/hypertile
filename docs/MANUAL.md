@@ -76,6 +76,7 @@ You now have:
 | `SUPER+SHIFT+Arrow` | move the window to the next zone, or swap |
 | `SUPER+ALT+T` | move the window to a numbered zone |
 | `SUPER` + left drag | drop a window onto a zone |
+| `SUPER+ALT+SHIFT+Home` | open new windows on floating workspaces at this window's size |
 | bar widget | the layout name; click opens the overlay, scroll cycles |
 | `SUPER+SPACE` → Layouts | open the overlay from the menu |
 | `SUPER+SPACE` → Logout / Reboot / Shutdown | the same actions, saving the session first |
@@ -463,6 +464,48 @@ Hyprland, and `hypertile-ctl default <name>` sets the default.
 A useful arrangement: a quad or reader layout as the default, and a code
 layout on the one or two workspaces where you build things.
 
+### Sharing workspaces with Omarchy's layout toggle
+
+Omarchy cycles a workspace through dwindle, scrolling, and floating when you
+click its workspace glyph in the bar or pick a layout from the Omarchy menu.
+Hypertile and that toggle share each workspace: the latest choice from either
+one wins, and it stays after a reload or a login. Omarchy saves its choice in
+`~/.local/state/omarchy/workspace-layouts/`. Whichever side you choose with
+removes the other side's saved choice for that workspace.
+
+On a floating workspace the bar widget reads **Floating**. To tile it with a
+Hypertile layout, press `SUPER+L`, scroll on the bar widget, or press Enter on
+a layout in the overlay. Browsing in the overlay leaves the windows floating
+until you keep a layout. Omarchy's toggle cannot select a Hypertile layout.
+
+#### Window size on floating workspaces
+
+Omarchy opens each new window on a floating workspace (the triangle in the
+bar) at a fixed size, at most 1100×760. To choose your own size, resize a
+floating window the way you want it and press `SUPER+ALT+SHIFT+Home`. New
+windows then open at that size, centered on their screen. That includes
+Chrome and other Chromium browsers, which Omarchy tiles by rule and floats
+just after they open. A window also gets
+that size whenever Omarchy floats it later: when its workspace starts
+floating, when it moves onto a floating workspace or leaves fullscreen there,
+or when Hyprland reloads its config. Hypertile keeps the size as a
+share of the screen (for example 50% × 70%), so it still fits after you
+change scale or split the monitor.
+
+Settings (the gear in the rail) shows the saved size under **Floating
+windows**. **Reset** there, or `hypertile-ctl floating-size reset`, returns
+to Omarchy's size. `hypertile-ctl floating-size save` saves the focused
+window's size from a script.
+
+Windows on a floating workspace also stay on their screen. When a monitor
+comes back, changes scale, or switches input, Hyprland can leave floating
+windows partly off the screen. Hypertile moves each of those windows back
+inside the screen, below the bar and with its title bar showing. It does the
+same for a window that leaves fullscreen or comes back from the dock. It
+shrinks a window only if the window is larger than the screen, and gives the
+size back when the window is on a screen it fits again, unless you have
+resized it in between. A config reload with the same monitors moves nothing.
+
 ## 8. Scenes: what each zone holds
 
 A layout says where windows go. A **scene** says which windows: for each
@@ -683,6 +726,7 @@ Monitor settings and unrelated desktop customizations are retained.
 | layouts, one Lua file each | `~/.config/hypr/layouts/<name>.lua` |
 | the default layout | `general.layout` in `~/.config/hypr/looknfeel.lua` |
 | each workspace's layout | `~/.local/state/hypertile/workspace-rules/` |
+| a layout chosen with Omarchy's toggle | `~/.local/state/omarchy/workspace-layouts/` |
 | overlay preferences (rail side, key list, open sections, the Getting started card) | `~/.local/state/hypertile/overlay.json` |
 | saved scenes | `~/.config/hypertile/scenes/<name>.json` |
 | session settings and app recipes | `~/.config/hypertile/session.json` |
@@ -706,6 +750,7 @@ Monitor settings and unrelated desktop customizations are retained.
 | `SUPER+SHIFT+Arrow` | move the window to the next zone, or swap |
 | `SUPER+ALT+T`, then a number | move the window to that zone; `Enter` for a prefix number, `Backspace` corrects, `Esc` cancels |
 | `SUPER` + left drag | drop the window on a zone |
+| `SUPER+ALT+SHIFT+Home` | save the floating window's size for new windows on floating workspaces |
 
 ### Overlay, Layouts tab
 

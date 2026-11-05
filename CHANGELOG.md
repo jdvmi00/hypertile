@@ -13,6 +13,28 @@
   selection or browser link does not stay pressed after the drop.
 - Fix a Super drag that opened no destinations after the previous drag ended
   with Super released before the button.
+- Share workspaces with Omarchy's layout toggle on the bar's workspace glyph.
+  The latest choice from either side wins and stays after a reload, and it
+  removes the other side's saved choice for that workspace. On the first load
+  after updating, a workspace that had both keeps the newer one.
+- The bar widget shows **Floating** for a workspace in Omarchy's floating
+  mode. `hypertile-ctl current` and `hypertile-ctl workspaces` mark it, and
+  their JSON gains a `floating` field.
+- Applying or cycling to a layout on a floating workspace tiles its windows.
+  Browsing in the overlay and previews leave the workspace floating.
+- Display management no longer resets a workspace's Omarchy layout when the
+  config reloads.
+- Session restore leaves windows on a floating workspace to Omarchy, so they
+  tile again when the workspace stops floating.
+- Choose the size new windows open at on Omarchy's floating workspaces: size
+  a floating window and press `SUPER+ALT+SHIFT+Home`. The size is saved as a
+  share of the screen. Settings shows it under **Floating windows** with a
+  **Reset**, and `hypertile-ctl floating-size [save|reset]` covers scripts.
+- After a display change (input switch, monitor reconnect, scale change),
+  windows on a floating workspace are moved back inside their screen, title
+  bar included, instead of staying half off it. A window shrunk to fit a
+  smaller screen gets its size back on a screen it fits. Windows leaving
+  fullscreen or coming back from the dock are fitted too.
 
 ## 1.5.5 (2026-10-08)
 

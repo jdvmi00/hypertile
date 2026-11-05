@@ -9,8 +9,8 @@ import "Readability.js" as Readability
 import "Session.js" as Session
 
 // Settings behind the rail's gear: the preferences that belong to no layout,
-// scene or display. Saving windows for startup and the desktop text size act
-// at once on the system; the rail side and key hints are the overlay's own
+// scene or display. Saving windows for startup, the desktop text size and the
+// floating window size act at once on the system; the rail side and key hints are the overlay's own
 // preferences; the menu bar position belongs to the shell, so it is read
 // from the shell's live configuration and moved through its API. The bar
 // widget's right-click opens this panel on the menu bar position.
@@ -100,7 +100,7 @@ Controls.Popup {
   dim: false
   focus: true
   closePolicy: Controls.Popup.CloseOnEscape | Controls.Popup.CloseOnPressOutside
-  onOpened: { error = ""; textSizeError = ""; focusInitial() }
+  onOpened: { error = ""; textSizeError = ""; floatingError = ""; readFloatingSize(); focusInitial() }
   onClosed: overlay.focusKeys()
 
   background: BorderSurface {
@@ -138,6 +138,46 @@ Controls.Popup {
     onExited: function(code) {
       root.pendingTextSize = -1
       root.textSizeError = code !== 0 ? (textSizeErrors.text.trim() || "Could not change the text size.") : ""
+    }
+  }
+
+  // ---- floating workspaces: the size new windows open at in Omarchy's
+  // floating mode, saved from a window the user sized (SUPER+ALT+SHIFT+Home).
+  property var floatingSize: null
+  property string floatingError: ""
+  function readFloatingSize() {
+    if (!floatingRead.running) floatingRead.running = true
+  }
+  function resetFloatingSize() {
+    if (floatingReset.running || !floatingSize) return
+    floatingError = ""
+    floatingReset.running = true
+  }
+  function percent(share) {
+    return Math.round(share * 100) + "%"
+  }
+  Process {
+    id: floatingRead
+    command: [root.overlay.ctl, "floating-size", "--json"]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        try {
+          root.floatingSize = JSON.parse(text || "{}").saved || null
+        } catch (e) {
+          root.floatingSize = null
+        }
+      }
+    }
+  }
+  Process {
+    id: floatingReset
+    command: [root.overlay.ctl, "floating-size", "reset"]
+    stderr: StdioCollector { id: floatingResetErrors; waitForEnd: true }
+    onExited: function(code) {
+      root.floatingError = code !== 0
+        ? (floatingResetErrors.text.trim().replace(/^hypertile-ctl: /, "") || "Couldn’t reset the size. Try again.") : ""
+      root.readFloatingSize()
     }
   }
 
@@ -438,6 +478,54 @@ Controls.Popup {
     Note {
       text: root.textSizeError || "Text on every display and in the bar, changed at once."
       color: root.textSizeError ? Readability.textColor(Commons.Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.mutedForeground
+    }
+
+    Separator {}
+
+    // ---- Floating workspaces
+    Heading { text: "FLOATING WINDOWS" }
+    Item {
+      width: parent.width
+      implicitHeight: Math.max(floatingLabel.implicitHeight, floatingResetButton.implicitHeight)
+      Text {
+        id: floatingLabel
+        anchors.left: parent.left
+        anchors.right: floatingResetButton.visible ? floatingResetButton.left : parent.right
+        anchors.rightMargin: Style.spacing.sm
+        anchors.verticalCenter: parent.verticalCenter
+        text: "New windows open at " + (root.floatingSize
+          ? root.percent(root.floatingSize.width) + " × " + root.percent(root.floatingSize.height) + " of the screen"
+          : "Omarchy’s size")
+        color: root.overlay.foreground
+        font.family: root.overlay.fontFamily
+        font.pixelSize: root.overlay.uiFontSmall
+        wrapMode: Text.WordWrap
+        textFormat: Text.PlainText
+        Accessible.role: Accessible.StaticText
+        Accessible.name: text
+      }
+      Button {
+        id: floatingResetButton
+        anchors.right: parent.right
+        anchors.verticalCenter: parent.verticalCenter
+        visible: !!root.floatingSize
+        enabled: !floatingReset.running
+        text: "Reset"
+        bordered: true
+        focusable: true
+        foreground: root.overlay.foreground
+        accent: root.overlay.accent
+        fontFamily: root.overlay.fontFamily
+        fontSize: root.overlay.uiFontSmall
+        radius: root.overlay.radiusControl
+        Accessible.name: "Reset floating window size to Omarchy’s"
+        tooltipText: "Go back to Omarchy’s size"
+        onClicked: root.resetFloatingSize()
+      }
+    }
+    Note {
+      text: root.floatingError || "On a floating workspace (the triangle in the bar). Size a floating window the way you like it, then press Super + Alt + Shift + Home to make its size the default. Windows also stay on screen when a display changes."
+      color: root.floatingError ? Readability.textColor(Commons.Color.urgent, root.overlay.surfaceColor, 1) : root.overlay.mutedForeground
     }
   }
 }

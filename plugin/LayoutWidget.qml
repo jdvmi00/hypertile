@@ -8,9 +8,9 @@ import "Session.js" as Session
 
 // The layout on this monitor's active workspace, in the bar. Click opens
 // the overlay; the wheel and middle-click cycle through the layouts. The label follows
-// the focus and the config, and hypertile-ctl pokes it after a switch
-// (omarchy-shell hypertile-bar refresh), since a workspace rule write
-// raises no compositor event of its own.
+// the focus and the config. hypertile-ctl pokes it after a switch, and
+// hypertile-modes.lua after Omarchy's layout toggle (omarchy-shell
+// hypertile-bar refresh), since neither raises a compositor event.
 BarWidget {
   id: root
   moduleName: "jmartin.hypertile"
@@ -22,8 +22,9 @@ BarWidget {
   readonly property var setupService: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
 
   property string layout: ""         // as the compositor names it: lua:columns, dwindle
+  property bool floating: false
   property int workspaceId: 0
-  readonly property string label: displayName(layout)
+  readonly property string label: floating ? "Floating" : displayName(layout)
   SessionStatus { id: sessionReader; ctl: root.ctl; polling: !root.setupService || root.setupService.ready }
   readonly property bool sessionAttention: Session.attention(sessionReader.data, sessionReader.available, sessionReader.checked)
 
@@ -139,6 +140,7 @@ BarWidget {
         }
         if (!pick) return
         root.layout = String(pick.layout || "")
+        root.floating = pick.floating === true
         root.workspaceId = Number(pick.id) || 0
       }
     }
