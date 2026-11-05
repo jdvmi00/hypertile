@@ -51,7 +51,7 @@ fi
 if (( ${#issues[@]} )); then
   printf '\nREVIEW NEEDED:\n'
   printf -- '- %s\n' "${issues[@]}"
-  printf '\nGuides: docs/diagnostics/hyprland-0.57.0/README.md, docs/diagnostics/mirror-outputs/README.md and docs/diagnostics/mirror-disconnect/README.md in the Hypertile checkout.\n'
+  printf '\nGuides: docs/diagnostics/hyprland-0.57.1/README.md, docs/diagnostics/mirror-outputs/README.md and docs/diagnostics/mirror-disconnect/README.md in the Hypertile checkout.\n'
   if [[ ${1:-} == --notify ]] && command -v notify-send >/dev/null; then
     notify-send -u critical 'Hyprland backports need review' \
       'Run hypertile-backport-status. An update, library change, or pending desktop restart needs attention.' || true
