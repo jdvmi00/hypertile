@@ -82,6 +82,11 @@ JSON exchanged with editors:    {"name": "...", "spec": {...}}
                              see docs/SCENES.md
   session <command> [name]   status, enable, disable, save <name>, restore [name], freeze, resume,
                              stop, logout, reboot, shutdown; see docs/SESSIONS.md
+  floating-size [save|reset] [--json]
+                             the size new windows open at on Omarchy's floating
+                             workspaces: save takes the focused floating
+                             window's share of its screen (SUPER+ALT+SHIFT+Home),
+                             reset goes back to Omarchy's size
   default [name|BUILTINS] [--no-reload]
                              show or set the default layout (general.layout
                              in looknfeel.lua), then reload
@@ -514,6 +519,30 @@ function commands.default(pos, flags)
     die(err)
   end
   print(value)
+end
+
+commands["floating-size"] = function(pos, flags)
+  local action = pos[1] or "show"
+  local line
+  if action == "save" or action == "reset" then
+    local out, err = bridge.query("return require('hypr.hypertile-floating')." .. (action == "save" and "save_active()" or "reset()"))
+    if not out then die(err) end
+    local message = out:match("^error: (.*)$")
+    if message then die(message) end
+    line = out
+  elseif action ~= "show" then
+    die("floating-size takes save, reset, or nothing", 2)
+  end
+  local text = bridge.read_file(bridge.paths.floating_size_path)
+  local ok, saved = pcall(json.decode, text or "")
+  if not ok or type(saved) ~= "table" or type(saved.width) ~= "number" or type(saved.height) ~= "number" then saved = nil end
+  if flags.json then
+    print(saved and json.encode({ saved = { width = saved.width, height = saved.height } }) or '{"saved":null}')
+    return
+  end
+  print(line or (saved and string.format("New windows on floating workspaces open at %d%% × %d%% of the screen.",
+    math.floor(saved.width * 100 + 0.5), math.floor(saved.height * 100 + 0.5))
+    or "New windows on floating workspaces open at Omarchy's size."))
 end
 
 function commands.path(pos)

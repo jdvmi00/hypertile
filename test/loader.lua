@@ -8,6 +8,8 @@ assert(os.execute("mkdir -p '" .. temporary .. "/hypr/layouts'"))
 package.path = temporary .. "/?.lua;" .. package.path
 package.loaded["hypr.hypertile"] = engine
 package.loaded["hypr.hypertile-modes"] = require("hypertile-modes")
+package.loaded["hypr.hypertile-json"] = require("hypertile-json")
+package.loaded["hypr.hypertile-floating"] = require("hypertile-floating")
 package.loaded["default.hypr.paths"] = { config_home = temporary }
 
 local function write(name, content)
@@ -27,7 +29,7 @@ hl = {
 local env = setmetatable({
   print = function() end,
   os = setmetatable({ getenv = function(name)
-    if name == "XDG_STATE_HOME" or name == "HOME" then return temporary end
+    if name == "XDG_STATE_HOME" or name == "HOME" or name == "XDG_RUNTIME_DIR" then return temporary end
   end }, { __index = os }),
 }, { __index = _G })
 local loader = assert(loadfile("hypertile-layouts.lua", "t", env))

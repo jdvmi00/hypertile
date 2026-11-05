@@ -38,9 +38,14 @@ end
 local state_home = os.getenv("XDG_STATE_HOME") or (os.getenv("HOME") .. "/.local/state")
 local rules_dir = state_home .. "/hypertile/workspace-rules"
 local modes = require("hypr.hypertile-modes")
+local floating = require("hypr.hypertile-floating")
+-- Omarchy's saved modes arrange the windows later in this load; note what
+-- it had floated before, so the windows it floats now get the saved size.
+floating.before_load()
 
 local function apply_persisted_rules()
-  modes.attach(state_home)
+  floating.attach(state_home, os.getenv("XDG_RUNTIME_DIR"))
+  modes.attach(state_home, floating)
   local handle = io.popen("find " .. quote(rules_dir) .. " -maxdepth 1 -type f -name '*.lua' -printf '%f\\n' 2>/dev/null | sort -V")
   if not handle then
     return

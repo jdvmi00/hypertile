@@ -88,6 +88,7 @@ without `--enable`, then run its `install.sh` with `--no-menu` and/or
 | `SUPER+ALT+T`, then a zone number | move the active window to that zone, swapping if occupied; `Esc` cancels |
 | `SUPER+Arrow` / `SUPER+SHIFT+Arrow` | focus a window / move or swap it into the next zone |
 | `SUPER` + left mouse drag | drag a tiled window to a numbered destination |
+| `SUPER+ALT+SHIFT+Home` | on a floating workspace, open new windows at the focused window's size |
 | bar widget | the layout on this monitor's workspace; scroll or middle-click cycles |
 | right-click bar widget | Settings, opened at Hypertile’s menu bar position: Left, Middle, or Right |
 | `hypertile-ctl list` | the layouts on disk, the one in use starred |
@@ -655,8 +656,9 @@ python3 test/display_integration.py --auto-position-only # disable next to an au
 python3 test/mirror_outputs_integration.py --fixed # opt-in with the mirror-output compositor fix installed
 python3 test/overlay_display_integration.py       # real overlay surfaces and keyboard input across mirror-source switches
 python3 test/issue_integration.py                 # live inherited-default and automatic-position regressions
-lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua
-                                                 # engine, bounded Lua patterns, capacity, hot swap
+lua test/harness.lua && lua test/loader.lua && lua test/pattern.lua && lua test/floating.lua
+                                                 # engine, bounded Lua patterns, capacity, hot swap, floating window size
+python3 test/floating_integration.py              # opt-in isolated compositor with Omarchy's floating mode
 lua test/navigation.lua && node test/tile_picker.js  # directional and numbered moves, swaps, picker input
 lua test/bridge.lua                              # bridge and CLI, against a fake hyprctl
 python3 test/session.py && python3 test/scene_recovery.py && lua test/session.lua && node test/session.js

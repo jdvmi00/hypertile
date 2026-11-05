@@ -26,6 +26,15 @@
   config reloads.
 - Session restore leaves windows on a floating workspace to Omarchy, so they
   tile again when the workspace stops floating.
+- Choose the size new windows open at on Omarchy's floating workspaces: size
+  a floating window and press `SUPER+ALT+SHIFT+Home`. The size is saved as a
+  share of the screen. Settings shows it under **Floating windows** with a
+  **Reset**, and `hypertile-ctl floating-size [save|reset]` covers scripts.
+- After a display change (input switch, monitor reconnect, scale change),
+  windows on a floating workspace are moved back inside their screen, title
+  bar included, instead of staying half off it. A window shrunk to fit a
+  smaller screen gets its size back on a screen it fits. Windows leaving
+  fullscreen or coming back from the dock are fitted too.
 
 ## 1.5.5 (2026-10-08)
 

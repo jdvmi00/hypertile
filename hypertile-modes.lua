@@ -6,7 +6,7 @@ local M = {}
 
 local modes, default_mode = {}, nil
 local omarchy_workspace_mode, wrapped
-local rules_dir, shell_bin
+local rules_dir, shell_bin, floating
 
 local function quote(value)
   return "'" .. tostring(value):gsub("'", "'\\''") .. "'"
@@ -89,9 +89,11 @@ end
 
 -- Run once per config load, after Omarchy's saved modes have loaded and
 -- before hypertile's rules apply. The mirror reads each mode as Omarchy's
--- saved call passes it to o.workspace_mode.
-function M.attach(state_home)
+-- saved call passes it to o.workspace_mode. The floating module, when given,
+-- sizes the windows Omarchy floats as a workspace starts floating.
+function M.attach(state_home, floating_module)
   modes, default_mode = {}, nil
+  floating = floating_module
   rules_dir = state_home .. "/hypertile/workspace-rules"
   shell_bin = os.getenv("HYPERTILE_SHELL_BIN") or "omarchy-shell"
   local omarchy_dir = state_home .. "/omarchy/workspace-layouts"
@@ -109,7 +111,9 @@ function M.attach(state_home)
   omarchy_workspace_mode = o.workspace_mode
   -- Omarchy's toggle reaches this through hyprctl eval.
   wrapped = function(spec)
+    local before = floating and not spec.default and spec.mode == "floating" and floating.claimed()
     omarchy_workspace_mode(spec)
+    if before then floating.claimed_since(before) end
     if spec.default then
       default_mode = spec.default
       return

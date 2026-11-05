@@ -42,6 +42,7 @@ M.paths.layouts_dir = env_or("HYPERTILE_LAYOUTS_DIR", M.paths.config_home .. "/h
 M.paths.rules_dir = env_or("HYPERTILE_RULES_DIR", M.paths.state_home .. "/hypertile/workspace-rules")
 M.paths.displays_path = env_or("HYPERTILE_DISPLAYS_PATH", M.paths.state_home .. "/hypertile/displays/confirmed.json")
 M.paths.scene_state_path = M.paths.state_home .. "/hypertile/scenes/state.json"
+M.paths.floating_size_path = M.paths.state_home .. "/hypertile/floating-size.json"
 M.paths.workspace_state_dir = M.paths.state_home .. "/omarchy/workspace-layouts"
 
 -- Overridable for tests.
