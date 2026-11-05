@@ -3,7 +3,12 @@
 #include <stdexcept>
 #include <sstream>
 #include <hyprland/src/plugins/PluginAPI.hpp>
+#if __has_include(<hyprland/src/ipc/s1/S1.hpp>) // 0.57 moved hyprctl commands to IPC::Socket1
+#include <hyprland/src/ipc/s1/S1.hpp>
+#define HYPERTILE_SOCKET1 1
+#else
 #include <hyprland/src/debug/HyprCtl.hpp>
+#endif
 #include <hyprland/src/state/MonitorState.hpp>
 #include <hyprland/src/output/Monitor.hpp>
 #include <aquamarine/backend/Backend.hpp>
@@ -15,7 +20,7 @@ static PHLMONITOR virtualMonitor(const std::string& name) {
     return mon;
 }
 
-static std::string control(eHyprCtlOutputFormat, std::string request) {
+static std::string control(std::string request) {
     std::istringstream args(request);
     std::string        command, action, name;
     args >> command >> action;
@@ -58,6 +63,16 @@ static std::string control(eHyprCtlOutputFormat, std::string request) {
     return "Unknown test action";
 }
 
+#ifdef HYPERTILE_SOCKET1
+static IPC::Socket1::SCommand controlCommand() {
+    return {"hypertile-test", IPC::Socket1::COMMAND_MATCH_PREFIX, [](const IPC::Socket1::SRequest& request) { return IPC::Socket1::SResponse(control(request.command)); }};
+}
+#else
+static SHyprCtlCommand controlCommand() {
+    return {"hypertile-test", false, [](eHyprCtlOutputFormat, std::string request) { return control(std::move(request)); }};
+}
+#endif
+
 APICALL EXPORT std::string PLUGIN_API_VERSION() {
     return HYPRLAND_API_VERSION;
 }
@@ -72,7 +87,7 @@ APICALL EXPORT PLUGIN_DESCRIPTION_INFO PLUGIN_INIT(HANDLE handle) {
         if (!mon->m_createdByUser || !mon->m_output || mon->m_output->getBackend()->type() == Aquamarine::AQ_BACKEND_DRM)
             throw std::runtime_error("Refusing a compositor with physical outputs");
     }
-    if (!HyprlandAPI::registerHyprCtlCommand(handle, {"hypertile-test", false, control}))
+    if (!HyprlandAPI::registerHyprCtlCommand(handle, controlCommand()))
         throw std::runtime_error("Could not register virtual output control");
     return {"hypertile-virtual-output-control", "Isolated mirror disconnect regression", "Hypertile", "1"};
 }

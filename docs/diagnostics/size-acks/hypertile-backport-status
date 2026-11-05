@@ -1,55 +1,35 @@
 #!/usr/bin/env bash
-# Read-only check of the temporary Hyprland size-ack and mirror backports.
+# Read-only check of the temporary Hyprland mirror backports.
 set -uo pipefail
 
-marker=/usr/share/hyprland/backports/size-acks
+backports=/usr/share/hyprland/backports
 issues=()
 installed=$(pacman -Q hyprland 2>/dev/null || true)
 printf 'Installed: %s\n' "${installed:-Hyprland not found}"
 
-if [[ ! -r "$marker.version" || ! -r "$marker.patch" ]]; then
-  issues+=("The local sizing backport is absent. Check whether this package includes the upstream correction before rebuilding or retiring the backport.")
-elif [[ $(cat "$marker.version") != "$installed" ]]; then
-  issues+=("Backport marker does not match the installed package; reinstall or investigate.")
-else
-  printf 'Backport marker: %s\n' "$(cat "$marker.version")"
-  if [[ -r "$marker.dependencies" ]]; then
-    while read -r package built_version; do
-      current=$(pacman -Q "$package" 2>/dev/null || true)
-      if [[ "$current" != "$package $built_version" ]]; then
-        issues+=("Library package changed: $package (built with $built_version; now ${current:-missing}). Review/rebuild against the updated system before restarting Hyprland.")
-      fi
-    done < "$marker.dependencies"
+# Upstream 0.57.0 fixed the size-ack and mirror-workspace bugs, so only these remain.
+check_backport() {
+  local name=$1 absent=$2 marker=$backports/$1
+  if [[ ! -r "$marker.version" || ! -r "$marker.patch" ]]; then
+    issues+=("$absent")
+  elif [[ $(cat "$marker.version") != "$installed" ]]; then
+    issues+=("The $name marker does not match the installed package; reinstall or investigate.")
   else
-    issues+=("Build dependency record is missing; compatibility has not been checked.")
+    printf '%s marker: %s\n' "$name" "$(cat "$marker.version")"
   fi
-fi
+}
+check_backport mirror-outputs "The mirror-output backport is absent. Check whether this package fixes promotion of displays connected as mirrors before rebuilding or retiring the backport."
+check_backport mirror-disconnect "The mirror-disconnect backport is absent. Check whether this package safely handles expired mirrors and source removal before rebuilding or retiring the backport."
 
-mirror_marker=/usr/share/hyprland/backports/mirror-outputs
-if [[ ! -r "$mirror_marker.version" || ! -r "$mirror_marker.patch" ]]; then
-  issues+=("The mirror-output backport is absent. Check whether this package fixes promotion of displays connected as mirrors before rebuilding or retiring the backport.")
-elif [[ $(cat "$mirror_marker.version") != "$installed" ]]; then
-  issues+=("Mirror-output backport marker does not match the installed package; reinstall or investigate.")
-else
-  printf 'Mirror-output marker: %s\n' "$(cat "$mirror_marker.version")"
-fi
-
-disconnect_marker=/usr/share/hyprland/backports/mirror-disconnect
-if [[ ! -r "$disconnect_marker.version" || ! -r "$disconnect_marker.patch" ]]; then
-  issues+=("The mirror-disconnect backport is absent. Check whether this package safely handles expired mirrors and source removal before rebuilding or retiring the backport.")
-elif [[ $(cat "$disconnect_marker.version") != "$installed" ]]; then
-  issues+=("Mirror-disconnect backport marker does not match the installed package; reinstall or investigate.")
-else
-  printf 'Mirror-disconnect marker: %s\n' "$(cat "$disconnect_marker.version")"
-fi
-
-workspace_marker=/usr/share/hyprland/backports/mirror-workspaces
-if [[ ! -r "$workspace_marker.version" || ! -r "$workspace_marker.patch" ]]; then
-  issues+=("The mirror-workspace backport is absent. Check whether this package prevents reconnects from restoring workspaces onto mirror outputs.")
-elif [[ $(cat "$workspace_marker.version") != "$installed" ]]; then
-  issues+=("Mirror-workspace backport marker does not match the installed package; reinstall or investigate.")
-else
-  printf 'Mirror-workspace marker: %s\n' "$(cat "$workspace_marker.version")"
+if [[ -r "$backports/dependencies" ]]; then
+  while read -r package built_version; do
+    current=$(pacman -Q "$package" 2>/dev/null || true)
+    if [[ "$current" != "$package $built_version" ]]; then
+      issues+=("Library package changed: $package (built with $built_version; now ${current:-missing}). Review/rebuild against the updated system before restarting Hyprland.")
+    fi
+  done < "$backports/dependencies"
+elif [[ -r "$backports/mirror-disconnect.version" ]]; then
+  issues+=("Build dependency record is missing; compatibility has not been checked.")
 fi
 
 if [[ -x /usr/bin/Hyprland ]]; then
@@ -71,7 +51,7 @@ fi
 if (( ${#issues[@]} )); then
   printf '\nREVIEW NEEDED:\n'
   printf -- '- %s\n' "${issues[@]}"
-  printf '\nGuides: docs/HYPRLAND-SIZING-BUG.md, docs/diagnostics/mirror-outputs/README.md and docs/diagnostics/mirror-disconnect/README.md and docs/diagnostics/mirror-workspaces/README.md in the Hypertile checkout.\n'
+  printf '\nGuides: docs/diagnostics/hyprland-0.57.0/README.md, docs/diagnostics/mirror-outputs/README.md and docs/diagnostics/mirror-disconnect/README.md in the Hypertile checkout.\n'
   if [[ ${1:-} == --notify ]] && command -v notify-send >/dev/null; then
     notify-send -u critical 'Hyprland backports need review' \
       'Run hypertile-backport-status. An update, library change, or pending desktop restart needs attention.' || true
