@@ -133,8 +133,9 @@ assert(rule.move == "(monitor_w-monitor_w*0.5000)/2+(-48) (monitor_h-monitor_h*0
 assert(rules["hypertile-floating-open-1"].move:find("+(-24)", 1, true), "each cascade step has its rule")
 assert(#enabled_rules() == 1, "one step is enabled at a time")
 
--- A failed write keeps the saved size.
-assert(os.execute("chmod 0555 '" .. temporary .. "/hypertile'"))
+-- A failed write keeps the saved size. A directory where the temporary
+-- file goes refuses the write even for root, which CI runs as.
+assert(os.execute("mkdir '" .. state .. ".tmp'"))
 active.size = { x = 3000, y = 1500 }
 local refused = floating.save_active(false)
 assert(refused:match("^error: Could not save"), "a failed write is reported: " .. refused)
@@ -142,18 +143,19 @@ file = assert(io.open(state))
 stored = require("hypertile-json").decode(file:read("a")); file:close()
 assert(stored.width == 0.5 and floating.saved().width == 0.5, "and the old size stays, on disk and in use")
 -- A full disk too: the write fails at close, and the old file stays.
-assert(os.execute("chmod 0755 '" .. temporary .. "/hypertile' && ln -s /dev/full '" .. state .. ".tmp'"))
+assert(os.execute("rmdir '" .. state .. ".tmp' && ln -s /dev/full '" .. state .. ".tmp'"))
 refused = floating.save_active(false)
 assert(refused:match("^error: Could not save"), "a write the disk refuses is reported: " .. refused)
 file = assert(io.open(state))
 stored = require("hypertile-json").decode(file:read("a")); file:close()
 assert(stored.width == 0.5 and floating.saved().width == 0.5, "and the saved file is untouched")
-assert(os.execute("chmod 0555 '" .. temporary .. "/hypertile'"))
--- So does a failed reset.
+-- So does a failed reset: a non-empty directory in the file's place cannot
+-- be removed, by root either.
+assert(os.execute("mv '" .. state .. "' '" .. state .. ".keep' && mkdir -p '" .. state .. "/held'"))
 local kept = floating.reset()
 assert(kept:match("^error: Could not reset"), "a failed reset is reported: " .. kept)
 assert(floating.saved() and #enabled_rules() == 1, "and the size stays in use")
-assert(os.execute("chmod 0755 '" .. temporary .. "/hypertile'"))
+assert(os.execute("rm -r '" .. state .. "' && mv '" .. state .. ".keep' '" .. state .. "'"))
 active.size = { x = 2304, y = 1344 }
 
 -- A reload with the same monitors starts again from the file and moves nothing.
