@@ -28,6 +28,10 @@ from `../hyprland-0.57.0/`, `../mirror-outputs/hyprland-0.57.0.patch` renamed
 renamed `mirror-disconnect.patch`. Run `makepkg --log` as the normal user.
 Then run the mirror regression against the staged binary before installing.
 
+Omarchy's `0.57.2-4` is a rebuild against updated dependencies (hyprgraphics
+`0.6.0-2`) with no source or patch changes, so the recipe now produces
+`hyprland 0.57.2-4.1`.
+
 ## Validation
 
 Against Omarchy's stock `0.57.2-2`, `test/mirror_outputs_integration.py`
